@@ -404,6 +404,12 @@ String _formatCallFormula(LyricLine line, Map<String, CallPreset> presetMap) {
   if (shout.isNotEmpty) {
     tokens.add(shout);
   }
+  for (final aligned in line.alignedCalls) {
+    final t = aligned.text.trim();
+    if (t.isNotEmpty) {
+      tokens.add(t);
+    }
+  }
   if (tokens.isEmpty) return '';
   return '（${tokens.join(' / ')}）';
 }

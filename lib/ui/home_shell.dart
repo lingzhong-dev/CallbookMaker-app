@@ -30,7 +30,6 @@ class HomeShell extends StatefulWidget {
 class _HomeShellState extends State<HomeShell> {
   final FocusNode _shortcutFocus = FocusNode(debugLabel: 'GlobalShortcuts');
   bool _mobileQuickTrayOpen = true;
-  bool _autoAdvanceOnTag = false;
 
   void _stepTargetLine(CallbookController c, int delta) {
     if (c.activeLineId == null) {
@@ -536,18 +535,17 @@ class _HomeShellState extends State<HomeShell> {
                                               const SizedBox(width: 4),
                                               _QuickTrayChip(
                                                 label: '打完跳下句',
-                                                background: _autoAdvanceOnTag
+                                                background: c.autoAdvanceOnTag
                                                     ? scheme.primaryContainer
                                                     : scheme.surfaceContainerLow,
-                                                foreground: _autoAdvanceOnTag
+                                                foreground: c.autoAdvanceOnTag
                                                     ? scheme.onPrimaryContainer
                                                     : scheme.onSurfaceVariant,
-                                                borderColor: _autoAdvanceOnTag
+                                                borderColor: c.autoAdvanceOnTag
                                                     ? scheme.primary
                                                     : scheme.outlineVariant,
-                                                onTap: () => setState(
-                                                  () => _autoAdvanceOnTag =
-                                                      !_autoAdvanceOnTag,
+                                                onTap: () => c.setAutoAdvanceOnTag(
+                                                  !c.autoAdvanceOnTag,
                                                 ),
                                               ),
                                             ],
@@ -580,7 +578,7 @@ class _HomeShellState extends State<HomeShell> {
                                                         controller: c,
                                                         presetId: preset.id,
                                                         autoAdvance:
-                                                            _autoAdvanceOnTag,
+                                                            c.autoAdvanceOnTag,
                                                       ),
                                                   onContextAction:
                                                       preset.builtIn
@@ -630,7 +628,7 @@ class _HomeShellState extends State<HomeShell> {
                                                               targetLine.id,
                                                             );
                                                         if (enabled &&
-                                                            _autoAdvanceOnTag) {
+                                                            c.autoAdvanceOnTag) {
                                                           c.stepActiveLine(1);
                                                         }
                                                       },

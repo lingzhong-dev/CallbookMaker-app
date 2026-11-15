@@ -368,6 +368,71 @@ class LyricText {
   );
 }
 
+class AlignedCallCue {
+  const AlignedCallCue({
+    required this.id,
+    required this.start,
+    required this.end,
+    required this.text,
+    this.colorHex,
+  });
+
+  final String id;
+  final int start;
+  final int end;
+  final String text;
+  final String? colorHex;
+
+  Color? get color {
+    final raw = colorHex?.trim();
+    if (raw == null || raw.isEmpty) return null;
+    final cleaned = raw.replaceFirst('#', '').trim();
+    if (cleaned.length == 6) {
+      final parsed = int.tryParse('FF$cleaned', radix: 16);
+      if (parsed != null) return Color(parsed);
+    }
+    if (cleaned.length == 8) {
+      final parsed = int.tryParse(cleaned, radix: 16);
+      if (parsed != null) return Color(parsed);
+    }
+    return null;
+  }
+
+  AlignedCallCue copyWith({
+    String? id,
+    int? start,
+    int? end,
+    String? text,
+    String? colorHex,
+    bool clearColorHex = false,
+  }) => AlignedCallCue(
+    id: id ?? this.id,
+    start: start ?? this.start,
+    end: end ?? this.end,
+    text: text ?? this.text,
+    colorHex: clearColorHex ? null : (colorHex ?? this.colorHex),
+  );
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'start': start,
+    'end': end,
+    'text': text,
+    if (colorHex != null && colorHex!.trim().isNotEmpty) 'color': colorHex,
+  };
+
+  factory AlignedCallCue.fromJson(Map<String, dynamic> json) {
+    final rawColor = json['color']?.toString().trim();
+    return AlignedCallCue(
+      id: json['id']?.toString() ?? 'ac-${DateTime.now().millisecondsSinceEpoch}',
+      start: (json['start'] as num?)?.round() ?? 0,
+      end: (json['end'] as num?)?.round() ?? 1,
+      text: json['text']?.toString() ?? '',
+      colorHex: (rawColor == null || rawColor.isEmpty) ? null : rawColor,
+    );
+  }
+}
+
 class LyricLine {
   const LyricLine({
     required this.id,
@@ -378,6 +443,7 @@ class LyricLine {
     this.calls = const [],
     this.customShout = '',
     this.tailUpdraft = false,
+    this.alignedCalls = const [],
     required this.text,
   });
 
@@ -389,6 +455,7 @@ class LyricLine {
   final List<LineCallTag> calls;
   final String customShout;
   final bool tailUpdraft;
+  final List<AlignedCallCue> alignedCalls;
   final LyricText text;
 
   LyricLine copyWith({
@@ -400,6 +467,7 @@ class LyricLine {
     List<LineCallTag>? calls,
     String? customShout,
     bool? tailUpdraft,
+    List<AlignedCallCue>? alignedCalls,
     LyricText? text,
   }) => LyricLine(
     id: id ?? this.id,
@@ -410,6 +478,7 @@ class LyricLine {
     calls: calls ?? this.calls,
     customShout: customShout ?? this.customShout,
     tailUpdraft: tailUpdraft ?? this.tailUpdraft,
+    alignedCalls: alignedCalls ?? this.alignedCalls,
     text: text ?? this.text,
   );
 
@@ -422,11 +491,14 @@ class LyricLine {
     'calls': [for (final c in calls) c.toJson()],
     'customShout': customShout,
     if (tailUpdraft) 'tailUpdraft': true,
+    if (alignedCalls.isNotEmpty)
+      'alignedCalls': [for (final c in alignedCalls) c.toJson()],
     'text': text.toJson(),
   };
 
   factory LyricLine.fromJson(Map<String, dynamic> json) {
     final rawCalls = json['calls'] as List<dynamic>? ?? const [];
+    final rawAligned = json['alignedCalls'] as List<dynamic>? ?? const [];
     return LyricLine(
       id: json['id']?.toString() ?? 'line-${DateTime.now().millisecondsSinceEpoch}',
       startTimeMs: (json['startTimeMs'] as num?)?.round() ?? 0,
@@ -439,6 +511,10 @@ class LyricLine {
       ],
       customShout: json['customShout']?.toString() ?? '',
       tailUpdraft: json['tailUpdraft'] == true,
+      alignedCalls: [
+        for (final item in rawAligned)
+          if (item is Map) AlignedCallCue.fromJson(Map<String, dynamic>.from(item)),
+      ],
       text: LyricText.fromJson(
         (json['text'] as Map<String, dynamic>?) ?? const {},
       ),
@@ -933,7 +1009,8 @@ class CallbookArchiveEntry {
         (l) =>
             l.calls.isNotEmpty ||
             l.customShout.trim().isNotEmpty ||
-            l.tailUpdraft,
+            l.tailUpdraft ||
+            l.alignedCalls.isNotEmpty,
       )
       .length;
 

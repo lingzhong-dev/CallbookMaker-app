@@ -15,6 +15,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../models/callbook_models.dart';
 import '../state/callbook_controller.dart';
+import '../utils/aligned_calls.dart';
 import '../utils/lrc_ruby_parser.dart';
 import '../utils/xlsx_export.dart';
 import 'widgets/archive_switcher_dialog.dart';
@@ -1060,7 +1061,7 @@ class _CallbookLineRow extends StatelessWidget {
     final isSec = line.kind.isSection;
     final cue = (gtAlert?.callTimingCue ?? '').trim();
     final gtNote = (gtAlert?.note ?? '').trim();
-    final shout = line.customShout.trim();
+    final shout = isSec ? line.customShout.trim() : getUnalignedCustomShout(line);
 
     final secColor = switch (line.kind) {
       LyricLineKind.intro => const Color(0xFF0284C7),
@@ -1172,6 +1173,14 @@ class _CallbookLineRow extends StatelessWidget {
         original: line.text.original,
         rubyHtml: line.text.ruby,
         showRuby: displayLayers.showRuby,
+        alignedCalls: line.alignedCalls,
+        customShout: line.customShout,
+        pillBackground: const Color(0xFFE0E7FF),
+        pillForeground: const Color(0xFF3730A3),
+        pillBorderColor: const Color(0xFFC7D2FE),
+        underlineColor: const Color(0x886366F1),
+        pillFontSize: 10.5,
+        pillPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
         softWrap: forExport ? false : null,
         maxLines: forExport ? 1 : null,
         baseStyle: TextStyle(
@@ -1437,6 +1446,50 @@ double _measureRubyLineWidth({
   return total;
 }
 
+double _measureAlignedRubyLineWidth({
+  required LyricLine line,
+  required bool showRuby,
+  required TextStyle baseStyle,
+  required TextStyle rtStyle,
+  required TextStyle alignedPillStyle,
+}) {
+  if (line.alignedCalls.isEmpty && line.customShout.trim().isEmpty) {
+    return _measureRubyLineWidth(
+      original: line.text.original,
+      rubyHtml: line.text.ruby,
+      showRuby: showRuby,
+      baseStyle: baseStyle,
+      rtStyle: rtStyle,
+    );
+  }
+  final runs = buildAlignedLyricRuns(line, showRuby: showRuby);
+  if (runs.isEmpty) {
+    return _measureRubyLineWidth(
+      original: line.text.original,
+      rubyHtml: line.text.ruby,
+      showRuby: showRuby,
+      baseStyle: baseStyle,
+      rtStyle: rtStyle,
+    );
+  }
+  var total = 0.0;
+  for (final run in runs) {
+    var sliceW = 0.0;
+    for (final seg in run.rubyParts) {
+      final baseW = _measureTextWidth(seg.base, baseStyle);
+      final rtW = seg.rt == null ? 0.0 : _measureTextWidth(seg.rt!, rtStyle);
+      sliceW += math.max(baseW, rtW);
+    }
+    if (run.call != null) {
+      final pillW = 14.0 + _measureTextWidth(run.call!.text, alignedPillStyle) + 2.0;
+      total += math.max(sliceW, pillW) + 2.0;
+    } else {
+      total += sliceW;
+    }
+  }
+  return total;
+}
+
 double _measureUniformCallColumnWidth(
   List<LyricLine> lines,
   Map<String, CallPreset> presetMap, {
@@ -1502,6 +1555,11 @@ double _measureUnconstrainedExportWidth({
     fontSize: 11,
     fontWeight: FontWeight.w700,
   );
+  final alignedPillStyle = TextStyle(
+    fontFamily: fontFamily,
+    fontSize: 10.5,
+    fontWeight: FontWeight.w800,
+  );
   final noteStyle = TextStyle(
     fontFamily: fontFamily,
     fontSize: 11,
@@ -1522,7 +1580,7 @@ double _measureUnconstrainedExportWidth({
     final gtAlert = controller.getAlertForLine(line.id);
     final cue = (gtAlert?.callTimingCue ?? '').trim();
     final gtNote = (gtAlert?.note ?? '').trim();
-    final shout = line.customShout.trim();
+    final shout = isSec ? line.customShout.trim() : getUnalignedCustomShout(line);
 
     var topStripWidth = 0.0;
     var stripCount = 0;
@@ -1553,12 +1611,12 @@ double _measureUnconstrainedExportWidth({
         mainRowWidth += 8.0 + updraftPillWidth;
       }
     } else {
-      mainRowWidth = _measureRubyLineWidth(
-        original: line.text.original,
-        rubyHtml: line.text.ruby,
+      mainRowWidth = _measureAlignedRubyLineWidth(
+        line: line,
         showRuby: controller.displayLayers.showRuby,
         baseStyle: lyricBaseStyle,
         rtStyle: rtStyle,
+        alignedPillStyle: alignedPillStyle,
       );
       if (line.tailUpdraft) {
         mainRowWidth += 8.0 + updraftPillWidth;

@@ -6,6 +6,7 @@ import 'package:prism_ui/prism_ui.dart';
 
 import '../models/callbook_models.dart';
 import '../state/callbook_controller.dart';
+import '../utils/aligned_calls.dart';
 import '../utils/lrc_ruby_parser.dart';
 import '../utils/section_detector.dart';
 import 'widgets/call_badge_pill.dart';
@@ -672,7 +673,8 @@ class _PracticeLineCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final cue = (lineAlert?.callTimingCue ?? '').trim();
     final gtNote = (lineAlert?.note ?? '').trim();
-    final shout = line.customShout.trim();
+    final isSec = line.kind.isSection;
+    final shout = isSec ? line.customShout.trim() : getUnalignedCustomShout(line);
 
     late final Color borderColor;
     late final Color bgColor;
@@ -832,6 +834,12 @@ class _PracticeLineCard extends StatelessWidget {
                 original: line.text.original,
                 rubyHtml: line.text.ruby,
                 showRuby: displayLayers.showRuby,
+                alignedCalls: isSec ? const [] : line.alignedCalls,
+                customShout: isSec ? '' : line.customShout,
+                pillBackground: const Color(0xFFE11D48),
+                pillForeground: const Color(0xFFFFFFFF),
+                pillBorderColor: const Color(0xFFFB7185),
+                underlineColor: const Color(0xFFF43F5E),
                 baseStyle: TextStyle(
                   fontSize: (isPlaying ? 32 : 22) * textScale,
                   fontWeight: FontWeight.w800,

@@ -26,8 +26,9 @@ Future<void> triggerCallPresetWithUi({
   required CallbookController controller,
   required String presetId,
   String? lineId,
-  bool autoAdvance = false,
+  bool? autoAdvance,
 }) async {
+  final effectiveAutoAdvance = autoAdvance ?? controller.autoAdvanceOnTag;
   LyricLine? targetLine;
   if (lineId != null) {
     for (final line in controller.project.lines) {
@@ -83,7 +84,7 @@ Future<void> triggerCallPresetWithUi({
         singAlongPresetId,
         suffix: clean,
       );
-      if (added && autoAdvance) {
+      if (added && effectiveAutoAdvance) {
         controller.stepActiveLine(1);
       }
     }
@@ -91,7 +92,7 @@ Future<void> triggerCallPresetWithUi({
   }
 
   final added = controller.toggleLineCall(targetId, presetId);
-  if (added && autoAdvance) {
+  if (added && effectiveAutoAdvance) {
     controller.stepActiveLine(1);
   }
 }

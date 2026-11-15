@@ -6,6 +6,7 @@ import 'package:prism_ui/prism_ui.dart';
 
 import '../../models/callbook_models.dart';
 import '../../state/callbook_controller.dart';
+import '../../utils/aligned_calls.dart';
 import '../../utils/lrc_ruby_parser.dart';
 import '../../utils/section_detector.dart';
 import 'call_badge_pill.dart';
@@ -545,6 +546,17 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
                         onChanged: c.setFollowPlayback,
                         semanticLabel: '跟随播放滚动',
                       ),
+                      Text(
+                        '自动跳下句',
+                        style: AppTextStyle.caption1.of(context).copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                      Switch(
+                        value: c.autoAdvanceOnTag,
+                        onChanged: c.setAutoAdvanceOnTag,
+                        semanticLabel: '打标后自动跳转下一句',
+                      ),
                       TonalButton(
                         size: TonalButtonSize.compact,
                         label: activeLineHasGt ? '取消 GT 警报' : 'GT 警报',
@@ -650,7 +662,14 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
                         compact: true,
                         onTap: quickTargetLine == null
                             ? null
-                            : () => c.toggleTailUpdraft(quickTargetLine.id),
+                            : () {
+                                final enabled = c.toggleTailUpdraft(
+                                  quickTargetLine.id,
+                                );
+                                if (enabled && c.autoAdvanceOnTag) {
+                                  c.stepActiveLine(1);
+                                }
+                              },
                       );
                     },
                   ),
@@ -776,6 +795,9 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
             itemBuilder: (context, idx) {
               final line = items[idx].line;
               final gtAlert = c.getAlertForLine(line.id);
+              final canMergeNext = !line.kind.isSection &&
+                  idx + 1 < items.length &&
+                  !items[idx + 1].line.kind.isSection;
               return KeyedSubtree(
                 key: _lineKeys.putIfAbsent(line.id, GlobalKey.new),
                 child: _ReactiveTimelineLineCard(
@@ -784,6 +806,7 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
                   presetMap: presetMap,
                   gtAlert: gtAlert,
                   isSelected: c.activeLineId == line.id,
+                  canMergeNext: canMergeNext,
                   onCreatePreset: () => _openCreatePresetDialog(context),
                   onAddSectionAfter: () => _openAddSectionDialog(
                     context,
@@ -809,6 +832,7 @@ class _ReactiveTimelineLineCard extends StatefulWidget {
     required this.presetMap,
     required this.gtAlert,
     required this.isSelected,
+    required this.canMergeNext,
     required this.onCreatePreset,
     required this.onAddSectionAfter,
     required this.onEditLine,
@@ -820,6 +844,7 @@ class _ReactiveTimelineLineCard extends StatefulWidget {
   final Map<String, CallPreset> presetMap;
   final GtAlert? gtAlert;
   final bool isSelected;
+  final bool canMergeNext;
   final VoidCallback onCreatePreset;
   final VoidCallback onAddSectionAfter;
   final VoidCallback onEditLine;
@@ -901,6 +926,9 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard> {
     final cueText = (gtAlert?.callTimingCue ?? '').trim();
     final isSection = line.kind.isSection;
     final sectionAccent = _sectionAccentColor(scheme, line.kind);
+    final unalignedShout = isSection
+        ? line.customShout.trim()
+        : getUnalignedCustomShout(line);
 
     final body = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -962,7 +990,12 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard> {
                 _TailUpdraftToggleChip(
                   enabled: line.tailUpdraft,
                   compact: true,
-                  onTap: () => c.toggleTailUpdraft(line.id),
+                  onTap: () {
+                    final enabled = c.toggleTailUpdraft(line.id);
+                    if (enabled && c.autoAdvanceOnTag) {
+                      c.stepActiveLine(1);
+                    }
+                  },
                 ),
                 TonalChip(
                   label: gtAlert != null ? '取消 GT' : 'GT',
@@ -980,6 +1013,13 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard> {
                   foregroundColor: scheme.onSurface,
                   onPressed: () => c.snapLineToCurrentTime(line.id),
                 ),
+                if (widget.canMergeNext)
+                  TonalChip(
+                    label: '合并下句',
+                    color: scheme.surfaceContainerHigh,
+                    foregroundColor: scheme.onSurface,
+                    onPressed: () => c.mergeWithNextLine(line.id),
+                  ),
                 if (isSelected && line.kind != LyricLineKind.outro)
                   TonalChip(
                     label: '+间奏',
@@ -1026,9 +1066,7 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard> {
             );
           },
         ),
-        if (line.calls.isNotEmpty ||
-            line.customShout.trim().isNotEmpty ||
-            isSelected) ...[
+        if (line.calls.isNotEmpty || unalignedShout.isNotEmpty || isSelected) ...[
           const SizedBox(height: 8),
           Wrap(
             spacing: 6,
@@ -1051,7 +1089,7 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard> {
                             globalPosition: pos,
                           ),
                   ),
-              if (line.customShout.trim().isNotEmpty)
+              if (unalignedShout.isNotEmpty)
                 Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 9,
@@ -1062,7 +1100,7 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard> {
                     shape: AppShape.full,
                   ),
                   child: Text(
-                    line.customShout.trim(),
+                    unalignedShout,
                     softWrap: false,
                     maxLines: 1,
                     overflow: TextOverflow.visible,
@@ -1091,6 +1129,12 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard> {
               original: line.text.original,
               rubyHtml: line.text.ruby,
               showRuby: c.displayLayers.showRuby,
+              alignedCalls: isSection ? const [] : line.alignedCalls,
+              customShout: isSection ? '' : line.customShout,
+              pillBackground: scheme.tertiaryContainer,
+              pillForeground: scheme.onTertiaryContainer,
+              pillBorderColor: scheme.outlineVariant,
+              underlineColor: const Color(0x886366F1),
               baseStyle: AppTextStyle.body
                   .of(context, emphasized: true)
                   .copyWith(color: scheme.onSurface, fontSize: 17),
@@ -1177,7 +1221,12 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard> {
                 _TailUpdraftToggleChip(
                   enabled: line.tailUpdraft,
                   compact: true,
-                  onTap: () => c.toggleTailUpdraft(line.id),
+                  onTap: () {
+                    final enabled = c.toggleTailUpdraft(line.id);
+                    if (enabled && c.autoAdvanceOnTag) {
+                      c.stepActiveLine(1);
+                    }
+                  },
                 ),
                 const SizedBox(width: 6),
                 TonalChip(
@@ -1198,6 +1247,13 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard> {
               customShout: v,
             ),
           ),
+          if (!isSection && line.text.original.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            _InlineAlignedCallsBar(
+              line: line,
+              controller: c,
+            ),
+          ],
         ],
         if (gtAlert != null) ...[
           const SizedBox(height: 10),
@@ -1913,6 +1969,410 @@ class _TailUpdraftTagBadge extends StatelessWidget {
               color: const Color(0xFF0369A1),
               height: 1.15,
             ),
+      ),
+    );
+  }
+}
+
+class _InlineAlignedCallsBar extends StatelessWidget {
+  const _InlineAlignedCallsBar({
+    required this.line,
+    required this.controller,
+  });
+
+  final LyricLine line;
+  final CallbookController controller;
+
+  Future<void> _openPicker(BuildContext context, [AlignedCallCue? editing]) async {
+    final res = await showGeneralDialog<_AlignedCallFormResult>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: '关闭',
+      barrierColor: const Color(0x66000000),
+      pageBuilder: (ctx, _, _) => Center(
+        child: _AlignedCallPickerDialog(
+          original: line.text.original,
+          initialCue: editing,
+        ),
+      ),
+    );
+    if (res == null) return;
+    controller.upsertAlignedCall(
+      line.id,
+      id: editing?.id,
+      start: res.start,
+      end: res.end,
+      text: res.text,
+      colorHex: res.colorHex,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = context.colorScheme;
+    final original = line.text.original;
+    final resolved = resolveLineAlignedCalls(line).aligned;
+    final autoCues = [for (final c in resolved) if (c.isAuto) c];
+
+    return Container(
+      padding: const EdgeInsets.only(top: 8),
+      decoration: BoxDecoration(
+        border: Border(
+          top: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.45)),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Text(
+                'CALL 词对位',
+                style: AppTextStyle.caption1
+                    .of(context, emphasized: true)
+                    .copyWith(color: scheme.primary),
+              ),
+              TonalChip(
+                label: '+ 对位 Call',
+                color: scheme.primaryContainer,
+                foregroundColor: scheme.onPrimaryContainer,
+                onPressed: () => _openPicker(context),
+              ),
+              for (final cue in line.alignedCalls)
+                _AlignedCueChip(
+                  cue: cue,
+                  targetSnippet: original.substring(
+                    cue.start.clamp(0, original.length),
+                    cue.end.clamp(0, original.length),
+                  ),
+                  onEdit: () => _openPicker(context, cue),
+                  onRemove: () => controller.removeAlignedCall(line.id, cue.id),
+                ),
+              for (final auto in autoCues)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+                  decoration: ShapeDecoration(
+                    color: scheme.tertiaryContainer.withValues(alpha: 0.55),
+                    shape: AppShape.full,
+                  ),
+                  child: Text(
+                    '自动对位: ${auto.text}',
+                    style: AppTextStyle.caption2.of(context).copyWith(
+                      color: scheme.onTertiaryContainer,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AlignedCueChip extends StatelessWidget {
+  const _AlignedCueChip({
+    required this.cue,
+    required this.targetSnippet,
+    required this.onEdit,
+    required this.onRemove,
+  });
+
+  final AlignedCallCue cue;
+  final String targetSnippet;
+  final VoidCallback onEdit;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = context.colorScheme;
+    final customColor = cue.color;
+    final bg = customColor ?? scheme.secondaryContainer;
+    final fg = customColor != null
+        ? (customColor.computeLuminance() > 0.56
+              ? const Color(0xFF0F172A)
+              : const Color(0xFFFFFFFF))
+        : scheme.onSecondaryContainer;
+    return Container(
+      decoration: ShapeDecoration(
+        color: bg,
+        shape: AppShape.full,
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          GestureDetector(
+            onTap: onEdit,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(9, 4, 4, 4),
+              child: Text(
+                '${cue.text} → $targetSnippet',
+                style: AppTextStyle.caption1
+                    .of(context, emphasized: true)
+                    .copyWith(color: fg),
+              ),
+            ),
+          ),
+          GestureDetector(
+            onTap: onRemove,
+            behavior: HitTestBehavior.opaque,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(2, 4, 8, 4),
+              child: GlyphIcon(
+                Glyphs.close,
+                size: 13,
+                color: fg.withValues(alpha: 0.85),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AlignedCallFormResult {
+  const _AlignedCallFormResult({
+    required this.start,
+    required this.end,
+    required this.text,
+    this.colorHex,
+  });
+
+  final int start;
+  final int end;
+  final String text;
+  final String? colorHex;
+}
+
+class _AlignedCallPickerDialog extends StatefulWidget {
+  const _AlignedCallPickerDialog({
+    required this.original,
+    this.initialCue,
+  });
+
+  final String original;
+  final AlignedCallCue? initialCue;
+
+  @override
+  State<_AlignedCallPickerDialog> createState() =>
+      _AlignedCallPickerDialogState();
+}
+
+class _AlignedCallPickerDialogState extends State<_AlignedCallPickerDialog> {
+  late final List<({String text, int start, int end})> _chars;
+  late int _start;
+  late int _end;
+  late final TextEditingController _textCtrl;
+  String? _colorHex;
+  bool _textAutoFilled = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final spans = <({String text, int start, int end})>[];
+    var offset = 0;
+    for (final rune in widget.original.runes) {
+      final ch = String.fromCharCode(rune);
+      spans.add((text: ch, start: offset, end: offset + ch.length));
+      offset += ch.length;
+    }
+    _chars = spans;
+
+    if (widget.initialCue != null) {
+      _start = widget.initialCue!.start.clamp(0, widget.original.length - 1);
+      _end = widget.initialCue!.end.clamp(_start + 1, widget.original.length);
+      _textCtrl = TextEditingController(text: widget.initialCue!.text);
+      _colorHex = widget.initialCue!.colorHex;
+      _textAutoFilled = false;
+    } else if (_chars.isNotEmpty) {
+      _start = _chars.first.start;
+      _end = _chars.first.end;
+      _textCtrl = TextEditingController(
+        text: widget.original.substring(_start, _end),
+      );
+      _textAutoFilled = true;
+    } else {
+      _start = 0;
+      _end = 0;
+      _textCtrl = TextEditingController();
+    }
+  }
+
+  @override
+  void dispose() {
+    _textCtrl.dispose();
+    super.dispose();
+  }
+
+  void _onTapChar(({String text, int start, int end}) span) {
+    final prevSlice = widget.original.substring(_start, _end);
+    int nextStart;
+    int nextEnd;
+    if (_end - _start > 1 || (span.start == _start && span.end == _end)) {
+      nextStart = span.start;
+      nextEnd = span.end;
+    } else {
+      nextStart = math.min(_start, span.start);
+      nextEnd = math.max(_end, span.end);
+    }
+    final nextSlice = widget.original.substring(nextStart, nextEnd);
+    setState(() {
+      _start = nextStart;
+      _end = nextEnd;
+      if (_textCtrl.text.trim().isEmpty ||
+          _textAutoFilled ||
+          _textCtrl.text.trim() == prevSlice.trim()) {
+        _textCtrl.text = nextSlice;
+        _textAutoFilled = true;
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = context.colorScheme;
+    final selectedSlice = widget.original.isEmpty
+        ? ''
+        : widget.original.substring(_start, _end);
+    final canSave = _end > _start && _textCtrl.text.trim().isNotEmpty;
+
+    return AlertDialog(
+      title: widget.initialCue != null ? '编辑词对位 Call' : '添加词对位 Call',
+      hasFields: true,
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(null),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: canSave
+              ? () => Navigator.of(context).pop(
+                  _AlignedCallFormResult(
+                    start: _start,
+                    end: _end,
+                    text: _textCtrl.text.trim(),
+                    colorHex: _colorHex,
+                  ),
+                )
+              : null,
+          child: const Text('确认对位'),
+        ),
+      ],
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            '点击选字确定对位范围（点首尾两字可连选）：当前已选「$selectedSlice」',
+            style: AppTextStyle.caption1.of(context).copyWith(
+              color: scheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 4,
+            runSpacing: 4,
+            children: [
+              for (final span in _chars)
+                GestureDetector(
+                  onTap: () => _onTapChar(span),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 7,
+                      vertical: 5,
+                    ),
+                    decoration: ShapeDecoration(
+                      color: (span.start >= _start && span.end <= _end)
+                          ? scheme.primary
+                          : scheme.surfaceContainerHigh,
+                      shape: AppShape.sm,
+                    ),
+                    child: Text(
+                      span.text == ' ' ? '␣' : span.text,
+                      style: AppTextStyle.subheadline
+                          .of(context, emphasized: true)
+                          .copyWith(
+                            color: (span.start >= _start && span.end <= _end)
+                                ? scheme.onPrimary
+                                : scheme.onSurface,
+                          ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _textCtrl,
+            decoration: const InputDecoration(
+              hintText: '输入对位喊声（如 高い / Hi! / L.O.V.E）',
+            ),
+            onChanged: (_) => setState(() {
+              _textAutoFilled = false;
+            }),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              GestureDetector(
+                onTap: () => setState(() => _colorHex = null),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+                  decoration: ShapeDecoration(
+                    color: const Color(0xFFE0E7FF),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(999),
+                      side: _colorHex == null
+                          ? BorderSide(color: scheme.onSurface, width: 2)
+                          : const BorderSide(color: Color(0xFFC7D2FE)),
+                    ),
+                  ),
+                  child: const Text(
+                    '默认靛蓝',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF3730A3),
+                    ),
+                  ),
+                ),
+              ),
+              for (final hex in customPresetColorPalette)
+                GestureDetector(
+                  onTap: () => setState(() => _colorHex = hex),
+                  child: Container(
+                    width: 24,
+                    height: 24,
+                    decoration: BoxDecoration(
+                      color: Color(
+                        int.parse('FF${hex.substring(1)}', radix: 16),
+                      ),
+                      shape: BoxShape.circle,
+                      border: _colorHex == hex
+                          ? Border.all(
+                              color: scheme.onSurface,
+                              width: 2.5,
+                            )
+                          : null,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ],
       ),
     );
   }

@@ -1363,4 +1363,300 @@ void main() {
       },
     );
   });
+
+  group('8. Merge Lines, Word-Aligned Calls & Auto-Advance Toggle Parity', () {
+    testWidgets(
+      'Controller & TimelineEditor support merging adjacent lines with GT alert retargeting',
+      (tester) async {
+        final controller = await _initController();
+        try {
+          await controller.importProjectJson(
+            jsonEncode({
+              'meta': {
+                'title': 'Merge Parity Song',
+                'artist': 'Unit Test',
+                'bpm': 160,
+                'timeSignature': '4/4',
+              },
+              'alerts': [
+                {
+                  'id': 'gt-a',
+                  'triggerTimeMs': 1000,
+                  'leadBeats': 4,
+                  'note': 'Line A GT',
+                  'targetLineId': 'l-a',
+                },
+                {
+                  'id': 'gt-b',
+                  'triggerTimeMs': 4000,
+                  'leadBeats': 4,
+                  'note': 'Line B GT',
+                  'targetLineId': 'l-b',
+                },
+              ],
+              'lines': [
+                {
+                  'id': 'sec-intro',
+                  'startTimeMs': 0,
+                  'endTimeMs': 1000,
+                  'kind': 'intro',
+                  'text': {'original': '【前奏】'},
+                },
+                {
+                  'id': 'l-a',
+                  'startTimeMs': 1000,
+                  'endTimeMs': 4000,
+                  'kind': 'lyric',
+                  'calls': [{'presetId': 'front-wave'}],
+                  'customShout': '高い',
+                  'text': {
+                    'original': '目指す場所は高い',
+                    'ruby': '<ruby>目指<rt>めざ</rt></ruby>す<ruby>場所<rt>ばしょ</rt></ruby>は<ruby>高<rt>たか</rt></ruby>い',
+                    'translation': '目标高远',
+                  },
+                },
+                {
+                  'id': 'l-b',
+                  'startTimeMs': 4000,
+                  'endTimeMs': 8000,
+                  'kind': 'lyric',
+                  'calls': [{'presetId': 'clap'}],
+                  'tailUpdraft': true,
+                  'alignedCalls': [
+                    {'id': 'ac-b', 'start': 4, 'end': 8, 'text': 'どこまで'},
+                  ],
+                  'text': {
+                    'original': 'いまよりどこまで',
+                    'translation': '比现在去往何方',
+                  },
+                },
+              ],
+            }),
+          );
+          await tester.pump();
+
+          // Section cannot merge with next lyric line
+          expect(controller.mergeWithNextLine('sec-intro'), isFalse);
+
+          await _pumpWithViewport(
+            tester,
+            _wrapWithPrism(
+              controller: controller,
+              child: prism.BottomInsetScope(
+                inset: 0,
+                child: SingleChildScrollView(
+                  child: TimelineEditorWidget(
+                    controller: controller,
+                    compact: true,
+                  ),
+                ),
+              ),
+            ),
+            viewport: const Size(1280, 820),
+          );
+          expect(tester.takeException(), isNull);
+          expect(find.text('合并下句'), findsOneWidget);
+
+          await tester.tap(find.text('合并下句'));
+          await tester.pump();
+
+          expect(controller.sortedLines.length, 2);
+          final merged = controller.sortedLines.firstWhere((l) => l.id == 'l-a');
+          expect(merged.text.original, '目指す場所は高い いまよりどこまで');
+          expect(merged.tailUpdraft, isTrue);
+          expect(merged.calls.length, 2);
+          expect(merged.alignedCalls.length, 1);
+          expect(merged.alignedCalls.first.start, 13);
+          expect(merged.alignedCalls.first.end, 17);
+          // Second GT alert was deduped leaving only gt-a on l-a
+          expect(controller.sortedAlerts.length, 1);
+          expect(controller.getAlertForLine('l-a')?.id, 'gt-a');
+        } finally {
+          await _disposeTestTree(tester, controller);
+        }
+      },
+    );
+
+    testWidgets(
+      'Aligned Call picker adds/removes explicit cues & renders in ExportView & PracticeOverlay without overflow',
+      (tester) async {
+        final controller = await _initController();
+        try {
+          await controller.importProjectJson(
+            jsonEncode({
+              'meta': {
+                'title': 'Align Visual Test',
+                'artist': 'Singer',
+                'bpm': 170,
+              },
+              'lines': [
+                {
+                  'id': 'al-1',
+                  'startTimeMs': 1000,
+                  'endTimeMs': 5000,
+                  'kind': 'lyric',
+                  'customShout': '高い / Hi-Call',
+                  'text': {
+                    'original': '目指す場所は高い',
+                    'ruby': '<ruby>目指<rt>めざ</rt></ruby>す<ruby>場所<rt>ばしょ</rt></ruby>は<ruby>高<rt>たか</rt></ruby>い',
+                    'translation': '目标高处',
+                  },
+                },
+              ],
+            }),
+          );
+          controller.selectLine('al-1');
+
+          await _pumpWithViewport(
+            tester,
+            _wrapWithPrism(
+              controller: controller,
+              child: prism.BottomInsetScope(
+                inset: 0,
+                child: SingleChildScrollView(
+                  child: TimelineEditorWidget(
+                    controller: controller,
+                    compact: true,
+                  ),
+                ),
+              ),
+            ),
+            viewport: const Size(1280, 820),
+          );
+          expect(tester.takeException(), isNull);
+          expect(find.text('CALL 词对位'), findsOneWidget);
+          expect(find.text('+ 对位 Call'), findsOneWidget);
+          // Auto-aligned '高い' removed from top badge strip, only 'Hi-Call' remains
+          expect(find.text('Hi-Call'), findsOneWidget);
+
+          // Open char-range picker dialog and add explicit cue
+          await tester.tap(find.text('+ 对位 Call'));
+          await tester.pump();
+          expect(find.text('添加词对位 Call'), findsOneWidget);
+          await tester.enterText(find.byType(prism.TextField).last, 'Hey!');
+          await tester.pump();
+          await tester.tap(find.text('确认对位'));
+          await tester.pump();
+
+          final updatedLine = controller.sortedLines.first;
+          expect(updatedLine.alignedCalls.length, 1);
+          expect(updatedLine.alignedCalls.first.text, 'Hey!');
+
+          // ExportView renders cleanly with aligned Call pill & ZERO overflows
+          final capturedErrors = <FlutterErrorDetails>[];
+          final prevOnError = FlutterError.onError;
+          FlutterError.onError = (d) => capturedErrors.add(d);
+          try {
+            await _pumpWithViewport(
+              tester,
+              _wrapWithPrism(
+                controller: controller,
+                child: ExportView(controller: controller),
+              ),
+              viewport: const Size(1280, 900),
+            );
+            expect(capturedErrors, isEmpty);
+            expect(tester.takeException(), isNull);
+            expect(find.text('Hi-Call'), findsOneWidget);
+
+            // PracticeOverlay renders cleanly with aligned Call pill
+            await _pumpWithViewport(
+              tester,
+              _wrapWithPrism(
+                controller: controller,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [PracticeOverlay(controller: controller)],
+                ),
+              ),
+              viewport: const Size(1280, 820),
+            );
+            expect(capturedErrors, isEmpty);
+            expect(tester.takeException(), isNull);
+            expect(find.text('Hey!'), findsOneWidget);
+          } finally {
+            FlutterError.onError = prevOnError;
+          }
+        } finally {
+          await _disposeTestTree(tester, controller);
+        }
+      },
+    );
+
+    testWidgets(
+      'autoAdvanceOnTag toggle persists, syncs across toolbar/mobile, and advances only on add',
+      (tester) async {
+        final controller = await _initController();
+        try {
+          expect(controller.autoAdvanceOnTag, isFalse);
+
+          await _pumpWithViewport(
+            tester,
+            LiveCallStudioApp(controller: controller),
+            viewport: const Size(1280, 820),
+          );
+          expect(find.text('自动跳下句'), findsOneWidget);
+
+          // Toggle desktop switch ON
+          await tester.tap(find.bySemanticsLabel('打标后自动跳转下一句'));
+          await tester.pump();
+          expect(controller.autoAdvanceOnTag, isTrue);
+
+          final firstId = controller.sortedLines[0].id;
+          final secondId = controller.sortedLines[1].id;
+          final thirdId = controller.sortedLines[2].id;
+          controller.selectLine(firstId);
+          await tester.pump();
+
+          // Ensure first line doesn't already have 'clap'
+          if (controller.sortedLines[0].calls.any((c) => c.presetId == 'clap')) {
+            controller.toggleLineCall(firstId, 'clap');
+          }
+
+          // Press keyboard shortcut '0' (clap) -> adds tag AND advances to second line
+          await tester.sendKeyEvent(LogicalKeyboardKey.digit0);
+          await tester.pump();
+          expect(controller.activeLineId, secondId);
+
+          // Adding via quickTagActiveLine advances to third line; removing stays on third line
+          if (controller.sortedLines[1].calls.any((c) => c.presetId == 'clap')) {
+            controller.toggleLineCall(secondId, 'clap');
+          }
+          expect(controller.quickTagActiveLine('clap'), isTrue);
+          expect(controller.activeLineId, thirdId);
+          // Calling again on thirdId (if tagged) removes without advancing beyond or stays put
+          if (!controller.sortedLines[2].calls.any((c) => c.presetId == 'clap')) {
+            controller.toggleLineCall(thirdId, 'clap');
+          }
+          expect(controller.quickTagActiveLine('clap'), isFalse);
+          expect(controller.activeLineId, thirdId);
+
+          // Wait for async prefs persist and confirm SharedPreferences stored autoAdvanceOnTag: true
+          await tester.pump(const Duration(milliseconds: 50));
+          final prefs = await SharedPreferences.getInstance();
+          final rawTheme = prefs.getString('live_call_studio_theme_v1');
+          expect(rawTheme, isNotNull);
+          final decodedTheme = jsonDecode(rawTheme!) as Map<String, dynamic>;
+          expect(decodedTheme['autoAdvanceOnTag'], isTrue);
+
+          // Resize to mobile (390x844) and confirm mobile quick-tray chip syncs & toggles controller.autoAdvanceOnTag
+          await _pumpWithViewport(
+            tester,
+            LiveCallStudioApp(controller: controller),
+            viewport: const Size(390, 844),
+          );
+          expect(find.text('打完跳下句'), findsOneWidget);
+          await tester.tap(find.text('打完跳下句'));
+          await tester.pump();
+          expect(controller.autoAdvanceOnTag, isFalse);
+        } finally {
+          await _disposeTestTree(
+            tester,
+            controller,
+            controllerOwnedByWidget: true,
+          );
+        }
+      },
+    );
+  });
 }

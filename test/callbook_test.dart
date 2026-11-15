@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:live_call_studio/models/callbook_models.dart';
+import 'package:live_call_studio/utils/aligned_calls.dart';
 import 'package:live_call_studio/utils/lrc_ruby_parser.dart';
 import 'package:live_call_studio/utils/section_detector.dart';
 import 'package:live_call_studio/utils/xlsx_export.dart';
@@ -280,6 +281,175 @@ void main() {
       expect(copied.label, '合唱');
       expect(copied.colorHex, '#2563EB');
       expect(copied.builtIn, isTrue);
+    });
+  });
+
+  group('Aligned Calls & Adjacent Line Merging', () {
+    test('resolveLineAlignedCalls auto-aligns matching customShout substrings and splits tokens', () {
+      const lineWhole = LyricLine(
+        id: 'a1',
+        startTimeMs: 1000,
+        endTimeMs: 4000,
+        customShout: '高い',
+        text: LyricText(
+          original: '目指す場所は高い',
+          ruby: '<ruby>目指<rt>めざ</rt></ruby>す<ruby>場所<rt>ばしょ</rt></ruby>は<ruby>高<rt>たか</rt></ruby>い',
+        ),
+      );
+      final wholeRes = resolveLineAlignedCalls(lineWhole);
+      expect(wholeRes.aligned.length, 1);
+      expect(wholeRes.aligned.first.start, 6);
+      expect(wholeRes.aligned.first.end, 8);
+      expect(wholeRes.aligned.first.text, '高い');
+      expect(wholeRes.aligned.first.isAuto, isTrue);
+      expect(wholeRes.unalignedShoutParts, isEmpty);
+      expect(getUnalignedCustomShout(lineWhole), '');
+
+      final runs = buildAlignedLyricRuns(lineWhole, showRuby: true);
+      expect(runs.length, 2);
+      expect(runs[0].call, isNull);
+      expect(runs[1].call?.text, '高い');
+      expect(runs[1].rubyParts.length, 2);
+      expect(runs[1].rubyParts[0].base, '高');
+      expect(runs[1].rubyParts[0].rt, 'たか');
+      expect(runs[1].rubyParts[1].base, 'い');
+
+      const lineMixed = LyricLine(
+        id: 'a2',
+        startTimeMs: 4000,
+        endTimeMs: 7000,
+        customShout: 'どこまで / L.O.V.E',
+        alignedCalls: [
+          AlignedCallCue(
+            id: 'explicit-1',
+            start: 0,
+            end: 4,
+            text: 'Hi!',
+            colorHex: '#EF4444',
+          ),
+        ],
+        text: LyricText(original: 'いまより高くどこまで'),
+      );
+      final mixedRes = resolveLineAlignedCalls(lineMixed);
+      expect(mixedRes.aligned.length, 2);
+      expect(mixedRes.aligned[0].cue.id, 'explicit-1');
+      expect(mixedRes.aligned[0].isAuto, isFalse);
+      expect(mixedRes.aligned[1].text, 'どこまで');
+      expect(mixedRes.aligned[1].start, 6);
+      expect(mixedRes.aligned[1].end, 10);
+      expect(mixedRes.unalignedShoutParts, ['L.O.V.E']);
+      expect(getUnalignedCustomShout(lineMixed), 'L.O.V.E');
+    });
+
+    test('buildAlignedLyricRuns falls back cleanly when ruby text is stale', () {
+      const staleRubyLine = LyricLine(
+        id: 'stale-1',
+        startTimeMs: 1000,
+        endTimeMs: 3000,
+        customShout: 'どこまで',
+        text: LyricText(
+          original: 'いまより高くどこまで',
+          ruby: '<ruby>古<rt>ふる</rt></ruby>いテキスト',
+        ),
+      );
+      final runs = buildAlignedLyricRuns(staleRubyLine, showRuby: true);
+      expect(runs.length, 2);
+      expect(runs[0].rubyParts.map((s) => s.base).join(), 'いまより高く');
+      expect(runs[1].call?.text, 'どこまで');
+      expect(runs[1].rubyParts.map((s) => s.base).join(), 'どこまで');
+    });
+
+    test('mergeAdjacentLyricLines merges text, ruby, calls, shouts, tailUpdraft and shifts alignedCalls', () {
+      const first = LyricLine(
+        id: 'm1',
+        startTimeMs: 1000,
+        endTimeMs: 3500,
+        calls: [LineCallTag(presetId: 'front-wave')],
+        customShout: '高い',
+        alignedCalls: [
+          AlignedCallCue(id: 'c1', start: 0, end: 2, text: 'Go!'),
+        ],
+        text: LyricText(
+          original: '目指す場所',
+          ruby: '<ruby>目指<rt>めざ</rt></ruby>す<ruby>場所<rt>ばしょ</rt></ruby>',
+          romaji: 'mezasu basho',
+          translation: '目标所在之处',
+        ),
+      );
+      const second = LyricLine(
+        id: 'm2',
+        startTimeMs: 3500,
+        endTimeMs: 6500,
+        calls: [
+          LineCallTag(presetId: 'front-wave', suffix: '×2'),
+          LineCallTag(presetId: 'clap'),
+        ],
+        customShout: 'どこまで',
+        tailUpdraft: true,
+        alignedCalls: [
+          AlignedCallCue(id: 'c2', start: 1, end: 3, text: 'Jump', colorHex: '#10B981'),
+        ],
+        text: LyricText(
+          original: ' どこまで',
+          romaji: 'dokomade',
+          translation: '直到何方',
+        ),
+      );
+
+      final merged = mergeAdjacentLyricLines(first, second);
+      expect(merged.id, 'm1');
+      expect(merged.startTimeMs, 1000);
+      expect(merged.endTimeMs, 6500);
+      expect(merged.text.original, '目指す場所 どこまで');
+      expect(
+        merged.text.ruby,
+        '<ruby>目指<rt>めざ</rt></ruby>す<ruby>場所<rt>ばしょ</rt></ruby> どこまで',
+      );
+      expect(merged.text.romaji, 'mezasu basho dokomade');
+      expect(merged.text.translation, '目标所在之处 直到何方');
+      expect(merged.tailUpdraft, isTrue);
+      expect(merged.customShout, '高い / どこまで');
+      expect(merged.calls.length, 2);
+      expect(merged.calls.firstWhere((c) => c.presetId == 'front-wave').suffix, '×2');
+      expect(merged.alignedCalls.length, 2);
+      expect(merged.alignedCalls[0].start, 0);
+      expect(merged.alignedCalls[0].end, 2);
+      // second original starts with a space trimmed away, shift = 5 + 1 - 1 = 5
+      expect(merged.alignedCalls[1].start, 6);
+      expect(merged.alignedCalls[1].end, 8);
+      expect(merged.alignedCalls[1].colorHex, '#10B981');
+
+      // JSON roundtrip & Archive taggedCount include alignedCalls
+      final roundtrip = LyricLine.fromJson(merged.toJson());
+      expect(roundtrip.alignedCalls.length, 2);
+      expect(roundtrip.alignedCalls[1].text, 'Jump');
+      expect(
+        CallbookArchiveEntry.computeTaggedCount(
+          const CallProject(
+            meta: CallProjectMeta(title: 't', artist: 'a'),
+            lines: [
+              LyricLine(
+                id: 'only-aligned',
+                startTimeMs: 0,
+                endTimeMs: 1000,
+                alignedCalls: [AlignedCallCue(id: 'x', start: 0, end: 1, text: 'Hi')],
+                text: LyricText(original: '夢'),
+              ),
+            ],
+          ),
+        ),
+        1,
+      );
+
+      // XLSX export includes explicit alignedCalls
+      final xlsxBytes = buildCallBookXlsxBytes(
+        CallProject(
+          meta: const CallProjectMeta(title: 'Xlsx Aligned Test', artist: 'Unit'),
+          lines: [roundtrip],
+        ),
+        defaultCallPresets,
+      );
+      expect(xlsxBytes.length, greaterThan(400));
     });
   });
 }
