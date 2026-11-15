@@ -2,7 +2,7 @@ name: Build Android & Windows Installers
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, beta ]
     tags: [ 'v*' ]
   workflow_dispatch:
 
@@ -10,8 +10,68 @@ permissions:
   contents: write
 
 jobs:
+  prepare-version:
+    name: Resolve & Auto-Increment Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.semver.outputs.version }}
+      build_number: ${{ steps.semver.outputs.build_number }}
+      tag_name: ${{ steps.semver.outputs.tag_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute next semantic version
+        id: semver
+        run: |
+          git fetch --tags --force
+          PUB_LINE=$(grep '^version:' pubspec.yaml | head -n 1 | awk '{print $2}')
+          PUB_VER=$(echo "$PUB_LINE" | cut -d'+' -f1)
+          PUB_BUILD=$(echo "$PUB_LINE" | cut -s -d'+' -f2)
+          PUB_VER=${PUB_VER:-1.0.0}
+          PUB_BUILD=${PUB_BUILD:-1}
+
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            TAG_NAME="${GITHUB_REF#refs/tags/}"
+            VERSION="${TAG_NAME#v}"
+            TAG_COUNT=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | wc -l | tr -d ' ')
+            BUILD_NUM=$(( PUB_BUILD > TAG_COUNT ? PUB_BUILD : TAG_COUNT + 1 ))
+          else
+            LATEST_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)
+            if [ -z "$LATEST_TAG" ]; then
+              VERSION="$PUB_VER"
+              BUILD_NUM="$PUB_BUILD"
+            elif ! git rev-parse "v${PUB_VER}" >/dev/null 2>&1; then
+              VERSION="$PUB_VER"
+              TAG_COUNT=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | wc -l | tr -d ' ')
+              NEXT_BUILD=$(( TAG_COUNT + 1 ))
+              BUILD_NUM=$(( PUB_BUILD > NEXT_BUILD ? PUB_BUILD : NEXT_BUILD ))
+            else
+              BASE_VER="${LATEST_TAG#v}"
+              MAJOR=$(echo "$BASE_VER" | cut -d'.' -f1)
+              MINOR=$(echo "$BASE_VER" | cut -d'.' -f2)
+              PATCH=$(echo "$BASE_VER" | cut -d'.' -f3)
+              NEXT_PATCH=$(( PATCH + 1 ))
+              while git rev-parse "v${MAJOR}.${MINOR}.${NEXT_PATCH}" >/dev/null 2>&1; do
+                NEXT_PATCH=$(( NEXT_PATCH + 1 ))
+              done
+              VERSION="${MAJOR}.${MINOR}.${NEXT_PATCH}"
+              TAG_COUNT=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | wc -l | tr -d ' ')
+              NEXT_BUILD=$(( TAG_COUNT + 1 ))
+              BUILD_NUM=$(( PUB_BUILD >= NEXT_BUILD ? PUB_BUILD + 1 : NEXT_BUILD ))
+            fi
+            TAG_NAME="v${VERSION}"
+          fi
+
+          echo "Resolved version=${VERSION}, build_number=${BUILD_NUM}, tag_name=${TAG_NAME}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "build_number=${BUILD_NUM}" >> "$GITHUB_OUTPUT"
+          echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+
   build-android:
     name: Build Android APK
+    needs: [ prepare-version ]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,24 +92,18 @@ jobs:
             yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
           fi
 
-      - name: Resolve version
-        id: meta
-        run: |
-          PUB_VER=$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d'+' -f1)
-          echo "version=${PUB_VER:-1.0.0}" >> "$GITHUB_OUTPUT"
-
       - run: flutter pub get
 
       - name: Build universal APK
         run: |
-          flutter build apk --release
+          flutter build apk --release --build-name="${{ needs.prepare-version.outputs.version }}" --build-number="${{ needs.prepare-version.outputs.build_number }}"
           mkdir -p dist/android
-          cp build/app/outputs/flutter-apk/app-release.apk "dist/android/CallbookMaker-v${{ steps.meta.outputs.version }}-android-universal.apk"
+          cp build/app/outputs/flutter-apk/app-release.apk "dist/android/CallbookMaker-v${{ needs.prepare-version.outputs.version }}-android-universal.apk"
 
       - name: Build arm64-v8a split APK
         run: |
-          flutter build apk --release --split-per-abi
-          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk "dist/android/CallbookMaker-v${{ steps.meta.outputs.version }}-android-arm64-v8a.apk"
+          flutter build apk --release --split-per-abi --build-name="${{ needs.prepare-version.outputs.version }}" --build-number="${{ needs.prepare-version.outputs.build_number }}"
+          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk "dist/android/CallbookMaker-v${{ needs.prepare-version.outputs.version }}-android-arm64-v8a.apk"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -58,6 +112,7 @@ jobs:
 
   build-windows:
     name: Build Windows Setup & Portable
+    needs: [ prepare-version ]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -67,22 +122,31 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Resolve version
-        id: meta
+      - name: Sync Windows Runner.rc version
         shell: pwsh
         run: |
-          $line = (Get-Content pubspec.yaml | Where-Object { $_ -match '^version:' } | Select-Object -First 1)
-          $ver = ($line -replace '^version:\s*', '').Split('+')[0].Trim()
-          if (-not $ver) { $ver = '1.0.0' }
-          "version=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          $ver = "${{ needs.prepare-version.outputs.version }}"
+          $build = "${{ needs.prepare-version.outputs.build_number }}"
+          $parts = $ver.Split('.')
+          $commaVer = "$($parts[0]),$($parts[1]),$($parts[2]),$build"
+          $dotVer = "$ver.$build"
+          $rcPath = "windows\runner\Runner.rc"
+          if (Test-Path $rcPath) {
+            $rc = Get-Content $rcPath -Raw
+            $rc = $rc -replace 'FILEVERSION\s+\d+,\d+,\d+,\d+', "FILEVERSION $commaVer"
+            $rc = $rc -replace 'PRODUCTVERSION\s+\d+,\d+,\d+,\d+', "PRODUCTVERSION $commaVer"
+            $rc = $rc -replace '"FileVersion",\s*"[^"]+"', "`"FileVersion`", `"$dotVer`""
+            $rc = $rc -replace '"ProductVersion",\s*"[^"]+"', "`"ProductVersion`", `"$dotVer`""
+            Set-Content -Path $rcPath -Value $rc -Encoding utf8
+          }
 
       - run: flutter pub get
-      - run: flutter build windows --release
+      - run: flutter build windows --release --build-name="${{ needs.prepare-version.outputs.version }}" --build-number="${{ needs.prepare-version.outputs.build_number }}"
 
       - name: Package Portable ZIP and Setup EXE
         shell: pwsh
         run: |
-          $ver = "${{ steps.meta.outputs.version }}"
+          $ver = "${{ needs.prepare-version.outputs.version }}"
           $releaseDir = @('build\windows\x64\runner\Release', 'build\windows\runner\Release') |
             Where-Object { Test-Path $_ } |
             Select-Object -First 1
@@ -113,8 +177,8 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    needs: [ build-android, build-windows ]
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [ prepare-version, build-android, build-windows ]
+    if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/beta' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -124,5 +188,8 @@ jobs:
 
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.prepare-version.outputs.tag_name }}
+          name: ${{ needs.prepare-version.outputs.tag_name }}
+          target_commitish: ${{ github.sha }}
           files: release-assets/*
           generate_release_notes: true

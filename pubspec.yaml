@@ -1,7 +1,7 @@
 name: live_call_studio
 description: CallbookMaker (Prism UI x Material 3) for Desktop (Windows/macOS/Linux) and Android.
 publish_to: none
-version: 1.0.2+3
+version: 1.0.3+4
 
 environment:
   sdk: ^3.8.0
