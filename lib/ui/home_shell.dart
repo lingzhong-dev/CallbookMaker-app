@@ -443,8 +443,9 @@ class _HomeShellState extends State<HomeShell> {
                             ),
                           if (_mobileQuickTrayOpen &&
                               c.route == StudioRoute.dashboard)
-                            Builder(
-                              builder: (context) {
+                            ListenableBuilder(
+                              listenable: c.playingLineIdListenable,
+                              builder: (context, _) {
                                 final ordered = c.sortedLines;
                                 final targetLine = c.resolveLineForQuickTag();
                                 final targetIdx = targetLine == null
@@ -647,22 +648,27 @@ class _HomeShellState extends State<HomeShell> {
                                               ),
                                               const SizedBox(width: 10),
                                               Expanded(
-                                                child: Text(
-                                                  '${formatMsToClock(c.currentTimeMs)} · ${c.project.meta.bpm} BPM · ${c.currentBar}.${c.currentBeatInBar}',
-                                                  maxLines: 1,
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                  style: AppTextStyle.caption1
-                                                      .of(context)
-                                                      .copyWith(
-                                                        fontFamily: 'GoogleSans',
-                                                        fontFeatures: const [
-                                                          FontFeature
-                                                              .tabularFigures(),
-                                                        ],
-                                                        color: scheme
-                                                            .onSurfaceVariant,
-                                                      ),
+                                                child: ListenableBuilder(
+                                                  listenable:
+                                                      c.playbackListenable,
+                                                  builder: (context, _) => Text(
+                                                    '${formatMsToClock(c.currentTimeMs)} · ${c.project.meta.bpm} BPM · ${c.currentBar}.${c.currentBeatInBar}',
+                                                    maxLines: 1,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                    style: AppTextStyle.caption1
+                                                        .of(context)
+                                                        .copyWith(
+                                                          fontFamily:
+                                                              'GoogleSans',
+                                                          fontFeatures: const [
+                                                            FontFeature
+                                                                .tabularFigures(),
+                                                          ],
+                                                          color: scheme
+                                                              .onSurfaceVariant,
+                                                        ),
+                                                  ),
                                                 ),
                                               ),
                                             ],

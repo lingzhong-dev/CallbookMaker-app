@@ -168,8 +168,6 @@ class _DashboardViewState extends State<DashboardView> {
     final c = widget.controller;
     final scheme = context.colorScheme;
     final bottomInset = BottomInsetScope.of(context);
-    final safeDuration = math.max(1000, c.durationMs).toDouble();
-    final clampedPos = c.currentTimeMs.toDouble().clamp(0.0, safeDuration);
     final coveragePct = c.project.lines.isEmpty
         ? 0
         : ((c.taggedLineCount / c.project.lines.length) * 100).round();
@@ -186,8 +184,6 @@ class _DashboardViewState extends State<DashboardView> {
                 context,
                 c,
                 scheme,
-                safeDuration,
-                clampedPos,
               );
               final rightGrid = _buildMetricsBento(
                 context,
@@ -514,8 +510,6 @@ class _DashboardViewState extends State<DashboardView> {
     BuildContext context,
     CallbookController c,
     ColorScheme scheme,
-    double safeDuration,
-    double clampedPos,
   ) {
     final beats = c.project.meta.beatsPerBar;
     return Card(
@@ -541,16 +535,19 @@ class _DashboardViewState extends State<DashboardView> {
                 alignment: WrapAlignment.spaceBetween,
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
-                  TonalChip(
-                    label: c.isPlaying
-                        ? 'PLAYING · BAR ${c.currentBar}.${c.currentBeatInBar}'
-                        : 'READY · ${c.project.meta.platform.toUpperCase()}',
-                    color: c.isPlaying
-                        ? scheme.primaryContainer
-                        : scheme.surfaceContainerHigh,
-                    foregroundColor: c.isPlaying
-                        ? scheme.onPrimaryContainer
-                        : scheme.onSurfaceVariant,
+                  ListenableBuilder(
+                    listenable: c.playbackListenable,
+                    builder: (context, _) => TonalChip(
+                      label: c.isPlaying
+                          ? 'PLAYING · BAR ${c.currentBar}.${c.currentBeatInBar}'
+                          : 'READY · ${c.project.meta.platform.toUpperCase()}',
+                      color: c.isPlaying
+                          ? scheme.primaryContainer
+                          : scheme.surfaceContainerHigh,
+                      foregroundColor: c.isPlaying
+                          ? scheme.onPrimaryContainer
+                          : scheme.onSurfaceVariant,
+                    ),
                   ),
                   TonalButton(
                     size: TonalButtonSize.compact,
@@ -589,75 +586,94 @@ class _DashboardViewState extends State<DashboardView> {
                   ),
                   const SizedBox(width: 16),
                   Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          formatMsToClock(c.currentTimeMs),
-                          style: AppTextStyle.title1
-                              .of(context, emphasized: true)
-                              .copyWith(
-                                fontFamily: 'GoogleSans',
-                                fontFeatures: const [
-                                  FontFeature.tabularFigures(),
-                                ],
-                                color: scheme.onSurface,
-                              ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          '/ ${formatMsToClock(safeDuration.round())} · ${c.statusMessage}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: AppTextStyle.caption1.of(context).copyWith(
-                            color: scheme.onSurfaceVariant,
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        Row(
+                    child: ListenableBuilder(
+                      listenable: Listenable.merge([
+                        c.playbackListenable,
+                        c.statusListenable,
+                      ]),
+                      builder: (context, _) {
+                        final safeDuration = math.max(1000, c.durationMs);
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            for (var b = 1; b <= beats; b++) ...[
-                              AnimatedContainer(
-                                duration: const Duration(milliseconds: 110),
-                                width: b == 1 ? 14 : 11,
-                                height: b == 1 ? 14 : 11,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: c.isPlaying && c.currentBeatInBar == b
-                                      ? (b == 1
-                                            ? scheme.primary
-                                            : scheme.secondary)
-                                      : scheme.surfaceContainerHighest,
-                                ),
-                              ),
-                              const SizedBox(width: 6),
-                            ],
-                            const Spacer(),
                             Text(
-                              '${c.project.meta.bpm} BPM',
-                              style: AppTextStyle.caption1
+                              formatMsToClock(c.currentTimeMs),
+                              style: AppTextStyle.title1
                                   .of(context, emphasized: true)
                                   .copyWith(
                                     fontFamily: 'GoogleSans',
                                     fontFeatures: const [
                                       FontFeature.tabularFigures(),
                                     ],
-                                    color: scheme.primary,
+                                    color: scheme.onSurface,
                                   ),
                             ),
+                            const SizedBox(height: 2),
+                            Text(
+                              '/ ${formatMsToClock(safeDuration)} · ${c.statusMessage}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppTextStyle.caption1.of(context).copyWith(
+                                color: scheme.onSurfaceVariant,
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            Row(
+                              children: [
+                                for (var b = 1; b <= beats; b++) ...[
+                                  AnimatedContainer(
+                                    duration: const Duration(milliseconds: 110),
+                                    width: b == 1 ? 14 : 11,
+                                    height: b == 1 ? 14 : 11,
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: c.isPlaying && c.currentBeatInBar == b
+                                          ? (b == 1
+                                                ? scheme.primary
+                                                : scheme.secondary)
+                                          : scheme.surfaceContainerHighest,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                ],
+                                const Spacer(),
+                                Text(
+                                  '${c.project.meta.bpm} BPM',
+                                  style: AppTextStyle.caption1
+                                      .of(context, emphasized: true)
+                                      .copyWith(
+                                        fontFamily: 'GoogleSans',
+                                        fontFeatures: const [
+                                          FontFeature.tabularFigures(),
+                                        ],
+                                        color: scheme.primary,
+                                      ),
+                                ),
+                              ],
+                            ),
                           ],
-                        ),
-                      ],
+                        );
+                      },
                     ),
                   ),
                 ],
               ),
               const SizedBox(height: 10),
-              Slider(
-                value: clampedPos,
-                min: 0,
-                max: safeDuration,
-                onChanged: (v) => c.seek(v.round()),
+              ListenableBuilder(
+                listenable: c.playbackListenable,
+                builder: (context, _) {
+                  final safeDuration = math.max(1000, c.durationMs).toDouble();
+                  final clampedPos = c.currentTimeMs.toDouble().clamp(
+                    0.0,
+                    safeDuration,
+                  );
+                  return Slider(
+                    value: clampedPos,
+                    min: 0,
+                    max: safeDuration,
+                    onChanged: (v) => c.seek(v.round()),
+                  );
+                },
               ),
             ],
           ),
@@ -737,11 +753,14 @@ class _DashboardViewState extends State<DashboardView> {
                 ],
               ),
             ),
-            SparklineMetricFooter(
-              values: c.beatPulseSeries,
-              revision: c.beatSeriesRevision,
-              color: scheme.primary,
-              height: 48,
+            ListenableBuilder(
+              listenable: c.beatListenable,
+              builder: (context, _) => SparklineMetricFooter(
+                values: c.beatPulseSeries,
+                revision: c.beatSeriesRevision,
+                color: scheme.primary,
+                height: 48,
+              ),
             ),
           ],
         ),

@@ -52,6 +52,7 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
   final Map<String, GlobalKey> _lineKeys = {};
   String? _lastActiveLineId;
   String? _lastPlayingLineId;
+  String? _pendingScrollLineId;
   bool _showSectionPanel = false;
 
   @override
@@ -59,21 +60,25 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
     super.initState();
     _lastActiveLineId = widget.controller.activeLineId;
     _lastPlayingLineId = widget.controller.playingLineId;
-    widget.controller.addListener(_handleControllerChanged);
+    widget.controller.addListener(_handleFollowScroll);
+    widget.controller.playingLineIdListenable.addListener(_handleFollowScroll);
   }
 
   @override
   void didUpdateWidget(covariant TimelineEditorWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.controller != widget.controller) {
-      oldWidget.controller.removeListener(_handleControllerChanged);
+      oldWidget.controller.removeListener(_handleFollowScroll);
+      oldWidget.controller.playingLineIdListenable
+          .removeListener(_handleFollowScroll);
       _lastActiveLineId = widget.controller.activeLineId;
       _lastPlayingLineId = widget.controller.playingLineId;
-      widget.controller.addListener(_handleControllerChanged);
+      widget.controller.addListener(_handleFollowScroll);
+      widget.controller.playingLineIdListenable.addListener(_handleFollowScroll);
     }
   }
 
-  void _handleControllerChanged() {
+  void _handleFollowScroll() {
     final c = widget.controller;
     final nextActive = c.activeLineId;
     final nextPlaying = c.playingLineId;
@@ -92,26 +97,33 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
     _lastActiveLineId = nextActive;
     _lastPlayingLineId = nextPlaying;
 
-    if (targetId != null) {
-      final scrollTargetId = targetId;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        final ctx = _lineKeys[scrollTargetId]?.currentContext;
-        if (ctx != null) {
-          Scrollable.ensureVisible(
-            ctx,
-            duration: const Duration(milliseconds: 240),
-            curve: Curves.easeOutCubic,
-            alignment: 0.35,
-          );
-        }
-      });
+    if (targetId != null && _pendingScrollLineId != targetId) {
+      final wasScheduled = _pendingScrollLineId != null;
+      _pendingScrollLineId = targetId;
+      if (!wasScheduled) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          final scheduledId = _pendingScrollLineId;
+          _pendingScrollLineId = null;
+          if (!mounted || scheduledId == null) return;
+          final ctx = _lineKeys[scheduledId]?.currentContext;
+          if (ctx != null) {
+            Scrollable.ensureVisible(
+              ctx,
+              duration: const Duration(milliseconds: 240),
+              curve: Curves.easeOutCubic,
+              alignment: 0.35,
+            );
+          }
+        });
+      }
     }
   }
 
   @override
   void dispose() {
-    widget.controller.removeListener(_handleControllerChanged);
+    widget.controller.removeListener(_handleFollowScroll);
+    widget.controller.playingLineIdListenable
+        .removeListener(_handleFollowScroll);
     _scrollController.dispose();
     super.dispose();
   }
@@ -447,14 +459,9 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
     final c = widget.controller;
     final scheme = context.colorScheme;
     final items = c.timelineItems;
-    final playingId = c.playingLineId;
     final presetMap = {for (final p in c.allPresets) p.id: p};
-    final activeAlert = c.activeGtAlertStatus;
     final activeLineHasGt =
         c.activeLineId != null && c.getAlertForLine(c.activeLineId!) != null;
-    final quickTargetLine = c.resolveLineForQuickTag();
-    final activeLineHasUpdraft = quickTargetLine?.tailUpdraft == true;
-    final activeCue = (activeAlert?.alert.callTimingCue ?? '').trim();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -569,12 +576,18 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
                       showShortcut: MediaQuery.sizeOf(context).width >= 600,
                       onTap: () => c.quickTagActiveLine(preset.id),
                     ),
-                  _TailUpdraftToggleChip(
-                    enabled: activeLineHasUpdraft,
-                    compact: true,
-                    onTap: quickTargetLine == null
-                        ? null
-                        : () => c.toggleTailUpdraft(quickTargetLine.id),
+                  ValueListenableBuilder<String?>(
+                    valueListenable: c.playingLineIdListenable,
+                    builder: (context, _, _) {
+                      final quickTargetLine = c.resolveLineForQuickTag();
+                      return _TailUpdraftToggleChip(
+                        enabled: quickTargetLine?.tailUpdraft == true,
+                        compact: true,
+                        onTap: quickTargetLine == null
+                            ? null
+                            : () => c.toggleTailUpdraft(quickTargetLine.id),
+                      );
+                    },
                   ),
                   TonalChip(
                     label: '+ 自定义标签',
@@ -584,80 +597,90 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
                   ),
                 ],
               ),
-              if (activeAlert != null) ...[
-                const SizedBox(height: 10),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 9,
-                  ),
-                  decoration: ShapeDecoration(
-                    color: activeAlert.isTriggered
-                        ? scheme.errorContainer
-                        : scheme.warningContainer,
-                    shape: AppShape.lg,
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Row(
+              ListenableBuilder(
+                listenable: c.playbackListenable,
+                builder: (context, _) {
+                  final activeAlert = c.activeGtAlertStatus;
+                  if (activeAlert == null) return const SizedBox.shrink();
+                  final activeCue =
+                      (activeAlert.alert.callTimingCue ?? '').trim();
+                  return Padding(
+                    padding: const EdgeInsets.only(top: 10),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 9,
+                      ),
+                      decoration: ShapeDecoration(
+                        color: activeAlert.isTriggered
+                            ? scheme.errorContainer
+                            : scheme.warningContainer,
+                        shape: AppShape.lg,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          Expanded(
-                            child: Wrap(
-                              spacing: 8,
-                              runSpacing: 4,
-                              crossAxisAlignment: WrapCrossAlignment.center,
-                              children: [
-                                Text(
-                                  activeAlert.isTriggered
-                                      ? 'GT 警报触发!'
-                                      : '倒数 ${activeAlert.remainingBeats} 拍进场',
-                                  style: AppTextStyle.footnote
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Wrap(
+                                  spacing: 8,
+                                  runSpacing: 4,
+                                  crossAxisAlignment: WrapCrossAlignment.center,
+                                  children: [
+                                    Text(
+                                      activeAlert.isTriggered
+                                          ? 'GT 警报触发!'
+                                          : '倒数 ${activeAlert.remainingBeats} 拍进场',
+                                      style: AppTextStyle.footnote
+                                          .of(context, emphasized: true)
+                                          .copyWith(
+                                            fontFamily: 'GoogleSans',
+                                            fontFeatures: const [
+                                              FontFeature.tabularFigures(),
+                                            ],
+                                            color: activeAlert.isTriggered
+                                                ? scheme.onErrorContainer
+                                                : scheme.onWarningContainer,
+                                          ),
+                                    ),
+                                    if (activeCue.isNotEmpty)
+                                      TonalChip(
+                                        label: activeCue,
+                                        color: activeAlert.isTriggered
+                                            ? scheme.error
+                                            : scheme.warning,
+                                        foregroundColor:
+                                            const Color(0xFF000000),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Flexible(
+                                child: Text(
+                                  activeAlert.alert.note,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: AppTextStyle.caption1
                                       .of(context, emphasized: true)
                                       .copyWith(
-                                        fontFamily: 'GoogleSans',
-                                        fontFeatures: const [
-                                          FontFeature.tabularFigures(),
-                                        ],
                                         color: activeAlert.isTriggered
                                             ? scheme.onErrorContainer
                                             : scheme.onWarningContainer,
                                       ),
                                 ),
-                                if (activeCue.isNotEmpty)
-                                  TonalChip(
-                                    label: activeCue,
-                                    color: activeAlert.isTriggered
-                                        ? scheme.error
-                                        : scheme.warning,
-                                    foregroundColor: const Color(0xFF000000),
-                                  ),
-                              ],
-                            ),
+                              ),
+                            ],
                           ),
-                          const SizedBox(width: 8),
-                          Flexible(
-                            child: Text(
-                              activeAlert.alert.note,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: AppTextStyle.caption1
-                                  .of(context, emphasized: true)
-                                  .copyWith(
-                                    color: activeAlert.isTriggered
-                                        ? scheme.onErrorContainer
-                                        : scheme.onWarningContainer,
-                                  ),
-                            ),
-                          ),
+                          const SizedBox(height: 6),
+                          LinearProgressIndicator(value: activeAlert.progress),
                         ],
                       ),
-                      const SizedBox(height: 6),
-                      LinearProgressIndicator(value: activeAlert.progress),
-                    ],
-                  ),
-                ),
-              ],
+                    ),
+                  );
+                },
+              ),
             ],
           ),
         ),
@@ -690,15 +713,21 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
               final gtAlert = c.getAlertForLine(line.id);
               return KeyedSubtree(
                 key: _lineKeys.putIfAbsent(line.id, GlobalKey.new),
-                child: _buildLineCard(
-                  context,
-                  c,
-                  line,
-                  presetMap,
+                child: _ReactiveTimelineLineCard(
+                  controller: c,
+                  line: line,
+                  presetMap: presetMap,
                   gtAlert: gtAlert,
-                  isGtCountdown: activeAlert?.targetLineId == line.id,
-                  isPlaying: playingId == line.id,
                   isSelected: c.activeLineId == line.id,
+                  onCreatePreset: () => _openCreatePresetDialog(context),
+                  onAddSectionAfter: () => _openAddSectionDialog(
+                    context,
+                    initialKind: LyricLineKind.interlude,
+                    afterLineId: line.id,
+                  ),
+                  onEditLine: () => _openEditLineDialog(context, line),
+                  onOpenSuffix: (tag, preset) =>
+                      _openSuffixDialog(context, line, tag, preset),
                 ),
               );
             },
@@ -706,17 +735,102 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
       ],
     );
   }
+}
 
-  Widget _buildLineCard(
-    BuildContext context,
-    CallbookController c,
-    LyricLine line,
-    Map<String, CallPreset> presetMap, {
-    required GtAlert? gtAlert,
-    required bool isGtCountdown,
-    required bool isPlaying,
-    required bool isSelected,
-  }) {
+class _ReactiveTimelineLineCard extends StatefulWidget {
+  const _ReactiveTimelineLineCard({
+    required this.controller,
+    required this.line,
+    required this.presetMap,
+    required this.gtAlert,
+    required this.isSelected,
+    required this.onCreatePreset,
+    required this.onAddSectionAfter,
+    required this.onEditLine,
+    required this.onOpenSuffix,
+  });
+
+  final CallbookController controller;
+  final LyricLine line;
+  final Map<String, CallPreset> presetMap;
+  final GtAlert? gtAlert;
+  final bool isSelected;
+  final VoidCallback onCreatePreset;
+  final VoidCallback onAddSectionAfter;
+  final VoidCallback onEditLine;
+  final void Function(LineCallTag tag, CallPreset preset) onOpenSuffix;
+
+  @override
+  State<_ReactiveTimelineLineCard> createState() =>
+      _ReactiveTimelineLineCardState();
+}
+
+class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard> {
+  late bool _isPlaying;
+  late bool _isGtCountdown;
+
+  @override
+  void initState() {
+    super.initState();
+    _isPlaying = widget.controller.playingLineId == widget.line.id;
+    _isGtCountdown =
+        widget.controller.activeGtTargetLineIdListenable.value ==
+        widget.line.id;
+    widget.controller.playingLineIdListenable.addListener(_onPlaybackChanged);
+    widget.controller.activeGtTargetLineIdListenable
+        .addListener(_onPlaybackChanged);
+  }
+
+  @override
+  void didUpdateWidget(covariant _ReactiveTimelineLineCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.playingLineIdListenable
+          .removeListener(_onPlaybackChanged);
+      oldWidget.controller.activeGtTargetLineIdListenable
+          .removeListener(_onPlaybackChanged);
+      widget.controller.playingLineIdListenable.addListener(_onPlaybackChanged);
+      widget.controller.activeGtTargetLineIdListenable
+          .addListener(_onPlaybackChanged);
+    }
+    _isPlaying = widget.controller.playingLineId == widget.line.id;
+    _isGtCountdown =
+        widget.controller.activeGtTargetLineIdListenable.value ==
+        widget.line.id;
+  }
+
+  void _onPlaybackChanged() {
+    final nextPlaying = widget.controller.playingLineId == widget.line.id;
+    final nextCountdown =
+        widget.controller.activeGtTargetLineIdListenable.value ==
+        widget.line.id;
+    if (nextPlaying != _isPlaying || nextCountdown != _isGtCountdown) {
+      setState(() {
+        _isPlaying = nextPlaying;
+        _isGtCountdown = nextCountdown;
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.controller.playingLineIdListenable
+        .removeListener(_onPlaybackChanged);
+    widget.controller.activeGtTargetLineIdListenable
+        .removeListener(_onPlaybackChanged);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.controller;
+    final line = widget.line;
+    final presetMap = widget.presetMap;
+    final gtAlert = widget.gtAlert;
+    final isSelected = widget.isSelected;
+    final isPlaying = _isPlaying;
+    final isGtCountdown = _isGtCountdown;
+
     final scheme = context.colorScheme;
     final highlighted = isPlaying || isSelected;
     final cueText = (gtAlert?.callTimingCue ?? '').trim();
@@ -806,17 +920,13 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
                     label: '+间奏',
                     color: scheme.primaryContainer,
                     foregroundColor: scheme.onPrimaryContainer,
-                    onPressed: () => _openAddSectionDialog(
-                      context,
-                      initialKind: LyricLineKind.interlude,
-                      afterLineId: line.id,
-                    ),
+                    onPressed: widget.onAddSectionAfter,
                   ),
                 TonalChip(
                   label: '编辑',
                   color: scheme.surfaceContainerHigh,
                   foregroundColor: scheme.onSurface,
-                  onPressed: () => _openEditLineDialog(context, line),
+                  onPressed: widget.onEditLine,
                 ),
                 GestureDetector(
                   onTap: () => c.deleteLine(line.id),
@@ -866,7 +976,7 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
                     preset: preset,
                     suffix: tag.suffix,
                     compact: true,
-                    onTap: () => _openSuffixDialog(context, line, tag, preset),
+                    onTap: () => widget.onOpenSuffix(tag, preset),
                   ),
               if (line.customShout.trim().isNotEmpty)
                 Container(
@@ -988,7 +1098,7 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
                   label: '+ 自定义',
                   color: scheme.surfaceContainerHigh,
                   foregroundColor: scheme.onSurfaceVariant,
-                  onPressed: () => _openCreatePresetDialog(context),
+                  onPressed: widget.onCreatePreset,
                 ),
               ],
             ),
@@ -1504,19 +1614,23 @@ class _ManualSectionFormState extends State<_ManualSectionForm> {
           spacing: 6,
           runSpacing: 6,
           children: [
-            TonalChip(
-              label: '填入当前 ${formatMsToClock(c.currentTimeMs)}',
-              color: scheme.surfaceContainerHigh,
-              foregroundColor: scheme.onSurface,
-              onPressed: () {
-                final oldStart = _parseClockText(_startCtrl.text) ?? 0;
-                final oldEnd = _parseClockText(_endCtrl.text) ?? (oldStart + 8000);
-                final dur = math.max(1500, oldEnd - oldStart);
-                setState(() {
-                  _startCtrl.text = formatMsToClock(c.currentTimeMs);
-                  _endCtrl.text = formatMsToClock(c.currentTimeMs + dur);
-                });
-              },
+            ListenableBuilder(
+              listenable: c.playbackListenable,
+              builder: (context, _) => TonalChip(
+                label: '填入当前 ${formatMsToClock(c.currentTimeMs)}',
+                color: scheme.surfaceContainerHigh,
+                foregroundColor: scheme.onSurface,
+                onPressed: () {
+                  final oldStart = _parseClockText(_startCtrl.text) ?? 0;
+                  final oldEnd =
+                      _parseClockText(_endCtrl.text) ?? (oldStart + 8000);
+                  final dur = math.max(1500, oldEnd - oldStart);
+                  setState(() {
+                    _startCtrl.text = formatMsToClock(c.currentTimeMs);
+                    _endCtrl.text = formatMsToClock(c.currentTimeMs + dur);
+                  });
+                },
+              ),
             ),
           ],
         ),

@@ -130,4 +130,65 @@ void main() {
     expect(await pixel(tester), isColor(_blue));
     expect(tester.hasRunningAnimations, isFalse);
   });
+
+  test('ThemeData implements value equality and matching hashCode', () {
+    final a = ThemeData(
+      colorScheme: seededColorScheme(
+        seedColor: const Color(0xFF0068FF),
+        brightness: Brightness.light,
+        style: ColorStyle.vivid,
+      ),
+      fontFamily: 'GoogleSans',
+      fontFamilyFallback: const ['Noto Sans SC', 'Segoe UI'],
+    );
+    final b = ThemeData(
+      colorScheme: seededColorScheme(
+        seedColor: const Color(0xFF0068FF),
+        brightness: Brightness.light,
+        style: ColorStyle.vivid,
+      ),
+      fontFamily: 'GoogleSans',
+      fontFamilyFallback: const ['Noto Sans SC', 'Segoe UI'],
+    );
+    final c = a.copyWith(fontFamily: 'Roboto');
+
+    expect(a, equals(b));
+    expect(a.hashCode, equals(b.hashCode));
+    expect(a, isNot(equals(c)));
+  });
+
+  testWidgets('does not cross-fade when rebuilt with a value-equal ThemeData', (
+    tester,
+  ) async {
+    final tick = ValueNotifier<int>(0);
+    addTearDown(tick.dispose);
+    tester.view.physicalSize = const Size(40, 40);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      ValueListenableBuilder<int>(
+        valueListenable: tick,
+        builder: (_, count, _) => HostApp(
+          debugShowCheckedModeBanner: false,
+          theme: ThemeData(
+            colorScheme: seededColorScheme(
+              seedColor: const Color(0xFF0068FF),
+              brightness: Brightness.light,
+              style: ColorStyle.vivid,
+            ),
+            fontFamilyFallback: const ['Noto Sans SC', 'Segoe UI'],
+          ),
+          home: Text('tick-$count'),
+        ),
+      ),
+    );
+
+    expect(tester.hasRunningAnimations, isFalse);
+    tick.value = 1;
+    await tester.pump();
+    expect(find.text('tick-1'), findsOneWidget);
+    expect(tester.hasRunningAnimations, isFalse);
+  });
 }

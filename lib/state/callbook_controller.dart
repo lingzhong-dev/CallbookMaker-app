@@ -138,21 +138,27 @@ class CallbookController extends ChangeNotifier {
       enablePlatformAudio: enableAudioOutput,
       onTimeUpdate: _handleTimeUpdate,
       onBeatTrigger: _handleBeatTrigger,
-      onGtAlertBeep: (alertId) =>
-          setStatus('GT 警报提前提示 (${alertId.substring(0, math.min(6, alertId.length))})'),
+      onGtAlertBeep: (alertId) => _setStatusInternal(
+        'GT 警报提前提示 (${alertId.substring(0, math.min(6, alertId.length))})',
+      ),
       onDurationChanged: (durMs) {
+        if (_disposed) return;
         if (durMs > 1000 && durMs != _durationMs) {
           _durationMs = durMs;
           _knownAudioDurationMs = durMs;
           detectSections(onlyOutro: true, silent: true);
+          _playbackNotifier.notifyListeners();
           notifyListeners();
         }
       },
       onEnded: () {
+        if (_disposed) return;
         _isPlaying = false;
+        _playbackNotifier.notifyListeners();
         notifyListeners();
       },
     );
+    _rebuildProjectCaches();
   }
 
   late final CallbookApiClient _api;
@@ -163,7 +169,28 @@ class CallbookController extends ChangeNotifier {
   late final DesktopServiceLauncher _desktopLauncher;
   late final AudioMetronomeService _audio;
 
+  // Scoped sub-notifiers to keep high-frequency playback/status updates from
+  // rebuilding PrismApp, ThemeCrossFade, HomeShell, or the timeline card list.
+  final ChangeNotifier _themeNotifier = ChangeNotifier();
+  final ChangeNotifier _playbackNotifier = ChangeNotifier();
+  final ChangeNotifier _beatNotifier = ChangeNotifier();
+  final ValueNotifier<String?> _playingLineIdNotifier = ValueNotifier<String?>(null);
+  final ValueNotifier<String?> _activeGtTargetLineIdNotifier =
+      ValueNotifier<String?>(null);
+  final ValueNotifier<String> _statusNotifier =
+      ValueNotifier<String>('已就绪 · CallbookMaker');
+
+  bool _disposed = false;
+
   CallProject _project = CallProject.demo();
+  List<LyricLine> _sortedLinesCache = const [];
+  List<GtAlert> _sortedAlertsCache = const [];
+  Map<String, GtAlert> _alertByLineIdCache = const {};
+  Map<String, String> _alertTargetByIdCache = const {};
+  List<TimelineLineItem> _timelineItemsCache = const [];
+  String? _playingLineIdCache;
+  ActiveGtAlertStatus? _activeGtAlertStatusCache;
+
   List<CallPreset> _customPresets = const [];
   DisplayLayers _displayLayers = const DisplayLayers();
   String? _activeLineId;
@@ -179,6 +206,8 @@ class CallbookController extends ChangeNotifier {
   bool _floatingNavDock = true;
   bool _useGoogleSans = true;
   double _textScale = 1.0;
+  prism.ThemeData? _cachedLightTheme;
+  prism.ThemeData? _cachedDarkTheme;
 
   // Audio / Clock State
   bool _isPlaying = false;
@@ -217,6 +246,15 @@ class CallbookController extends ChangeNotifier {
   int _callDensityRevision = 0;
 
   Timer? _persistTimer;
+
+  // Scoped listenables
+  Listenable get themeListenable => _themeNotifier;
+  Listenable get playbackListenable => _playbackNotifier;
+  Listenable get beatListenable => _beatNotifier;
+  ValueListenable<String?> get playingLineIdListenable => _playingLineIdNotifier;
+  ValueListenable<String?> get activeGtTargetLineIdListenable =>
+      _activeGtTargetLineIdNotifier;
+  ValueListenable<String> get statusListenable => _statusNotifier;
 
   // Getters
   CallProject get project => _project;
@@ -303,71 +341,124 @@ class CallbookController extends ChangeNotifier {
   List<double> get callDensitySeries => List.unmodifiable(_callDensitySeries);
   int get callDensityRevision => _callDensityRevision;
 
-  List<LyricLine> get sortedLines {
-    final copy = [..._project.lines]
-      ..sort((a, b) => a.startTimeMs.compareTo(b.startTimeMs));
-    return copy;
-  }
+  List<LyricLine> get sortedLines => _sortedLinesCache;
 
-  List<GtAlert> get sortedAlerts {
-    final copy = [..._project.alerts]
-      ..sort((a, b) => a.triggerTimeMs.compareTo(b.triggerTimeMs));
-    return copy;
-  }
+  List<GtAlert> get sortedAlerts => _sortedAlertsCache;
 
-  List<TimelineLineItem> get timelineItems => [
-    for (final l in sortedLines) TimelineLineItem(l),
-  ];
+  List<TimelineLineItem> get timelineItems => _timelineItemsCache;
 
-  String? get playingLineId {
-    final t = _currentTimeMs;
-    for (final line in sortedLines) {
-      if (t >= line.startTimeMs && t < line.endTimeMs) return line.id;
-    }
-    return null;
-  }
+  String? get playingLineId => _playingLineIdCache;
 
   int get taggedLineCount => _project.lines
       .where((l) => l.calls.isNotEmpty || l.customShout.trim().isNotEmpty)
       .length;
 
-  GtAlert? getAlertForLine(String lineId) {
-    final ordered = sortedLines;
-    for (final alert in sortedAlerts) {
-      if (resolveGtAlertTargetLineId(alert, ordered) == lineId) {
-        return alert;
-      }
+  GtAlert? getAlertForLine(String lineId) => _alertByLineIdCache[lineId];
+
+  ActiveGtAlertStatus? get activeGtAlertStatus => _activeGtAlertStatusCache;
+
+  void _setProject(CallProject next) {
+    final linesOrAlertsChanged =
+        !identical(next.lines, _project.lines) ||
+        !identical(next.alerts, _project.alerts);
+    final bpmChanged = next.meta.bpm != _project.meta.bpm;
+    _project = next;
+    if (linesOrAlertsChanged) {
+      _rebuildProjectCaches();
+    } else if (bpmChanged) {
+      _recomputePlaybackDerivedStates();
     }
-    return null;
   }
 
-  ActiveGtAlertStatus? get activeGtAlertStatus {
-    final ordered = sortedLines;
-    final beatMs = 60000.0 / math.max(30, _project.meta.bpm);
-    for (final alert in sortedAlerts) {
-      final leadMs = (alert.leadBeats * beatMs).round();
-      final warnStart = alert.triggerTimeMs - leadMs;
-      const holdAfterMs = 1800;
-      if (_currentTimeMs >= warnStart &&
-          _currentTimeMs <= alert.triggerTimeMs + holdAfterMs) {
-        final remainingMs = math.max(0, alert.triggerTimeMs - _currentTimeMs);
-        final remainingBeats = remainingMs == 0 ? 0 : (remainingMs / beatMs).ceil();
-        final progress = ((_currentTimeMs - warnStart) / math.max(1, leadMs))
-            .clamp(0.0, 1.0);
-        return ActiveGtAlertStatus(
-          alert: alert,
-          remainingBeats: remainingBeats,
-          remainingMs: remainingMs,
-          isTriggered: remainingMs == 0,
-          progress: progress,
-          targetLineId: resolveGtAlertTargetLineId(alert, ordered),
-        );
+  void _rebuildProjectCaches() {
+    final lines = [..._project.lines]
+      ..sort((a, b) => a.startTimeMs.compareTo(b.startTimeMs));
+    final alerts = [..._project.alerts]
+      ..sort((a, b) => a.triggerTimeMs.compareTo(b.triggerTimeMs));
+    final alertByLine = <String, GtAlert>{};
+    final targetByAlertId = <String, String>{};
+    for (final alert in alerts) {
+      final targetId = resolveGtAlertTargetLineId(alert, lines);
+      if (targetId != null) {
+        targetByAlertId[alert.id] = targetId;
+        alertByLine.putIfAbsent(targetId, () => alert);
       }
     }
-    return null;
+    _sortedLinesCache = List.unmodifiable(lines);
+    _sortedAlertsCache = List.unmodifiable(alerts);
+    _alertByLineIdCache = Map.unmodifiable(alertByLine);
+    _alertTargetByIdCache = Map.unmodifiable(targetByAlertId);
+    _timelineItemsCache = List.unmodifiable([
+      for (final l in lines) TimelineLineItem(l),
+    ]);
+    _recomputePlaybackDerivedStates();
+  }
+
+  void _recomputePlaybackDerivedStates() {
+    final t = _currentTimeMs;
+    String? nextPlayingId;
+    for (final line in _sortedLinesCache) {
+      if (t >= line.startTimeMs && t < line.endTimeMs) {
+        nextPlayingId = line.id;
+        break;
+      }
+    }
+    _playingLineIdCache = nextPlayingId;
+    if (!_disposed && _playingLineIdNotifier.value != nextPlayingId) {
+      _playingLineIdNotifier.value = nextPlayingId;
+    }
+
+    ActiveGtAlertStatus? nextActiveAlert;
+    if (_sortedAlertsCache.isNotEmpty) {
+      final beatMs = 60000.0 / math.max(30, _project.meta.bpm);
+      const holdAfterMs = 1800;
+      for (final alert in _sortedAlertsCache) {
+        final leadMs = (alert.leadBeats * beatMs).round();
+        final warnStart = alert.triggerTimeMs - leadMs;
+        if (t >= warnStart && t <= alert.triggerTimeMs + holdAfterMs) {
+          final remainingMs = math.max(0, alert.triggerTimeMs - t);
+          final remainingBeats =
+              remainingMs == 0 ? 0 : (remainingMs / beatMs).ceil();
+          final progress =
+              ((t - warnStart) / math.max(1, leadMs)).clamp(0.0, 1.0);
+          nextActiveAlert = ActiveGtAlertStatus(
+            alert: alert,
+            remainingBeats: remainingBeats,
+            remainingMs: remainingMs,
+            isTriggered: remainingMs == 0,
+            progress: progress,
+            targetLineId: _alertTargetByIdCache[alert.id],
+          );
+          break;
+        }
+      }
+    }
+    _activeGtAlertStatusCache = nextActiveAlert;
+    final nextGtTarget = nextActiveAlert?.targetLineId;
+    if (!_disposed && _activeGtTargetLineIdNotifier.value != nextGtTarget) {
+      _activeGtTargetLineIdNotifier.value = nextGtTarget;
+    }
+  }
+
+  void _invalidateThemeCache() {
+    _cachedLightTheme = null;
+    _cachedDarkTheme = null;
+  }
+
+  void _notifyThemeChanged() {
+    _invalidateThemeCache();
+    if (!_disposed) {
+      _themeNotifier.notifyListeners();
+      notifyListeners();
+    }
   }
 
   prism.ThemeData buildPrismTheme(Brightness brightness) {
+    final cached = brightness == Brightness.dark
+        ? _cachedDarkTheme
+        : _cachedLightTheme;
+    if (cached != null) return cached;
+
     final raw = prism.seededColorScheme(
       seedColor: _seedColor,
       brightness: brightness,
@@ -376,7 +467,7 @@ class CallbookController extends ChangeNotifier {
     final scheme = brightness == Brightness.dark
         ? raw.toPureBlack(_pureBlack)
         : raw;
-    return prism.ThemeData(
+    final built = prism.ThemeData(
       colorScheme: scheme,
       fontFamily: _useGoogleSans ? 'GoogleSans' : null,
       fontFamilyFallback: _useGoogleSans
@@ -387,6 +478,12 @@ class CallbookController extends ChangeNotifier {
             )
           : null,
     );
+    if (brightness == Brightness.dark) {
+      _cachedDarkTheme = built;
+    } else {
+      _cachedLightTheme = built;
+    }
+    return built;
   }
 
   CallProject _normalizeProjectAlerts(CallProject proj) {
@@ -426,14 +523,15 @@ class CallbookController extends ChangeNotifier {
     final savedTheme = await _storage.loadThemePrefs();
     if (savedTheme != null) {
       _applySavedThemeMap(savedTheme);
+      _invalidateThemeCache();
     }
     final savedProj = await _storage.loadProject();
     if (savedProj != null && savedProj.lines.isNotEmpty) {
-      _project = _normalizeProjectAlerts(savedProj);
+      _setProject(_normalizeProjectAlerts(savedProj));
       _knownAudioDurationMs =
           savedProj.meta.platform == 'synthetic' ? 48000 : 0;
     } else {
-      _project = _normalizeProjectAlerts(_project);
+      _setProject(_normalizeProjectAlerts(_project));
       _knownAudioDurationMs = 48000;
     }
     _customPresets = await _storage.loadCustomPresets();
@@ -456,6 +554,7 @@ class CallbookController extends ChangeNotifier {
     _refreshCallDensitySeries();
     _syncEngine();
     await checkBackendHealth();
+    _themeNotifier.notifyListeners();
     notifyListeners();
   }
 
@@ -490,7 +589,7 @@ class CallbookController extends ChangeNotifier {
           _savedGatewayUrl = gw.gatewayUrl;
         }
       }
-      _statusMessage = '已连接后端 (${_api.baseUrl}) · ${health.providers.join(", ")}';
+      _setStatusInternal('已连接后端 (${_api.baseUrl}) · ${health.providers.join(", ")}');
     } else {
       final hasCookie = _savedNeteaseCookie.trim().isNotEmpty;
       final masked = hasCookie
@@ -515,7 +614,7 @@ class CallbookController extends ChangeNotifier {
             ? '纯 Dart 直连就绪（免 Node · 已加载本地 Cookie${prevAccount != null && prevAccount.isNotEmpty ? " · $prevAccount" : ""}）'
             : '纯 Dart 直连就绪（免 Node · 支持网易云游客直连 / LRCLIB / 演示库）',
       );
-      _statusMessage = '纯 Dart 直连模式 · 免 Node/后端直接搜歌演练';
+      _setStatusInternal('纯 Dart 直连模式 · 免 Node/后端直接搜歌演练');
     }
     notifyListeners();
   }
@@ -678,31 +777,31 @@ class CallbookController extends ChangeNotifier {
   void setThemeMode(prism.ThemeMode mode) {
     _themeMode = mode;
     _saveThemePrefs();
-    notifyListeners();
+    _notifyThemeChanged();
   }
 
   void setSeedColor(Color color) {
     _seedColor = color;
     _saveThemePrefs();
-    notifyListeners();
+    _notifyThemeChanged();
   }
 
   void setColorStyle(prism.ColorStyle style) {
     _colorStyle = style;
     _saveThemePrefs();
-    notifyListeners();
+    _notifyThemeChanged();
   }
 
   void setPureBlack(bool v) {
     _pureBlack = v;
     _saveThemePrefs();
-    notifyListeners();
+    _notifyThemeChanged();
   }
 
   void setLiquidGlass(bool v) {
     _liquidGlass = v;
     _saveThemePrefs();
-    notifyListeners();
+    _notifyThemeChanged();
   }
 
   void setFloatingNavDock(bool v) {
@@ -714,13 +813,13 @@ class CallbookController extends ChangeNotifier {
   void setUseGoogleSans(bool v) {
     _useGoogleSans = v;
     _saveThemePrefs();
-    notifyListeners();
+    _notifyThemeChanged();
   }
 
   void setTextScale(double v) {
     _textScale = v.clamp(0.85, 1.25);
     _saveThemePrefs();
-    notifyListeners();
+    _notifyThemeChanged();
   }
 
   void applyThemePreset(CuratedThemePreset preset) {
@@ -729,17 +828,20 @@ class CallbookController extends ChangeNotifier {
     _colorStyle = preset.style;
     _pureBlack = preset.pureBlack;
     _saveThemePrefs();
-    notifyListeners();
+    _notifyThemeChanged();
   }
 
   void resetTheme() {
-    applyThemePreset(curatedThemePresets.first);
+    _seedColor = curatedThemePresets.first.seedColor;
+    _themeMode = curatedThemePresets.first.mode;
+    _colorStyle = curatedThemePresets.first.style;
+    _pureBlack = curatedThemePresets.first.pureBlack;
     _liquidGlass = true;
     _floatingNavDock = true;
     _useGoogleSans = true;
     _textScale = 1.0;
     _saveThemePrefs();
-    notifyListeners();
+    _notifyThemeChanged();
   }
 
   void _saveThemePrefs() {
@@ -763,9 +865,13 @@ class CallbookController extends ChangeNotifier {
       await _audio.pause();
       _isPlaying = false;
     } else {
-      await _audio.play();
-      _isPlaying = true;
+      final started = await _audio.play();
+      _isPlaying = started;
+      if (!started) {
+        _setStatusInternal('音频播放失败，请检查音源或系统音频设备');
+      }
     }
+    _playbackNotifier.notifyListeners();
     notifyListeners();
   }
 
@@ -775,41 +881,50 @@ class CallbookController extends ChangeNotifier {
 
   void setBpm(int bpm) {
     final clamped = bpm.clamp(30, 300);
-    _project = _project.copyWith(meta: _project.meta.copyWith(bpm: clamped));
+    _setProject(_project.copyWith(meta: _project.meta.copyWith(bpm: clamped)));
     _syncEngine();
     schedulePersist();
+    _playbackNotifier.notifyListeners();
     notifyListeners();
   }
 
   void setTimeSignature(String sig) {
     final normalized = sig == '3/4' ? '3/4' : '4/4';
-    _project = _project.copyWith(
-      meta: _project.meta.copyWith(timeSignature: normalized),
+    _setProject(
+      _project.copyWith(
+        meta: _project.meta.copyWith(timeSignature: normalized),
+      ),
     );
     _syncEngine();
     schedulePersist();
+    _playbackNotifier.notifyListeners();
     notifyListeners();
   }
 
   void adjustOffset(int deltaMs) {
-    _project = _project.copyWith(
-      meta: _project.meta.copyWith(offsetMs: _project.meta.offsetMs + deltaMs),
+    _setProject(
+      _project.copyWith(
+        meta: _project.meta.copyWith(offsetMs: _project.meta.offsetMs + deltaMs),
+      ),
     );
     _syncEngine();
     schedulePersist();
+    _playbackNotifier.notifyListeners();
     notifyListeners();
   }
 
   void setOffset(int ms) {
-    _project = _project.copyWith(meta: _project.meta.copyWith(offsetMs: ms));
+    _setProject(_project.copyWith(meta: _project.meta.copyWith(offsetMs: ms)));
     _syncEngine();
     schedulePersist();
+    _playbackNotifier.notifyListeners();
     notifyListeners();
   }
 
   void setPlaybackRate(double rate) {
     _playbackRate = rate.clamp(0.5, 2.0);
     _syncEngine();
+    _playbackNotifier.notifyListeners();
     notifyListeners();
   }
 
@@ -857,17 +972,19 @@ class CallbookController extends ChangeNotifier {
     String? editorName,
     String? editorNote,
   }) {
-    _project = _project.copyWith(
-      meta: _project.meta.copyWith(
-        title: title,
-        artist: artist,
-        composer: composer,
-        lyricist: lyricist,
-        vocalist: vocalist,
-        tuner: tuner,
-        showTuner: showTuner,
-        editorName: editorName,
-        editorNote: editorNote,
+    _setProject(
+      _project.copyWith(
+        meta: _project.meta.copyWith(
+          title: title,
+          artist: artist,
+          composer: composer,
+          lyricist: lyricist,
+          vocalist: vocalist,
+          tuner: tuner,
+          showTuner: showTuner,
+          editorName: editorName,
+          editorNote: editorNote,
+        ),
       ),
     );
     schedulePersist();
@@ -932,7 +1049,7 @@ class CallbookController extends ChangeNotifier {
         ? line.calls.where((c) => c.presetId != presetId).toList()
         : [...line.calls, LineCallTag(presetId: presetId)];
     lines[idx] = line.copyWith(calls: nextCalls);
-    _project = _project.copyWith(lines: lines);
+    _setProject(_project.copyWith(lines: lines));
     _refreshCallDensitySeries();
     schedulePersist();
     notifyListeners();
@@ -955,7 +1072,7 @@ class CallbookController extends ChangeNotifier {
     if (idx < 0) return;
     if (lines[idx].tailUpdraft == enabled) return;
     lines[idx] = lines[idx].copyWith(tailUpdraft: enabled);
-    _project = _project.copyWith(lines: lines);
+    _setProject(_project.copyWith(lines: lines));
     _refreshCallDensitySeries();
     schedulePersist();
     setStatus(
@@ -963,7 +1080,6 @@ class CallbookController extends ChangeNotifier {
           ? '已标记尾句上升气流 · ${lines[idx].text.original}'
           : '已取消尾句上升气流 · ${lines[idx].text.original}',
     );
-    notifyListeners();
   }
 
   void quickTagActiveLine(String presetId, {bool autoAdvance = false}) {
@@ -995,7 +1111,7 @@ class CallbookController extends ChangeNotifier {
           c,
     ];
     lines[idx] = line.copyWith(calls: nextCalls);
-    _project = _project.copyWith(lines: lines);
+    _setProject(_project.copyWith(lines: lines));
     schedulePersist();
     notifyListeners();
   }
@@ -1036,12 +1152,13 @@ class CallbookController extends ChangeNotifier {
                 a,
           ]
         : _project.alerts;
-    _project = _project.copyWith(lines: lines, alerts: nextAlerts);
+    _setProject(_project.copyWith(lines: lines, alerts: nextAlerts));
     _refreshCallDensitySeries();
     if (startTimeMs != null) {
       _syncEngine();
     }
     schedulePersist();
+    _playbackNotifier.notifyListeners();
     notifyListeners();
   }
 
@@ -1063,10 +1180,11 @@ class CallbookController extends ChangeNotifier {
         else
           a,
     ];
-    _project = _project.copyWith(lines: lines, alerts: nextAlerts);
+    _setProject(_project.copyWith(lines: lines, alerts: nextAlerts));
     _syncEngine();
     schedulePersist();
-    setStatus('已对齐当前时间 ${formatMsToClock(_currentTimeMs)}');
+    _setStatusInternal('已对齐当前时间 ${formatMsToClock(_currentTimeMs)}');
+    _playbackNotifier.notifyListeners();
     notifyListeners();
   }
 
@@ -1078,7 +1196,7 @@ class CallbookController extends ChangeNotifier {
       endTimeMs: start + 3000,
       text: const LyricText(original: '新歌词行（点击编辑）', translation: ''),
     );
-    _project = _project.copyWith(lines: [..._project.lines, newLine]);
+    _setProject(_project.copyWith(lines: [..._project.lines, newLine]));
     _activeLineId = newLine.id;
     _refreshCallDensitySeries();
     schedulePersist();
@@ -1128,7 +1246,7 @@ class CallbookController extends ChangeNotifier {
       }
     }
     if (linesChanged) {
-      _project = _project.copyWith(lines: result.lines);
+      _setProject(_project.copyWith(lines: result.lines));
       if (_activeLineId != null &&
           !_project.lines.any((l) => l.id == _activeLineId)) {
         _activeLineId =
@@ -1139,7 +1257,7 @@ class CallbookController extends ChangeNotifier {
       schedulePersist();
     }
     if (!silent) {
-      setStatus(
+      _setStatusInternal(
         '段落识别完成：前奏 ${result.stats.intro} / 间奏 ${result.stats.interlude} / 尾奏 ${result.stats.outro}',
       );
     }
@@ -1207,22 +1325,24 @@ class CallbookController extends ChangeNotifier {
       newSection,
     ]..sort((a, b) => a.startTimeMs.compareTo(b.startTimeMs));
 
-    _project = _project.copyWith(lines: nextLines);
+    _setProject(_project.copyWith(lines: nextLines));
     _activeLineId = newSection.id;
     _refreshCallDensitySeries();
     _syncEngine();
     schedulePersist();
-    setStatus('已添加${safeKind.zhLabel}段落（${formatGapSec(gap)}）');
+    _setStatusInternal('已添加${safeKind.zhLabel}段落（${formatGapSec(gap)}）');
     notifyListeners();
   }
 
   void deleteLine(String lineId) {
     final orderedBefore = sortedLines;
-    _project = _project.copyWith(
-      lines: _project.lines.where((l) => l.id != lineId).toList(),
-      alerts: _project.alerts
-          .where((a) => resolveGtAlertTargetLineId(a, orderedBefore) != lineId)
-          .toList(),
+    _setProject(
+      _project.copyWith(
+        lines: _project.lines.where((l) => l.id != lineId).toList(),
+        alerts: _project.alerts
+            .where((a) => resolveGtAlertTargetLineId(a, orderedBefore) != lineId)
+            .toList(),
+      ),
     );
     if (_activeLineId == lineId) {
       _activeLineId = sortedLines.isNotEmpty ? sortedLines.first.id : null;
@@ -1274,14 +1394,17 @@ class CallbookController extends ChangeNotifier {
 
     final existing = getAlertForLine(targetId);
     if (existing != null) {
-      _project = _project.copyWith(
-        alerts: _project.alerts
-            .where((a) => resolveGtAlertTargetLineId(a, ordered) != targetId)
-            .toList(),
+      _setProject(
+        _project.copyWith(
+          alerts: _project.alerts
+              .where((a) => resolveGtAlertTargetLineId(a, ordered) != targetId)
+              .toList(),
+        ),
       );
       _syncEngine();
       schedulePersist();
-      setStatus('已取消该句的 GT 警报');
+      _setStatusInternal('已取消该句的 GT 警报');
+      _playbackNotifier.notifyListeners();
       notifyListeners();
       return;
     }
@@ -1296,10 +1419,11 @@ class CallbookController extends ChangeNotifier {
       callTimingCue:
           (trimmedCue != null && trimmedCue.isNotEmpty) ? trimmedCue : 'se-no',
     );
-    _project = _project.copyWith(alerts: [..._project.alerts, alert]);
+    _setProject(_project.copyWith(alerts: [..._project.alerts, alert]));
     _syncEngine();
     schedulePersist();
-    setStatus('已为歌词行开启 GT 警报 · ${targetLine.text.original}');
+    _setStatusInternal('已为歌词行开启 GT 警报 · ${targetLine.text.original}');
+    _playbackNotifier.notifyListeners();
     notifyListeners();
   }
 
@@ -1313,24 +1437,27 @@ class CallbookController extends ChangeNotifier {
     final existing = getAlertForLine(lineId);
     if (existing == null) return;
     final ordered = sortedLines;
-    _project = _project.copyWith(
-      alerts: [
-        for (final a in _project.alerts)
-          if (a.id == existing.id ||
-              resolveGtAlertTargetLineId(a, ordered) == lineId)
-            a.copyWith(
-              targetLineId: lineId,
-              callTimingCue: callTimingCue ?? a.callTimingCue,
-              leadBeats: leadBeats ?? a.leadBeats,
-              note: note ?? a.note,
-              triggerTimeMs: triggerTimeMs ?? a.triggerTimeMs,
-            )
-          else
-            a,
-      ],
+    _setProject(
+      _project.copyWith(
+        alerts: [
+          for (final a in _project.alerts)
+            if (a.id == existing.id ||
+                resolveGtAlertTargetLineId(a, ordered) == lineId)
+              a.copyWith(
+                targetLineId: lineId,
+                callTimingCue: callTimingCue ?? a.callTimingCue,
+                leadBeats: leadBeats ?? a.leadBeats,
+                note: note ?? a.note,
+                triggerTimeMs: triggerTimeMs ?? a.triggerTimeMs,
+              )
+            else
+              a,
+        ],
+      ),
     );
     _syncEngine();
     schedulePersist();
+    _playbackNotifier.notifyListeners();
     notifyListeners();
   }
 
@@ -1581,27 +1708,35 @@ class CallbookController extends ChangeNotifier {
         totalDurationMs:
             _knownAudioDurationMs > 0 ? _knownAudioDurationMs : null,
       );
-      _project = CallProject(
-        meta: CallProjectMeta(
-          title: detail.track.title,
-          artist: detail.track.artist,
-          vocalist: detail.track.artist,
-          showTuner: false,
-          platform: detail.track.platform,
-          trackId: detail.track.id,
-          audioUrl: detail.audioUrl,
-          bpm: detail.track.bpm ?? _project.meta.bpm,
-          timeSignature: _project.meta.timeSignature,
-          offsetMs: 0,
+      _setProject(
+        CallProject(
+          meta: CallProjectMeta(
+            title: detail.track.title,
+            artist: detail.track.artist,
+            vocalist: detail.track.artist,
+            showTuner: false,
+            platform: detail.track.platform,
+            trackId: detail.track.id,
+            audioUrl: detail.audioUrl,
+            bpm: detail.track.bpm ?? _project.meta.bpm,
+            timeSignature: _project.meta.timeSignature,
+            offsetMs: 0,
+          ),
+          alerts: const [],
+          lines: detected.lines,
         ),
-        alerts: const [],
-        lines: detected.lines,
       );
       _isPlaying = false;
-      await _audio.setAudioSource(
-        url: detail.audioUrl,
-        fallbackDurationMs: resolvedDurationMs,
-      );
+      var audioFallbackNote = '';
+      try {
+        await _audio.setAudioSource(
+          url: detail.audioUrl,
+          fallbackDurationMs: resolvedDurationMs,
+        );
+      } catch (_) {
+        await _audio.setAudioSource(fallbackDurationMs: resolvedDurationMs);
+        audioFallbackNote = '（音源加载失败，已切换为节拍器演练）';
+      }
       _activeLineId = sortedLines.isNotEmpty ? sortedLines.first.id : null;
       _activeArchiveId = null;
       _hasFetchedExternalLyrics = true;
@@ -1614,18 +1749,20 @@ class CallbookController extends ChangeNotifier {
           detected.stats.intro +
           detected.stats.interlude +
           detected.stats.outro;
-      final audioHint =
-          detail.audioUrl.isEmpty && detail.track.platform == 'netease'
-              ? '（该曲目暂无可用直链音源，可搭配本地音频或节拍器演练）'
-              : '';
-      setStatus(
+      final audioHint = audioFallbackNote.isNotEmpty
+          ? audioFallbackNote
+          : (detail.audioUrl.isEmpty && detail.track.platform == 'netease'
+                ? '（该曲目暂无可用直链音源，可搭配本地音频或节拍器演练）'
+                : '');
+      _setStatusInternal(
         totalDetected > 0
             ? '已导入曲目：${detail.track.title}（自动识别前/间/尾奏：前${detected.stats.intro}·间${detected.stats.interlude}·尾${detected.stats.outro}）$audioHint'
             : '已导入曲目：${detail.track.title}$audioHint',
       );
     } catch (err) {
-      setStatus('导入曲目失败：$err');
+      _setStatusInternal('导入曲目失败：$err');
     }
+    _playbackNotifier.notifyListeners();
     notifyListeners();
   }
 
@@ -1657,7 +1794,7 @@ class CallbookController extends ChangeNotifier {
       thresholds: _sectionThresholds,
       totalDurationMs: durationForOutro,
     );
-    _project = _project.copyWith(lines: detected.lines, alerts: const []);
+    _setProject(_project.copyWith(lines: detected.lines, alerts: const []));
     _activeLineId = sortedLines.isNotEmpty ? sortedLines.first.id : null;
     _activeArchiveId = null;
     _hasFetchedExternalLyrics = true;
@@ -1670,36 +1807,46 @@ class CallbookController extends ChangeNotifier {
         detected.stats.intro +
         detected.stats.interlude +
         detected.stats.outro;
-    setStatus(
+    _setStatusInternal(
       totalDetected > 0
           ? '已解析 ${lines.length} 行 LRC · 自动识别前奏 ${detected.stats.intro} / 间奏 ${detected.stats.interlude}${detected.stats.outro > 0 ? ' / 尾奏 ${detected.stats.outro}' : ''}'
           : '已解析 ${lines.length} 行 LRC 歌词（未触发前/间/尾奏空档阈值）',
     );
+    _playbackNotifier.notifyListeners();
     notifyListeners();
   }
 
   Future<void> loadLocalAudioFile(String filePath, String fileName) async {
     _knownAudioDurationMs = 0;
     _isPlaying = false;
-    await _audio.setAudioSource(localPath: filePath);
+    try {
+      await _audio.setAudioSource(localPath: filePath);
+    } catch (err) {
+      setStatus('载入本地音频失败：$err');
+      _playbackNotifier.notifyListeners();
+      return;
+    }
     final strippedTitle = fileName.replaceAll(RegExp(r'\.[^.]+$'), '');
-    _project = _project.copyWith(
-      meta: _project.meta.copyWith(
-        title: strippedTitle.isEmpty ? fileName : strippedTitle,
-        artist: '本地音频文件',
-        platform: 'local',
-        audioUrl: filePath,
+    _setProject(
+      _project.copyWith(
+        meta: _project.meta.copyWith(
+          title: strippedTitle.isEmpty ? fileName : strippedTitle,
+          artist: '本地音频文件',
+          platform: 'local',
+          audioUrl: filePath,
+        ),
       ),
     );
     schedulePersist();
-    setStatus('已载入本地音频：$fileName');
+    _setStatusInternal('已载入本地音频：$fileName');
+    _playbackNotifier.notifyListeners();
     notifyListeners();
   }
 
   Future<void> loadDemoProject() async {
     _knownAudioDurationMs = 48000;
     _isPlaying = false;
-    _project = _normalizeProjectAlerts(CallProject.demo());
+    _setProject(_normalizeProjectAlerts(CallProject.demo()));
     await _audio.setAudioSource(fallbackDurationMs: 48000);
     _activeLineId = sortedLines.isNotEmpty ? sortedLines.first.id : null;
     _activeArchiveId = null;
@@ -1709,7 +1856,8 @@ class CallbookController extends ChangeNotifier {
     _syncEngine();
     _persistArchiveSession();
     schedulePersist(markDirty: false);
-    setStatus('已加载 175 BPM 内置演练工程');
+    _setStatusInternal('已加载 175 BPM 内置演练工程');
+    _playbackNotifier.notifyListeners();
     notifyListeners();
   }
 
@@ -1771,7 +1919,7 @@ class CallbookController extends ChangeNotifier {
     unawaited(_storage.saveArchives(_archives));
     _persistArchiveSession();
     schedulePersist(markDirty: false);
-    setStatus(
+    _setStatusInternal(
       existing != null
           ? '已更新存档「${entry.name}」'
           : '已保存至 Call 本存档「${entry.name}」',
@@ -1796,7 +1944,7 @@ class CallbookController extends ChangeNotifier {
     final restored = _normalizeProjectAlerts(
       CallProject.fromJson(found.project.toJson()),
     );
-    _project = restored;
+    _setProject(restored);
     _customPresets = [
       for (final p in found.customPresets) CallPreset.fromJson(p.toJson()),
     ];
@@ -1810,19 +1958,23 @@ class CallbookController extends ChangeNotifier {
     _currentTimeMs = 0;
     _isPlaying = false;
 
-    if (restored.meta.platform == 'local' &&
-        restored.meta.audioUrl.isNotEmpty) {
-      await _audio.setAudioSource(
-        localPath: restored.meta.audioUrl,
-        fallbackDurationMs: _durationMs,
-      );
-    } else if (restored.meta.audioUrl.isNotEmpty &&
-        !restored.meta.audioUrl.startsWith('blob:')) {
-      await _audio.setAudioSource(
-        url: restored.meta.audioUrl,
-        fallbackDurationMs: _durationMs,
-      );
-    } else {
+    try {
+      if (restored.meta.platform == 'local' &&
+          restored.meta.audioUrl.isNotEmpty) {
+        await _audio.setAudioSource(
+          localPath: restored.meta.audioUrl,
+          fallbackDurationMs: _durationMs,
+        );
+      } else if (restored.meta.audioUrl.isNotEmpty &&
+          !restored.meta.audioUrl.startsWith('blob:')) {
+        await _audio.setAudioSource(
+          url: restored.meta.audioUrl,
+          fallbackDurationMs: _durationMs,
+        );
+      } else {
+        await _audio.setAudioSource(fallbackDurationMs: _durationMs);
+      }
+    } catch (_) {
       await _audio.setAudioSource(fallbackDurationMs: _durationMs);
     }
 
@@ -1834,7 +1986,8 @@ class CallbookController extends ChangeNotifier {
     _syncEngine();
     _persistArchiveSession();
     schedulePersist(markDirty: false);
-    setStatus('已切换至存档「${found.name}」');
+    _setStatusInternal('已切换至存档「${found.name}」');
+    _playbackNotifier.notifyListeners();
     notifyListeners();
     return true;
   }
@@ -1856,7 +2009,7 @@ class CallbookController extends ChangeNotifier {
     ];
     if (!updated) return false;
     unawaited(_storage.saveArchives(_archives));
-    setStatus('已将存档重命名为「$trimmed」');
+    _setStatusInternal('已将存档重命名为「$trimmed」');
     notifyListeners();
     return true;
   }
@@ -1880,14 +2033,24 @@ class CallbookController extends ChangeNotifier {
       _persistArchiveSession();
     }
     unawaited(_storage.saveArchives(_archives));
-    setStatus('已删除存档「${target.name}」');
+    _setStatusInternal('已删除存档「${target.name}」');
     notifyListeners();
     return true;
   }
 
-  void setStatus(String message) {
+  void _setStatusInternal(String message) {
+    if (_statusMessage == message) return;
     _statusMessage = message;
-    notifyListeners();
+    if (!_disposed) {
+      _statusNotifier.value = message;
+    }
+  }
+
+  void setStatus(String message) {
+    _setStatusInternal(message);
+    if (!_disposed) {
+      notifyListeners();
+    }
   }
 
   void _persistArchiveSession() {
@@ -1931,18 +2094,23 @@ class CallbookController extends ChangeNotifier {
   }
 
   void _handleTimeUpdate(int timeMs) {
+    if (_disposed) return;
+    if (_currentTimeMs == timeMs) return;
     _currentTimeMs = timeMs;
-    notifyListeners();
+    _recomputePlaybackDerivedStates();
+    _playbackNotifier.notifyListeners();
   }
 
   void _handleBeatTrigger(BeatSnapshot snap) {
+    if (_disposed) return;
     _currentBar = snap.bar;
     _currentBeatInBar = snap.beatInBar;
     final energy = (snap.beatInBar == 1 ? 0.92 : 0.45) * (_project.meta.bpm / 200.0).clamp(0.4, 1.15);
     _beatPulseSeries.removeAt(0);
     _beatPulseSeries.add(energy.clamp(0.12, 1.0));
     _beatSeriesRevision++;
-    notifyListeners();
+    _beatNotifier.notifyListeners();
+    _playbackNotifier.notifyListeners();
   }
 
   void _refreshCallDensitySeries() {
@@ -1966,11 +2134,18 @@ class CallbookController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
     _persistTimer?.cancel();
     unawaited(_audio.dispose());
     _api.dispose();
     _neteaseDirect.dispose();
     _lrclibDirect.dispose();
+    _themeNotifier.dispose();
+    _playbackNotifier.dispose();
+    _beatNotifier.dispose();
+    _playingLineIdNotifier.dispose();
+    _activeGtTargetLineIdNotifier.dispose();
+    _statusNotifier.dispose();
     super.dispose();
   }
 }

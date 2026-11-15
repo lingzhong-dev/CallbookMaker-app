@@ -374,10 +374,13 @@ class _ExportViewState extends State<ExportView> {
                       .copyWith(color: scheme.onSurface),
                 ),
                 const SizedBox(height: 6),
-                Text(
-                  '${c.statusMessage} · 支持 2.5x 无裁切高清 PNG 长图、双工作表 Excel (.xlsx)、JSON 工程与 Markdown。',
-                  style: AppTextStyle.subheadline.of(context).copyWith(
-                    color: scheme.onSurfaceVariant,
+                ValueListenableBuilder<String>(
+                  valueListenable: c.statusListenable,
+                  builder: (context, statusMessage, _) => Text(
+                    '$statusMessage · 支持 2.5x 无裁切高清 PNG 长图、双工作表 Excel (.xlsx)、JSON 工程与 Markdown。',
+                    style: AppTextStyle.subheadline.of(context).copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
                   ),
                 ),
                 const SizedBox(height: 12),

@@ -60,7 +60,7 @@ class _LiveCallStudioAppState extends State<LiveCallStudioApp> {
   Widget build(BuildContext context) {
     final c = widget.controller;
     return ListenableBuilder(
-      listenable: c,
+      listenable: c.themeListenable,
       builder: (context, _) {
         return PrismApp(
           title: 'CallbookMaker',

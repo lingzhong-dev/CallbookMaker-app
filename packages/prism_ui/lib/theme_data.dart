@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart' show defaultTargetPlatform, immutable;
+import 'package:flutter/foundation.dart'
+    show defaultTargetPlatform, immutable, listEquals;
 import 'package:flutter/widgets.dart';
 import 'package:prism_ui/color.dart';
 import 'package:prism_ui/color_scheme.dart';
@@ -228,6 +229,37 @@ class ThemeData {
       elevatedColorScheme: elevatedColorScheme ?? this.elevatedColorScheme,
     );
   }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) {
+      return true;
+    }
+    if (other.runtimeType != runtimeType) {
+      return false;
+    }
+    return other is ThemeData &&
+        other.colorScheme == colorScheme &&
+        other.platform == platform &&
+        other.fontFamily == fontFamily &&
+        listEquals(other.fontFamilyFallback, fontFamilyFallback) &&
+        other.visualDensity == visualDensity &&
+        other.tapTargetSize == tapTargetSize &&
+        other.scaffoldBackgroundColor == scaffoldBackgroundColor &&
+        other.elevatedColorScheme == elevatedColorScheme;
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    colorScheme,
+    platform,
+    fontFamily,
+    fontFamilyFallback == null ? null : Object.hashAll(fontFamilyFallback!),
+    visualDensity,
+    tapTargetSize,
+    scaffoldBackgroundColor,
+    elevatedColorScheme,
+  );
 }
 
 class Theme extends StatelessWidget {

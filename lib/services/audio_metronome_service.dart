@@ -23,6 +23,16 @@ class BpmEstimateResult {
   final double confidence;
 }
 
+class _CuePlayerState {
+  _CuePlayerState(this.player, this.wavBytes);
+
+  final AudioPlayer? player;
+  final Uint8List wavBytes;
+  bool prepared = false;
+  bool inFlight = false;
+  double? lastVolume;
+}
+
 /// Cross-platform Audio + High-Precision Metronome Clock for Flutter Desktop & Android.
 /// Uses synthesized PCM WAV click buffers played via low-latency AudioPlayers,
 /// plus a monotonic Stopwatch clock when running without external audio tracks.
@@ -56,11 +66,19 @@ class AudioMetronomeService {
   late final Uint8List _subWav = _buildClickWav(freqHz: 940, ms: 34, gain: 0.6);
   late final Uint8List _alertWav = _buildClickWav(freqHz: 1860, ms: 75, gain: 0.85);
 
+  late final _CuePlayerState _accentCue =
+      _CuePlayerState(_accentClickPlayer, _accentWav);
+  late final _CuePlayerState _subCue =
+      _CuePlayerState(_subClickPlayer, _subWav);
+  late final _CuePlayerState _alertCue =
+      _CuePlayerState(_alertBeepPlayer, _alertWav);
+
   StreamSubscription<Duration>? _posSub;
   StreamSubscription<Duration>? _durSub;
   StreamSubscription<void>? _completeSub;
   Timer? _clockTimer;
 
+  bool _disposed = false;
   bool _hasExternalAudio = false;
   bool _isPlaying = false;
   bool _metronomeEnabled = true;
@@ -72,6 +90,10 @@ class AudioMetronomeService {
   int _offsetMs = 0;
   int _durationMs = 48000;
   int _currentTimeMs = 0;
+
+  bool _seekInFlight = false;
+  int? _pendingSeekMs;
+  Completer<void>? _seekCompleter;
 
   int _lastTriggeredBeatIndex = -999999;
   final Set<String> _beepedAlerts = <String>{};
@@ -89,18 +111,37 @@ class AudioMetronomeService {
   Future<void> init() async {
     final music = _musicPlayer;
     if (!enablePlatformAudio || music == null) return;
-    await _accentClickPlayer?.setPlayerMode(PlayerMode.lowLatency);
-    await _subClickPlayer?.setPlayerMode(PlayerMode.lowLatency);
-    await _alertBeepPlayer?.setPlayerMode(PlayerMode.lowLatency);
+    // Configure click/alert players without awaiting setSource() so headless
+    // test mocks that do not emit audio.onPrepared never hang during init().
+    for (final cuePlayer in [
+      _accentClickPlayer,
+      _subClickPlayer,
+      _alertBeepPlayer,
+    ]) {
+      if (cuePlayer == null) continue;
+      cuePlayer.positionUpdater = null;
+      try {
+        await cuePlayer.setPlayerMode(PlayerMode.lowLatency);
+        await cuePlayer.setReleaseMode(ReleaseMode.stop);
+      } catch (_) {
+        // Ignore platform configuration errors during headless initialization.
+      }
+    }
 
     _posSub = music.onPositionChanged.listen((pos) {
-      if (!_hasExternalAudio) return;
-      _currentTimeMs = pos.inMilliseconds;
+      if (_disposed || !_hasExternalAudio) return;
+      if (_seekInFlight || _pendingSeekMs != null) return;
+      final nextMs = pos.inMilliseconds;
+      if (nextMs == _currentTimeMs) return;
+      _currentTimeMs = nextMs;
       onTimeUpdate(_currentTimeMs);
-      _evaluateClocks(_currentTimeMs);
+      if (_isPlaying) {
+        _evaluateClocks(_currentTimeMs);
+      }
     });
 
     _durSub = music.onDurationChanged.listen((dur) {
+      if (_disposed) return;
       if (dur.inMilliseconds > 0) {
         _durationMs = dur.inMilliseconds;
         onDurationChanged?.call(_durationMs);
@@ -108,6 +149,7 @@ class AudioMetronomeService {
     });
 
     _completeSub = music.onPlayerComplete.listen((_) {
+      if (_disposed) return;
       _isPlaying = false;
       _clockTimer?.cancel();
       onEnded?.call();
@@ -136,7 +178,10 @@ class AudioMetronomeService {
         _syntheticAnchorWall = DateTime.now();
       }
       if (_hasExternalAudio) {
-        _musicPlayer?.setPlaybackRate(_playbackRate);
+        final future = _musicPlayer?.setPlaybackRate(_playbackRate);
+        if (future != null) {
+          unawaited(future.catchError((Object _) {}));
+        }
       }
     }
   }
@@ -155,61 +200,83 @@ class AudioMetronomeService {
     _lastTriggeredBeatIndex = -999999;
     _currentTimeMs = 0;
 
-    if (localPath != null && localPath.isNotEmpty) {
-      _hasExternalAudio = true;
-      await _musicPlayer?.setSource(DeviceFileSource(localPath));
-      if (fallbackDurationMs != null && fallbackDurationMs > 0) {
-        _durationMs = fallbackDurationMs;
+    final resolvedFallback =
+        (fallbackDurationMs != null && fallbackDurationMs > 1000)
+            ? fallbackDurationMs
+            : 48000;
+
+    try {
+      if (localPath != null && localPath.isNotEmpty) {
+        _hasExternalAudio = true;
+        await _musicPlayer?.setSource(DeviceFileSource(localPath));
+        _durationMs = (fallbackDurationMs != null && fallbackDurationMs > 0)
+            ? fallbackDurationMs
+            : _durationMs;
+      } else if (url != null && url.isNotEmpty) {
+        _hasExternalAudio = true;
+        await _musicPlayer?.setSource(UrlSource(url));
+        _durationMs = (fallbackDurationMs != null && fallbackDurationMs > 0)
+            ? fallbackDurationMs
+            : _durationMs;
+      } else {
+        _hasExternalAudio = false;
+        _durationMs = resolvedFallback;
       }
-    } else if (url != null && url.isNotEmpty) {
-      _hasExternalAudio = true;
-      await _musicPlayer?.setSource(UrlSource(url));
-      if (fallbackDurationMs != null && fallbackDurationMs > 0) {
-        _durationMs = fallbackDurationMs;
-      }
-    } else {
+    } catch (_) {
       _hasExternalAudio = false;
-      _durationMs = (fallbackDurationMs != null && fallbackDurationMs > 1000)
-          ? fallbackDurationMs
-          : 48000;
+      _durationMs = resolvedFallback;
+      onDurationChanged?.call(_durationMs);
+      onTimeUpdate(0);
+      rethrow;
     }
 
     onDurationChanged?.call(_durationMs);
     onTimeUpdate(0);
   }
 
-  Future<void> play() async {
-    if (_isPlaying) return;
+  Future<bool> play() async {
+    if (_disposed) return false;
+    if (_isPlaying) return true;
     _isPlaying = true;
 
     if (_hasExternalAudio && _musicPlayer != null) {
-      await _musicPlayer.setPlaybackRate(_playbackRate);
-      await _musicPlayer.resume();
-    } else {
-      _syntheticAnchorTrackMs = _currentTimeMs;
-      _syntheticAnchorWall = DateTime.now();
+      try {
+        await _musicPlayer.setPlaybackRate(_playbackRate);
+        await _musicPlayer.resume();
+      } catch (_) {
+        _isPlaying = false;
+        _clockTimer?.cancel();
+        return false;
+      }
+      // External audio drives position updates via AudioPlayer's FramePositionUpdater
+      // onPositionChanged listener; no redundant 16ms periodic timer is needed.
+      _clockTimer?.cancel();
+      return true;
     }
 
+    _syntheticAnchorTrackMs = _currentTimeMs;
+    _syntheticAnchorWall = DateTime.now();
     _clockTimer?.cancel();
     _clockTimer = Timer.periodic(const Duration(milliseconds: 16), (_) {
-      if (!_isPlaying) return;
-      if (!_hasExternalAudio) {
-        final elapsedMs =
-            DateTime.now().difference(_syntheticAnchorWall).inMicroseconds /
-            1000.0;
-        var next = _syntheticAnchorTrackMs + (elapsedMs * _playbackRate).round();
-        if (next >= _durationMs) {
-          next = 0;
-          _syntheticAnchorTrackMs = 0;
-          _syntheticAnchorWall = DateTime.now();
-          _beepedAlerts.clear();
-          _lastTriggeredBeatIndex = -999999;
-        }
+      if (!_isPlaying || _disposed) return;
+      final elapsedMs =
+          DateTime.now().difference(_syntheticAnchorWall).inMicroseconds /
+          1000.0;
+      var next = _syntheticAnchorTrackMs + (elapsedMs * _playbackRate).round();
+      if (next >= _durationMs) {
+        next = 0;
+        _syntheticAnchorTrackMs = 0;
+        _syntheticAnchorWall = DateTime.now();
+        _beepedAlerts.clear();
+        _lastTriggeredBeatIndex = -999999;
+      }
+      if (next != _currentTimeMs) {
         _currentTimeMs = next;
         onTimeUpdate(_currentTimeMs);
+        _evaluateClocks(_currentTimeMs);
       }
-      _evaluateClocks(_currentTimeMs);
     });
+    return true;
   }
 
   Future<void> pause() async {
@@ -217,23 +284,68 @@ class AudioMetronomeService {
     _isPlaying = false;
     _clockTimer?.cancel();
     if (_hasExternalAudio) {
-      await _musicPlayer?.pause();
+      try {
+        await _musicPlayer?.pause();
+      } catch (_) {
+        // Ignore pause errors if platform player was not ready.
+      }
     }
   }
 
-  Future<void> seek(int ms) async {
+  Future<void> seek(int ms) {
+    if (_disposed) return Future.value();
     final target = ms.clamp(0, math.max<int>(1000, _durationMs)).toInt();
     _currentTimeMs = target;
     _lastTriggeredBeatIndex = -999999;
     _beepedAlerts.clear();
-    if (_hasExternalAudio && _musicPlayer != null) {
-      await _musicPlayer.seek(Duration(milliseconds: target));
-    } else {
+
+    if (!_hasExternalAudio || _musicPlayer == null) {
       _syntheticAnchorTrackMs = target;
       _syntheticAnchorWall = DateTime.now();
+      onTimeUpdate(target);
+      _evaluateClocks(target, playAudio: false);
+      return Future.value();
     }
+
     onTimeUpdate(target);
     _evaluateClocks(target, playAudio: false);
+
+    _pendingSeekMs = target;
+    _seekCompleter ??= Completer<void>();
+    final future = _seekCompleter!.future;
+    if (!_seekInFlight) {
+      unawaited(_drainPendingSeeks());
+    }
+    return future;
+  }
+
+  Future<void> _drainPendingSeeks() async {
+    final music = _musicPlayer;
+    if (music == null) {
+      _pendingSeekMs = null;
+      _seekCompleter?.complete();
+      _seekCompleter = null;
+      return;
+    }
+    _seekInFlight = true;
+    try {
+      while (!_disposed && _pendingSeekMs != null) {
+        final nextTarget = _pendingSeekMs!;
+        _pendingSeekMs = null;
+        try {
+          await music.seek(Duration(milliseconds: nextTarget));
+        } catch (_) {
+          // Ignore seek errors when source is not yet prepared or player disposed.
+        }
+      }
+    } finally {
+      _seekInFlight = false;
+      final completer = _seekCompleter;
+      _seekCompleter = null;
+      if (completer != null && !completer.isCompleted) {
+        completer.complete();
+      }
+    }
   }
 
   Future<void> testMetronomeClick({bool accent = true}) async {
@@ -286,7 +398,7 @@ class AudioMetronomeService {
           BeatSnapshot(beatIndex: beatIndex, bar: bar, beatInBar: beatInBar),
         );
         if (playAudio && _metronomeEnabled) {
-          _playClick(accent: beatInBar == 1);
+          unawaited(_playClick(accent: beatInBar == 1));
         }
       }
     }
@@ -298,10 +410,8 @@ class AudioMetronomeService {
         final warnStart = alert.triggerTimeMs - leadMs;
         if (trackMs >= warnStart && trackMs <= alert.triggerTimeMs + 250) {
           _beepedAlerts.add(alert.id);
-          _alertBeepPlayer?.setVolume(
-            (_metronomeVolume / 1.5).clamp(0.15, 1.0),
-          );
-          _alertBeepPlayer?.play(BytesSource(_alertWav));
+          final vol = (_metronomeVolume / 1.5).clamp(0.15, 1.0);
+          unawaited(_triggerCue(_alertCue, vol));
           onGtAlertBeep(alert.id);
         }
       }
@@ -311,11 +421,32 @@ class AudioMetronomeService {
   Future<void> _playClick({required bool accent}) async {
     final vol = (_metronomeVolume / 1.5).clamp(0.1, 1.0);
     if (accent) {
-      await _accentClickPlayer?.setVolume(vol);
-      await _accentClickPlayer?.play(BytesSource(_accentWav));
+      await _triggerCue(_accentCue, vol);
     } else {
-      await _subClickPlayer?.setVolume(vol * 0.78);
-      await _subClickPlayer?.play(BytesSource(_subWav));
+      await _triggerCue(_subCue, vol * 0.78);
+    }
+  }
+
+  Future<void> _triggerCue(_CuePlayerState cue, double volume) async {
+    final player = cue.player;
+    if (_disposed || player == null || cue.inFlight) return;
+    cue.inFlight = true;
+    try {
+      if (cue.lastVolume == null || (cue.lastVolume! - volume).abs() > 0.005) {
+        await player.setVolume(volume);
+        cue.lastVolume = volume;
+      }
+      if (!cue.prepared) {
+        await player.setSource(BytesSource(cue.wavBytes));
+        cue.prepared = true;
+      } else if (player.state == PlayerState.playing) {
+        await player.seek(Duration.zero);
+      }
+      await player.resume();
+    } catch (_) {
+      cue.prepared = false;
+    } finally {
+      cue.inFlight = false;
     }
   }
 
@@ -363,7 +494,17 @@ class AudioMetronomeService {
   }
 
   Future<void> dispose() async {
+    _disposed = true;
     _clockTimer?.cancel();
+    _pendingSeekMs = null;
+    if (_seekCompleter != null && !_seekCompleter!.isCompleted) {
+      _seekCompleter!.complete();
+      _seekCompleter = null;
+    }
+    _musicPlayer?.positionUpdater = null;
+    _accentClickPlayer?.positionUpdater = null;
+    _subClickPlayer?.positionUpdater = null;
+    _alertBeepPlayer?.positionUpdater = null;
     await _posSub?.cancel();
     await _durSub?.cancel();
     await _completeSub?.cancel();
