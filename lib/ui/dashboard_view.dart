@@ -282,7 +282,7 @@ class _DashboardViewState extends State<DashboardView> {
       return;
     }
     _neteaseCookieCtrl.text = raw;
-    widget.controller.setStatus('已粘贴 Cookie，点击“一键写入 Cookie 并启动网关”即可生效');
+    widget.controller.setStatus('已粘贴 Cookie，点击下方按钮验证并保存即可生效');
   }
 
   Widget _buildGatewayConfigCard(
@@ -293,6 +293,8 @@ class _DashboardViewState extends State<DashboardView> {
     final gw = c.gatewayStatus;
     final isDesktop = c.isDesktopHost;
     final account = gw.neteaseAccount?.trim() ?? '';
+    final backendNodeGatewayActive =
+        c.backendOnline && (gw.managedByBackend || (gw.gatewayOnline && gw.nodeAvailable));
     return Card(
       inert: true,
       radius: 22,
@@ -300,63 +302,58 @@ class _DashboardViewState extends State<DashboardView> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          Text(
+            '网易云直连 & 可选后端服务',
+            style: AppTextStyle.subheadline
+                .of(context, emphasized: true)
+                .copyWith(color: scheme.onSurface),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            c.backendOnline
+                ? '已连接 FastAPI 后端（日语假名/罗马音注音可用）；未开 Node 网关时自动使用内置纯 Dart 引擎直连'
+                : '免 Node / 免后端：App 内置纯 Dart EAPI 引擎直接检索网易云与 LRCLIB；粘贴 MUSIC_U 可登录账号，可选连接 FastAPI 获取假名注音',
+            style: AppTextStyle.caption1.of(context).copyWith(
+              color: scheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
             children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '网易云网关 & 曲库服务',
-                      style: AppTextStyle.subheadline
-                          .of(context, emphasized: true)
-                          .copyWith(color: scheme.onSurface),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      isDesktop
-                          ? '粘贴网易云 Cookie 后自动写入 .env 并启动本地网关服务'
-                          : '连接 PC 端 FastAPI 后，粘贴网易云 Cookie 即可远程启动网关',
-                      style: AppTextStyle.caption1.of(context).copyWith(
-                        color: scheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
+              TonalChip(
+                label: '纯 Dart 直连',
+                color: scheme.primaryContainer,
+                foregroundColor: scheme.onPrimaryContainer,
+              ),
+              TonalChip(
+                label: c.backendOnline ? '后端注音在线' : '后端未连 (可选)',
+                color: c.backendOnline
+                    ? scheme.successContainer
+                    : scheme.surfaceContainerHigh,
+                foregroundColor: c.backendOnline
+                    ? scheme.onSuccessContainer
+                    : scheme.onSurfaceVariant,
+              ),
+              if (backendNodeGatewayActive)
+                TonalChip(
+                  label: 'Node 网关运行中',
+                  color: scheme.successContainer,
+                  foregroundColor: scheme.onSuccessContainer,
                 ),
-              ),
-              const SizedBox(width: 8),
-              Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                alignment: WrapAlignment.end,
-                children: [
-                  TonalChip(
-                    label: c.backendOnline ? '后端在线' : '后端离线',
-                    color: c.backendOnline
-                        ? scheme.successContainer
-                        : scheme.warningContainer,
-                    foregroundColor: c.backendOnline
-                        ? scheme.onSuccessContainer
-                        : scheme.onWarningContainer,
-                  ),
-                  TonalChip(
-                    label: gw.gatewayOnline ? '网关运行中' : '网关未启动',
-                    color: gw.gatewayOnline
-                        ? scheme.successContainer
-                        : scheme.warningContainer,
-                    foregroundColor: gw.gatewayOnline
-                        ? scheme.onSuccessContainer
-                        : scheme.onWarningContainer,
-                  ),
-                  if (account.isNotEmpty)
-                    TonalChip(
-                      label: '已登录: $account',
-                      color: scheme.primaryContainer,
-                      foregroundColor: scheme.onPrimaryContainer,
-                    ),
-                ],
-              ),
+              if (account.isNotEmpty)
+                TonalChip(
+                  label: '已登录: $account',
+                  color: scheme.successContainer,
+                  foregroundColor: scheme.onSuccessContainer,
+                )
+              else if (gw.cookieConfigured)
+                TonalChip(
+                  label: '已存 Cookie',
+                  color: scheme.secondaryContainer,
+                  foregroundColor: scheme.onSecondaryContainer,
+                ),
             ],
           ),
           const SizedBox(height: 10),
@@ -367,7 +364,7 @@ class _DashboardViewState extends State<DashboardView> {
                   controller: _backendCtrl,
                   focusNode: _backendUrlFocus,
                   decoration: const InputDecoration(
-                    hintText: 'FastAPI 地址：桌面 http://127.0.0.1:8000 / 模拟器 10.0.2.2:8000',
+                    hintText: '可选 FastAPI 地址：桌面 127.0.0.1:8000 / 模拟器 10.0.2.2:8000',
                   ),
                   onSubmitted: (v) => c.setBackendUrl(v),
                 ),
@@ -390,20 +387,22 @@ class _DashboardViewState extends State<DashboardView> {
               ],
             ],
           ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _gatewayUrlCtrl,
-            focusNode: _gatewayUrlFocus,
-            decoration: const InputDecoration(
-              hintText: '网易云网关地址（默认 http://127.0.0.1:3000）',
+          if (c.backendOnline) ...[
+            const SizedBox(height: 8),
+            TextField(
+              controller: _gatewayUrlCtrl,
+              focusNode: _gatewayUrlFocus,
+              decoration: const InputDecoration(
+                hintText: '可选后端网关地址（默认 http://127.0.0.1:3000）',
+              ),
             ),
-          ),
+          ],
           const SizedBox(height: 10),
           Row(
             children: [
               Expanded(
                 child: Text(
-                  '网易云 Cookie（支持完整浏览器 Cookie 或 MUSIC_U）',
+                  '网易云 Cookie（可选：支持完整 Cookie 或 MUSIC_U）',
                   style: AppTextStyle.caption1
                       .of(context, emphasized: true)
                       .copyWith(color: scheme.onSurface),
@@ -427,7 +426,7 @@ class _DashboardViewState extends State<DashboardView> {
             maxLines: _obscureCookie ? 1 : 3,
             minLines: 1,
             decoration: const InputDecoration(
-              hintText: '粘贴 MUSIC_U=... 完整 Cookie 或纯 MUSIC_U 字符串',
+              hintText: '粘贴 MUSIC_U=... 完整 Cookie 或纯 MUSIC_U 字符串（留空即游客直连）',
             ),
           ),
           const SizedBox(height: 8),
@@ -453,10 +452,10 @@ class _DashboardViewState extends State<DashboardView> {
               ),
               TonalButton(
                 size: TonalButtonSize.compact,
-                label: '检测状态',
-                onPressed: c.refreshGatewayStatus,
+                label: '检测直连状态',
+                onPressed: () => c.refreshGatewayStatus(probeDirect: true),
               ),
-              if (gw.managedByBackend)
+              if (c.backendOnline && gw.managedByBackend)
                 TonalButton(
                   size: TonalButtonSize.compact,
                   label: '停止网关',
@@ -479,7 +478,11 @@ class _DashboardViewState extends State<DashboardView> {
                     }
                   },
             child: Text(
-              c.isConfiguringGateway ? '正在配置并启动网关...' : '一键写入 Cookie 并启动网关',
+              c.isConfiguringGateway
+                  ? '正在验证与配置...'
+                  : (c.backendOnline && gw.nodeAvailable && gw.packageAvailable
+                        ? '一键写入 Cookie 并启动网关'
+                        : '验证并保存 Cookie（纯 Dart 直连）'),
             ),
           ),
           if (gw.message.isNotEmpty || gw.pid != null) ...[
@@ -496,9 +499,7 @@ class _DashboardViewState extends State<DashboardView> {
               (!gw.nodeAvailable || !gw.packageAvailable)) ...[
             const SizedBox(height: 4),
             Text(
-              !gw.nodeAvailable
-                  ? '环境提示：后端未检测到 Node.js，请确认已安装 Node.js 并在 PATH 中。'
-                  : '环境提示：未找到 @neteasecloudmusicapienhanced/api，可在后台安装或填远程网关地址。',
+              '提示：FastAPI 后端未配置 Node 网关，App 将直接使用内置纯 Dart 引擎直连网易云（同时保留后端注音增强）。',
               style: AppTextStyle.caption1.of(context).copyWith(
                 color: scheme.onSurfaceVariant,
               ),
@@ -1274,7 +1275,7 @@ class _DashboardViewState extends State<DashboardView> {
               SegmentedControl<String>(
                 segments: const [
                   ('auto', '自动聚合'),
-                  ('custom_proxy', '网易云网关'),
+                  ('custom_proxy', '网易云直连'),
                   ('lrclib', 'LRCLIB'),
                   ('mock', '演示库'),
                 ],
@@ -1282,11 +1283,12 @@ class _DashboardViewState extends State<DashboardView> {
                 onChanged: (v) => setState(() => _searchSource = v),
               ),
               if (_searchSource == 'custom_proxy' &&
+                  !c.gatewayStatus.cookieConfigured &&
                   !c.gatewayStatus.gatewayOnline &&
                   !c.customProxyEnabled) ...[
                 const SizedBox(height: 6),
                 Text(
-                  '提示：尚未检测到网易云网关在线，可在下方「网易云网关 & 曲库服务」卡片粘贴 Cookie 并一键启动。',
+                  '纯 Dart 直连网易云已就绪（游客模式可直接检索公开曲目与歌词；如需 VIP/完整音源可在下方粘贴 Cookie）。',
                   style: AppTextStyle.caption1.of(context).copyWith(
                     color: scheme.onSurfaceVariant,
                   ),

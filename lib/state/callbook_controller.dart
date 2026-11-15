@@ -9,6 +9,9 @@ import '../models/callbook_models.dart';
 import '../services/api_client.dart';
 import '../services/audio_metronome_service.dart';
 import '../services/desktop_service_launcher.dart';
+import '../services/lrclib_direct_client.dart';
+import '../services/mock_catalog_provider.dart';
+import '../services/netease_direct_client.dart';
 import '../services/project_storage.dart';
 import '../utils/lrc_ruby_parser.dart';
 import '../utils/section_detector.dart';
@@ -120,9 +123,17 @@ class CallbookController extends ChangeNotifier {
   CallbookController({
     CallbookApiClient? apiClient,
     ProjectStorage? storage,
+    NeteaseDirectClient? neteaseDirectClient,
+    LrclibDirectClient? lrclibDirectClient,
+    MockCatalogProvider? mockCatalogProvider,
+    DesktopServiceLauncher? desktopLauncher,
     bool enableAudioOutput = true,
   }) : _api = apiClient ?? CallbookApiClient(),
-       _storage = storage ?? ProjectStorage() {
+       _storage = storage ?? ProjectStorage(),
+       _neteaseDirect = neteaseDirectClient ?? NeteaseDirectClient(),
+       _lrclibDirect = lrclibDirectClient ?? LrclibDirectClient(),
+       _mockCatalog = mockCatalogProvider ?? const MockCatalogProvider(),
+       _desktopLauncher = desktopLauncher ?? DesktopServiceLauncher() {
     _audio = AudioMetronomeService(
       enablePlatformAudio: enableAudioOutput,
       onTimeUpdate: _handleTimeUpdate,
@@ -146,8 +157,11 @@ class CallbookController extends ChangeNotifier {
 
   late final CallbookApiClient _api;
   late final ProjectStorage _storage;
+  late final NeteaseDirectClient _neteaseDirect;
+  late final LrclibDirectClient _lrclibDirect;
+  late final MockCatalogProvider _mockCatalog;
+  late final DesktopServiceLauncher _desktopLauncher;
   late final AudioMetronomeService _audio;
-  final DesktopServiceLauncher _desktopLauncher = DesktopServiceLauncher();
 
   CallProject _project = CallProject.demo();
   List<CallPreset> _customPresets = const [];
@@ -478,24 +492,76 @@ class CallbookController extends ChangeNotifier {
       }
       _statusMessage = '已连接后端 (${_api.baseUrl}) · ${health.providers.join(", ")}';
     } else {
-      _gatewayStatus = _gatewayStatus.copyWith(
+      final hasCookie = _savedNeteaseCookie.trim().isNotEmpty;
+      final masked = hasCookie
+          ? DesktopServiceLauncher.maskNeteaseCookie(_savedNeteaseCookie)
+          : '';
+      final prevAccount = (hasCookie && _gatewayStatus.cookieConfigured)
+          ? _gatewayStatus.neteaseAccount
+          : null;
+      _gatewayStatus = GatewayStatusInfo(
+        gatewayUrl: _savedGatewayUrl,
         gatewayOnline: false,
         customProxyEnabled: false,
-        message: '后端离线，请先连接或点击启动后端',
+        cookieConfigured: hasCookie,
+        cookieMasked: masked,
+        managedByBackend: false,
+        pid: null,
+        canSpawnLocal: false,
+        nodeAvailable: false,
+        packageAvailable: false,
+        neteaseAccount: prevAccount,
+        message: hasCookie
+            ? '纯 Dart 直连就绪（免 Node · 已加载本地 Cookie${prevAccount != null && prevAccount.isNotEmpty ? " · $prevAccount" : ""}）'
+            : '纯 Dart 直连就绪（免 Node · 支持网易云游客直连 / LRCLIB / 演示库）',
       );
-      _statusMessage = '离线演练模式 · 本地持久化运行';
+      _statusMessage = '纯 Dart 直连模式 · 免 Node/后端直接搜歌演练';
     }
     notifyListeners();
   }
 
-  Future<void> refreshGatewayStatus() async {
+  Future<bool> _verifyDirectNetease({
+    required String cookie,
+    required String cleanUrl,
+  }) async {
+    final probe = await _neteaseDirect.probeAccount(cookie: cookie);
+    _gatewayStatus = GatewayStatusInfo(
+      gatewayUrl: cleanUrl,
+      gatewayOnline: probe.reachable,
+      customProxyEnabled: false,
+      cookieConfigured: probe.cookieConfigured,
+      cookieMasked: probe.cookieMasked,
+      managedByBackend: false,
+      pid: null,
+      canSpawnLocal: false,
+      nodeAvailable: false,
+      packageAvailable: false,
+      neteaseAccount: probe.nickname,
+      message: probe.message,
+    );
+    setStatus(probe.message);
+    return probe.reachable;
+  }
+
+  Future<void> refreshGatewayStatus({bool probeDirect = false}) async {
     await checkBackendHealth();
+    if (probeDirect &&
+        (!_backendOnline ||
+            (!_gatewayStatus.gatewayOnline &&
+                (!_gatewayStatus.nodeAvailable ||
+                    !_gatewayStatus.packageAvailable)))) {
+      await _verifyDirectNetease(
+        cookie: _savedNeteaseCookie,
+        cleanUrl: _savedGatewayUrl,
+      );
+      notifyListeners();
+    }
   }
 
   Future<void> launchLocalBackendOnDesktop() async {
     if (_isLaunchingBackend) return;
     _isLaunchingBackend = true;
-    setStatus('正在启动本地 FastAPI 后端 (${_api.baseUrl})...');
+    setStatus('正在启动可选 FastAPI 后端 (${_api.baseUrl})...');
     notifyListeners();
     try {
       final res = await _desktopLauncher.ensureBackendRunning(_api.baseUrl);
@@ -521,28 +587,19 @@ class CallbookController extends ChangeNotifier {
     if (normCookie.isNotEmpty) {
       _savedNeteaseCookie = normCookie;
       await _storage.saveNeteaseCookie(normCookie);
+    } else if (cookie.trim().isEmpty) {
+      _savedNeteaseCookie = '';
+      await _storage.saveNeteaseCookie('');
     }
     await _storage.saveGatewayUrl(cleanUrl);
-    setStatus('正在写入网易云 Cookie 并启动网关 ($cleanUrl)...');
+    setStatus(
+      _backendOnline
+          ? '正在写入网易云 Cookie 并配置服务...'
+          : '正在保存 Cookie 并验证网易云纯 Dart 直连...',
+    );
     notifyListeners();
 
     try {
-      // Desktop: write .env and auto-start FastAPI backend first when offline.
-      if (!_backendOnline && _desktopLauncher.isDesktop) {
-        final backendDir = _desktopLauncher.locateBackendDir();
-        if (backendDir != null) {
-          await _desktopLauncher.writeEnvConfig(
-            backendDir,
-            gatewayUrl: cleanUrl,
-            cookie: normCookie,
-          );
-        }
-        final started = await _desktopLauncher.ensureBackendRunning(_api.baseUrl);
-        if (started.ok) {
-          await checkBackendHealth();
-        }
-      }
-
       if (_backendOnline) {
         final status = await _api.configureAndStartGateway(
           neteaseCookie: normCookie,
@@ -551,30 +608,32 @@ class CallbookController extends ChangeNotifier {
         );
         _gatewayStatus = status;
         await checkBackendHealth();
+        if (status.gatewayOnline) {
+          if (status.message.isNotEmpty) {
+            setStatus(status.message);
+          }
+          return true;
+        }
+        // FastAPI backend connected without Node/gateway package: verify pure-Dart direct mode seamlessly.
+        if (!status.nodeAvailable || !status.packageAvailable) {
+          return await _verifyDirectNetease(
+            cookie: normCookie,
+            cleanUrl: cleanUrl,
+          );
+        }
         if (status.message.isNotEmpty) {
           setStatus(status.message);
         }
-        return status.gatewayOnline;
+        return false;
       }
 
-      if (_desktopLauncher.isDesktop) {
-        final direct = await _desktopLauncher.ensureGatewayRunningDirectly(
-          cleanUrl,
-        );
-        _gatewayStatus = _gatewayStatus.copyWith(
-          gatewayUrl: cleanUrl,
-          gatewayOnline: direct.ok,
-          cookieConfigured: normCookie.isNotEmpty,
-          message: direct.message,
-        );
-        setStatus(direct.message);
-        return direct.ok;
-      }
-
-      setStatus('后端 ${_api.baseUrl} 离线：请确认 PC 端后端已启动并允许当前设备访问');
-      return false;
+      // Standalone pure-Dart mode: validate account/connection directly via EAPI (no Node or Python required).
+      return await _verifyDirectNetease(
+        cookie: normCookie,
+        cleanUrl: cleanUrl,
+      );
     } catch (err) {
-      setStatus('一键启动网易云网关失败：$err');
+      setStatus('配置网易云直连失败：$err');
       return false;
     } finally {
       _isConfiguringGateway = false;
@@ -1307,15 +1366,122 @@ class CallbookController extends ChangeNotifier {
   }
 
   Future<void> searchTracks(String query, {String source = 'auto'}) async {
-    if (query.trim().isEmpty) return;
+    final cleanQuery = query.trim();
+    if (cleanQuery.isEmpty && source != 'mock') return;
     _isSearching = true;
     notifyListeners();
     try {
-      final resp = await _api.searchTracks(query, source: source);
-      _searchResults = resp.results;
-      setStatus('搜索完成 (${resp.providerUsed}) · ${resp.results.length} 首');
+      final useBackendProxy =
+          _backendOnline &&
+          (_customProxyEnabled ||
+              _gatewayStatus.managedByBackend ||
+              (_gatewayStatus.gatewayOnline && _gatewayStatus.nodeAvailable));
+
+      if (source == 'mock') {
+        List<TrackSummary> results;
+        if (_backendOnline) {
+          try {
+            final resp = await _api.searchTracks(cleanQuery, source: 'mock');
+            results = resp.results;
+          } catch (_) {
+            results = _mockCatalog.searchTracks(cleanQuery);
+          }
+        } else {
+          results = _mockCatalog.searchTracks(cleanQuery);
+        }
+        _searchResults = results;
+        setStatus('搜索完成 (演示曲库) · ${results.length} 首');
+        return;
+      }
+
+      if (source == 'lrclib') {
+        List<TrackSummary> results;
+        String used = 'lrclib';
+        if (_backendOnline) {
+          try {
+            final resp = await _api.searchTracks(cleanQuery, source: 'lrclib');
+            results = resp.results;
+            used = resp.providerUsed.isNotEmpty ? resp.providerUsed : 'lrclib';
+          } catch (_) {
+            results = await _lrclibDirect.searchTracks(cleanQuery);
+            used = 'lrclib 直连';
+          }
+        } else {
+          results = await _lrclibDirect.searchTracks(cleanQuery);
+          used = 'lrclib 直连';
+        }
+        _searchResults = results;
+        setStatus('搜索完成 ($used) · ${results.length} 首');
+        return;
+      }
+
+      if (source == 'custom_proxy') {
+        if (useBackendProxy) {
+          try {
+            final resp = await _api.searchTracks(
+              cleanQuery,
+              source: 'custom_proxy',
+            );
+            _searchResults = resp.results;
+            setStatus('搜索完成 (${resp.providerUsed}) · ${resp.results.length} 首');
+            return;
+          } catch (_) {
+            // Fall through to pure-Dart Netease direct engine
+          }
+        }
+        final directResults = await _neteaseDirect.searchTracks(
+          cleanQuery,
+          cookie: _savedNeteaseCookie,
+        );
+        _searchResults = directResults;
+        setStatus('搜索完成 (网易云纯 Dart 直连) · ${directResults.length} 首');
+        return;
+      }
+
+      // source == 'auto'
+      if (useBackendProxy) {
+        try {
+          final resp = await _api.searchTracks(cleanQuery, source: 'auto');
+          _searchResults = resp.results;
+          setStatus('搜索完成 (${resp.providerUsed}) · ${resp.results.length} 首');
+          return;
+        } catch (_) {
+          // Fall through to pure-Dart multi-source chain
+        }
+      }
+
+      try {
+        final neteaseResults = await _neteaseDirect.searchTracks(
+          cleanQuery,
+          cookie: _savedNeteaseCookie,
+        );
+        if (neteaseResults.isNotEmpty) {
+          _searchResults = neteaseResults;
+          setStatus('搜索完成 (网易云纯 Dart 直连) · ${neteaseResults.length} 首');
+          return;
+        }
+      } catch (_) {
+        // Fallback to LRCLIB
+      }
+
+      try {
+        final lrclibResults = _backendOnline
+            ? (await _api.searchTracks(cleanQuery, source: 'lrclib')).results
+            : await _lrclibDirect.searchTracks(cleanQuery);
+        if (lrclibResults.isNotEmpty) {
+          _searchResults = lrclibResults;
+          setStatus('搜索完成 (LRCLIB 直连) · ${lrclibResults.length} 首');
+          return;
+        }
+      } catch (_) {
+        // Fallback to built-in offline mock catalog
+      }
+
+      final mockResults = _mockCatalog.searchTracks(cleanQuery);
+      _searchResults = mockResults;
+      setStatus('外网曲库暂不可达或无匹配，已自动切换至演示曲库 (mock) · ${mockResults.length} 首');
     } catch (err) {
-      setStatus('搜索失败：请确认后端 ${_api.baseUrl} 已启动 ($err)');
+      setStatus('搜索失败：$err');
     } finally {
       _isSearching = false;
       notifyListeners();
@@ -1326,12 +1492,91 @@ class CallbookController extends ChangeNotifier {
     try {
       final providerName =
           summary.provider.isNotEmpty ? summary.provider : summary.platform;
-      final detail = await _api.fetchTrackDetail(providerName, summary.id);
-      _knownAudioDurationMs = detail.track.durationMs > 0
+      TrackDetailResponse detail;
+
+      if (providerName == 'netease_direct') {
+        detail = await _neteaseDirect.fetchTrackDetail(
+          summary.id,
+          cookie: _savedNeteaseCookie,
+          fallbackSummary: summary,
+        );
+      } else if (providerName == 'lrclib') {
+        if (_backendOnline) {
+          try {
+            detail = await _api.fetchTrackDetail('lrclib', summary.id);
+          } catch (_) {
+            detail = await _lrclibDirect.fetchTrackDetail(summary.id);
+          }
+        } else {
+          detail = await _lrclibDirect.fetchTrackDetail(summary.id);
+        }
+      } else if (providerName == 'mock') {
+        if (_backendOnline) {
+          try {
+            detail = await _api.fetchTrackDetail('mock', summary.id);
+          } catch (_) {
+            detail =
+                _mockCatalog.fetchTrackDetail(summary.id) ??
+                (throw Exception('未找到内置演示曲目 (${summary.id})'));
+          }
+        } else {
+          detail =
+              _mockCatalog.fetchTrackDetail(summary.id) ??
+              (throw Exception('未找到内置演示曲目 (${summary.id})'));
+        }
+      } else {
+        if (_backendOnline) {
+          try {
+            detail = await _api.fetchTrackDetail(providerName, summary.id);
+          } catch (_) {
+            if (summary.platform == 'netease') {
+              detail = await _neteaseDirect.fetchTrackDetail(
+                summary.id,
+                cookie: _savedNeteaseCookie,
+                fallbackSummary: summary,
+              );
+            } else {
+              rethrow;
+            }
+          }
+        } else if (summary.platform == 'netease') {
+          detail = await _neteaseDirect.fetchTrackDetail(
+            summary.id,
+            cookie: _savedNeteaseCookie,
+            fallbackSummary: summary,
+          );
+        } else {
+          throw Exception('后端离线且暂不支持直连该来源 ($providerName)');
+        }
+      }
+
+      // Hybrid mode: if optional FastAPI backend is online & track came from direct mode
+      // (or lacks Ruby markup), annotate Japanese kanji with furigana & romaji.
+      var rawLines = detail.lines;
+      if (_backendOnline &&
+          detail.rawLrc.trim().isNotEmpty &&
+          (providerName == 'netease_direct' ||
+              rawLines.every((l) => l.text.ruby == null))) {
+        try {
+          final rubyLines = await _api.parseLyricsWithRuby(
+            lrc: detail.rawLrc,
+            translationLrc: detail.translatedLrc,
+            enableRuby: true,
+          );
+          if (rubyLines.isNotEmpty) {
+            rawLines = rubyLines;
+          }
+        } catch (_) {
+          // Keep offline LRC lines when backend parser is unavailable
+        }
+      }
+
+      final resolvedDurationMs = detail.track.durationMs > 0
           ? detail.track.durationMs
-          : 0;
+          : summary.durationMs;
+      _knownAudioDurationMs = resolvedDurationMs > 0 ? resolvedDurationMs : 0;
       final detected = detectAndMergeSections(
-        detail.lines,
+        rawLines,
         thresholds: _sectionThresholds,
         totalDurationMs:
             _knownAudioDurationMs > 0 ? _knownAudioDurationMs : null,
@@ -1352,9 +1597,10 @@ class CallbookController extends ChangeNotifier {
         alerts: const [],
         lines: detected.lines,
       );
+      _isPlaying = false;
       await _audio.setAudioSource(
         url: detail.audioUrl,
-        fallbackDurationMs: detail.track.durationMs,
+        fallbackDurationMs: resolvedDurationMs,
       );
       _activeLineId = sortedLines.isNotEmpty ? sortedLines.first.id : null;
       _activeArchiveId = null;
@@ -1368,10 +1614,14 @@ class CallbookController extends ChangeNotifier {
           detected.stats.intro +
           detected.stats.interlude +
           detected.stats.outro;
+      final audioHint =
+          detail.audioUrl.isEmpty && detail.track.platform == 'netease'
+              ? '（该曲目暂无可用直链音源，可搭配本地音频或节拍器演练）'
+              : '';
       setStatus(
         totalDetected > 0
-            ? '已导入曲目：${detail.track.title}（自动识别前/间/尾奏：前${detected.stats.intro}·间${detected.stats.interlude}·尾${detected.stats.outro}）'
-            : '已导入曲目：${detail.track.title}',
+            ? '已导入曲目：${detail.track.title}（自动识别前/间/尾奏：前${detected.stats.intro}·间${detected.stats.interlude}·尾${detected.stats.outro}）$audioHint'
+            : '已导入曲目：${detail.track.title}$audioHint',
       );
     } catch (err) {
       setStatus('导入曲目失败：$err');
@@ -1430,6 +1680,7 @@ class CallbookController extends ChangeNotifier {
 
   Future<void> loadLocalAudioFile(String filePath, String fileName) async {
     _knownAudioDurationMs = 0;
+    _isPlaying = false;
     await _audio.setAudioSource(localPath: filePath);
     final strippedTitle = fileName.replaceAll(RegExp(r'\.[^.]+$'), '');
     _project = _project.copyWith(
@@ -1447,6 +1698,7 @@ class CallbookController extends ChangeNotifier {
 
   Future<void> loadDemoProject() async {
     _knownAudioDurationMs = 48000;
+    _isPlaying = false;
     _project = _normalizeProjectAlerts(CallProject.demo());
     await _audio.setAudioSource(fallbackDurationMs: 48000);
     _activeLineId = sortedLines.isNotEmpty ? sortedLines.first.id : null;
@@ -1556,6 +1808,7 @@ class CallbookController extends ChangeNotifier {
         restored.meta.platform == 'synthetic' ? 48000 : 0;
     _durationMs = math.max(48000, maxEnd + 4000);
     _currentTimeMs = 0;
+    _isPlaying = false;
 
     if (restored.meta.platform == 'local' &&
         restored.meta.audioUrl.isNotEmpty) {
@@ -1716,6 +1969,8 @@ class CallbookController extends ChangeNotifier {
     _persistTimer?.cancel();
     unawaited(_audio.dispose());
     _api.dispose();
+    _neteaseDirect.dispose();
+    _lrclibDirect.dispose();
     super.dispose();
   }
 }

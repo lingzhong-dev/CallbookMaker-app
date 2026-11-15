@@ -74,6 +74,23 @@ class DesktopServiceLauncher {
     return parts.join('; ');
   }
 
+  static String maskNeteaseCookie(String rawCookie) {
+    final norm = normalizeNeteaseCookie(rawCookie);
+    if (norm.isEmpty) return '';
+    for (final seg in norm.split(';')) {
+      final trimmed = seg.trim();
+      final eq = trimmed.indexOf('=');
+      if (eq > 0 &&
+          trimmed.substring(0, eq).trim().toUpperCase() == 'MUSIC_U') {
+        final val = trimmed.substring(eq + 1).trim();
+        if (val.length <= 10) return 'MUSIC_U=***';
+        return 'MUSIC_U=${val.substring(0, 4)}***${val.substring(val.length - 4)}';
+      }
+    }
+    if (norm.length <= 10) return '***';
+    return '${norm.substring(0, 4)}***${norm.substring(norm.length - 4)}';
+  }
+
   Directory? locateBackendDir() {
     if (!isDesktop) return null;
     final roots = <Directory>[

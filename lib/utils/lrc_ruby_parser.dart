@@ -79,8 +79,9 @@ List<LyricLine> parseLrcOffline(
   for (final rawLine in rawLines) {
     final trimmed = rawLine.trim();
     if (trimmed.isEmpty) continue;
-    // Skip LRC metadata tags like [ti:...], [ar:...]
+    // Skip LRC metadata tags like [ti:...], [ar:...] and Netease JSON credit lines
     if (RegExp(r'^\[[a-zA-Z]+:.*\]$').hasMatch(trimmed)) continue;
+    if (trimmed.startsWith('{"t":') && trimmed.contains('"c":')) continue;
 
     final matches = _lrcTimestampPattern.allMatches(trimmed).toList();
     final content = trimmed.replaceAll(_lrcTimestampPattern, '').trim();
@@ -106,6 +107,7 @@ List<LyricLine> parseLrcOffline(
         : current.ms + defaultDurationMs;
     final endMs = nextMs > current.ms ? nextMs : current.ms + defaultDurationMs;
 
+    var originalText = current.text;
     String? matchedTranslation;
     var bestDiff = 600;
     for (final entry in transMap.entries) {
@@ -115,6 +117,20 @@ List<LyricLine> parseLrcOffline(
         matchedTranslation = entry.value;
       }
     }
+    if (matchedTranslation == null) {
+      for (final sep in const [' // ', ' || ']) {
+        final sepIdx = originalText.indexOf(sep);
+        if (sepIdx > 0) {
+          final left = originalText.substring(0, sepIdx).trim();
+          final right = originalText.substring(sepIdx + sep.length).trim();
+          if (left.isNotEmpty && right.isNotEmpty) {
+            originalText = left;
+            matchedTranslation = right;
+            break;
+          }
+        }
+      }
+    }
 
     result.add(
       LyricLine(
@@ -122,7 +138,7 @@ List<LyricLine> parseLrcOffline(
         startTimeMs: current.ms,
         endTimeMs: endMs,
         text: LyricText(
-          original: current.text,
+          original: originalText,
           translation: matchedTranslation,
         ),
       ),

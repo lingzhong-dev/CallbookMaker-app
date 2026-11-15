@@ -266,10 +266,10 @@ class _HomeShellState extends State<HomeShell> {
                     ),
                     const SizedBox(width: 6),
                     Semantics(
-                      label: c.backendOnline ? '后端在线' : '后端离线',
+                      label: c.backendOnline ? '后端在线' : '纯 Dart 直连',
                       button: true,
                       child: GestureDetector(
-                        onTap: () => c.checkBackendHealth(),
+                        onTap: () => c.refreshGatewayStatus(probeDirect: true),
                         child: Container(
                           height: 34,
                           padding: EdgeInsets.symmetric(
@@ -278,7 +278,7 @@ class _HomeShellState extends State<HomeShell> {
                           decoration: ShapeDecoration(
                             color: c.backendOnline
                                 ? scheme.successContainer
-                                : scheme.warningContainer,
+                                : scheme.primaryContainer,
                             shape: AppShape.full,
                           ),
                           alignment: Alignment.center,
@@ -292,18 +292,18 @@ class _HomeShellState extends State<HomeShell> {
                                 size: 14,
                                 color: c.backendOnline
                                     ? scheme.onSuccessContainer
-                                    : scheme.onWarningContainer,
+                                    : scheme.onPrimaryContainer,
                               ),
                               if (!isMobile) ...[
                                 const SizedBox(width: 5),
                                 Text(
-                                  c.backendOnline ? '后端在线' : '离线模式',
+                                  c.backendOnline ? '后端在线' : '纯 Dart 直连',
                                   style: AppTextStyle.caption2
                                       .of(context, emphasized: true)
                                       .copyWith(
                                         color: c.backendOnline
                                             ? scheme.onSuccessContainer
-                                            : scheme.onWarningContainer,
+                                            : scheme.onPrimaryContainer,
                                       ),
                                 ),
                               ],

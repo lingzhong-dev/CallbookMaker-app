@@ -10,8 +10,8 @@ LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
 IDI_APP_ICON               ICON                    "resources\\app_icon.ico"
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1,0,0,1
- PRODUCTVERSION 1,0,0,1
+ FILEVERSION 1,0,2,3
+ PRODUCTVERSION 1,0,2,3
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -28,11 +28,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "CallbookMaker"
             VALUE "FileDescription", "CallbookMaker"
-            VALUE "FileVersion", "1.0.0.1"
+            VALUE "FileVersion", "1.0.2.3"
             VALUE "InternalName", "live_call_studio"
             VALUE "OriginalFilename", "live_call_studio.exe"
             VALUE "ProductName", "CallbookMaker"
-            VALUE "ProductVersion", "1.0.0.1"
+            VALUE "ProductVersion", "1.0.2.3"
         END
     END
     BLOCK "VarFileInfo"
