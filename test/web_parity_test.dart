@@ -3,6 +3,7 @@ import 'dart:io' show ZLibCodec;
 import 'dart:typed_data' show Endian;
 
 import 'package:flutter/foundation.dart' show SynchronousFuture;
+import 'package:flutter/gestures.dart' show kSecondaryMouseButton;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -771,6 +772,170 @@ void main() {
         }
       },
     );
+
+    testWidgets(
+      'Sing-along (跟唱) prompts for custom lyrics, Clap (拍手) tags directly, and Custom Presets support right-click & long-press Edit / Delete with cascade',
+      timeout: const Timeout(Duration(seconds: 20)),
+      (tester) async {
+        final controller = await _initController();
+        controller.selectLine('demo-2');
+        try {
+          await _pumpWithViewport(
+            tester,
+            _wrapWithPrism(
+              controller: controller,
+              child: ListenableBuilder(
+                listenable: controller,
+                builder: (context, _) => prism.BottomInsetScope(
+                  inset: 0,
+                  child: SingleChildScrollView(
+                    child: TimelineEditorWidget(
+                      controller: controller,
+                      compact: true,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            viewport: const Size(1280, 820),
+          );
+          await tester.pumpAndSettle();
+          expect(tester.takeException(), isNull);
+
+          // 1. Built-in '拍手' (clap) tags immediately without a dialog
+          await _scrollToAndTap(tester, find.text('拍手').first);
+          await tester.pump();
+          expect(
+            controller.sortedLines
+                .firstWhere((l) => l.id == 'demo-2')
+                .calls
+                .any((t) => t.presetId == 'clap'),
+            isTrue,
+          );
+
+          // 2. Built-in '跟唱' (sing-along) opens '输入跟唱部分' dialog; canceling does not attach
+          await tester.tap(find.text('跟唱').first);
+          await tester.pumpAndSettle();
+          expect(find.text('输入跟唱部分'), findsOneWidget);
+          await tester.tap(find.text('取消'));
+          await tester.pumpAndSettle();
+          expect(
+            controller.sortedLines
+                .firstWhere((l) => l.id == 'demo-2')
+                .calls
+                .any((t) => t.presetId == singAlongPresetId),
+            isFalse,
+          );
+
+          // 3. Entering sing-along text and confirming attaches 'sing-along' with suffix
+          await tester.tap(find.text('跟唱').first);
+          await tester.pumpAndSettle();
+          expect(find.text('输入跟唱部分'), findsOneWidget);
+          await tester.enterText(
+            find.widgetWithText(prism.TextField, '例如：La la la~ / 副歌跟唱句'),
+            'La la la 一起唱!',
+          );
+          await tester.pump();
+          await tester.tap(find.text('确认跟唱'));
+          await tester.pumpAndSettle();
+
+          final demo2AfterSingAlong = controller.sortedLines.firstWhere(
+            (l) => l.id == 'demo-2',
+          );
+          expect(
+            demo2AfterSingAlong.calls.any(
+              (t) =>
+                  t.presetId == singAlongPresetId &&
+                  t.suffix == 'La la la 一起唱!',
+            ),
+            isTrue,
+          );
+          expect(find.text('La la la 一起唱!'), findsOneWidget);
+
+          // 4. Built-in presets do NOT open custom preset context menu on right-click
+          await tester.tap(
+            find.text('拍手').first,
+            buttons: kSecondaryMouseButton,
+          );
+          await tester.pumpAndSettle();
+          expect(find.text('修改名称 / 颜色'), findsNothing);
+          expect(find.text('删除自定义标签'), findsNothing);
+
+          // 5. Add a custom preset, attach it to demo-2, then right-click to edit name & color
+          controller.addCustomPreset(
+            label: '园长Call',
+            colorHex: '#EC4899',
+            category: CallCategory.compound,
+            shortcut: 'Q',
+          );
+          await tester.pump();
+          final customPreset = controller.customPresets.single;
+          expect(customPreset.label, '园长Call');
+
+          await tester.tap(find.text('园长Call').first);
+          await tester.pump();
+          expect(
+            controller.sortedLines
+                .firstWhere((l) => l.id == 'demo-2')
+                .calls
+                .any((t) => t.presetId == customPreset.id),
+            isTrue,
+          );
+
+          // Right-click custom preset pill -> opens context menu -> Edit
+          await tester.tap(
+            find.text('园长Call').first,
+            buttons: kSecondaryMouseButton,
+          );
+          await tester.pumpAndSettle();
+          expect(find.text('修改名称 / 颜色'), findsOneWidget);
+          expect(find.text('删除自定义标签'), findsOneWidget);
+
+          await tester.tap(find.text('修改名称 / 颜色'));
+          await tester.pumpAndSettle();
+          expect(find.text('修改自定义标签'), findsOneWidget);
+
+          await tester.enterText(
+            find.widgetWithText(prism.TextField, '输入新的标签名称'),
+            '超级园长',
+          );
+          await tester.enterText(
+            find.widgetWithText(prism.TextField, '自定义色值（#RRGGBB）'),
+            '#14B8A6',
+          );
+          await tester.pump();
+          await tester.tap(find.text('保存修改'));
+          await tester.pumpAndSettle();
+
+          expect(controller.customPresets.single.label, '超级园长');
+          expect(controller.customPresets.single.colorHex, '#14B8A6');
+          expect(find.text('超级园长'), findsWidgets);
+
+          // 6. Long-press custom preset pill -> opens context menu -> Delete with confirmation & cascade
+          await tester.longPress(find.text('超级园长').first);
+          await tester.pumpAndSettle();
+          expect(find.text('删除自定义标签'), findsOneWidget);
+
+          await tester.tap(find.text('删除自定义标签'));
+          await tester.pumpAndSettle();
+          expect(find.textContaining('当前已挂载于 1 句歌词'), findsOneWidget);
+
+          await tester.tap(find.text('确认删除'));
+          await tester.pumpAndSettle();
+          expect(controller.customPresets, isEmpty);
+          expect(
+            controller.sortedLines
+                .firstWhere((l) => l.id == 'demo-2')
+                .calls
+                .any((t) => t.presetId == customPreset.id),
+            isFalse,
+          );
+          expect(tester.takeException(), isNull);
+        } finally {
+          await _disposeTestTree(tester, controller);
+        }
+      },
+    );
   });
 
   group('5. Archive Save Guard & Quick Switcher Dialog', () {
@@ -893,7 +1058,13 @@ void main() {
           // Gap check: Print / PDF absent vs Web ExportPanel
           expect(find.textContaining('PDF'), findsNothing);
 
-          // Export JSON flow with pre-export editor modal
+          // Export JSON flow with pre-export editor modal + customPresets preservation
+          controller.addCustomPreset(
+            label: '专属高光',
+            colorHex: '#14B8A6',
+            shortcut: 'Q',
+          );
+          await tester.pump();
           await tester.tap(find.text('导出 JSON'));
           await tester.pump();
           expect(find.text('导出前确认编者与曲目署名'), findsOneWidget);
@@ -909,14 +1080,23 @@ void main() {
           final roundtripped = CallProject.fromJson(decodedJson);
           expect(roundtripped.meta.editorName, '澪终');
           expect(roundtripped.lines.length, controller.project.lines.length);
+          expect(decodedJson['customPresets'], isA<List<dynamic>>());
 
-          // Verify importProjectJson restores exported JSON cleanly
+          // Delete custom preset then verify importProjectJson restores it from exported JSON
+          controller.deleteCustomPreset(controller.customPresets.single.id);
+          expect(controller.customPresets, isEmpty);
           final imported = await controller.importProjectJson(
             clipboardText,
             sourceName: 'backup.json',
           );
           expect(imported, isTrue);
           expect(controller.project.meta.editorName, '澪终');
+          expect(
+            controller.customPresets.any(
+              (p) => p.label == '专属高光' && p.colorHex == '#14B8A6',
+            ),
+            isTrue,
+          );
 
           // Copy Markdown flow
           await tester.tap(find.text('复制 Markdown'));

@@ -9,6 +9,7 @@ import '../../state/callbook_controller.dart';
 import '../../utils/lrc_ruby_parser.dart';
 import '../../utils/section_detector.dart';
 import 'call_badge_pill.dart';
+import 'call_preset_dialogs.dart';
 import 'callbook_glyphs.dart';
 import 'ruby_lyric_text.dart';
 
@@ -131,7 +132,7 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
 
   Future<void> _openCreatePresetDialog(BuildContext context) async {
     final labelCtrl = TextEditingController();
-    final shortcutCtrl = TextEditingController(text: '9');
+    final shortcutCtrl = TextEditingController(text: 'Q');
     var colorHex = '#EC4899';
     var category = CallCategory.compound;
     final palette = [
@@ -141,6 +142,7 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
       '#06B6D4',
       '#10B981',
       '#EC4899',
+      '#14B8A6',
       '#2563EB',
     ];
 
@@ -175,7 +177,7 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
               const SizedBox(height: 10),
               TextField(
                 controller: shortcutCtrl,
-                decoration: const InputDecoration(hintText: '快捷键（单字符，如 9 / Q）'),
+                decoration: const InputDecoration(hintText: '快捷键（单字符，如 Q / W）'),
               ),
               const SizedBox(height: 12),
               Wrap(
@@ -391,6 +393,7 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
     LineCallTag tag,
     CallPreset preset,
   ) async {
+    final isSingAlong = preset.id == singAlongPresetId;
     final suffixCtrl = TextEditingController(text: tag.suffix ?? '');
     final scheme = context.colorScheme;
     final ok = await showGeneralDialog<bool>(
@@ -400,7 +403,7 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
       barrierColor: const Color(0x66000000),
       pageBuilder: (ctx, _, _) => Center(
         child: AlertDialog(
-          title: '${preset.label} 备注 / 倍率',
+          title: isSingAlong ? '编辑跟唱部分' : '${preset.label} 备注 / 倍率',
           hasFields: true,
           actions: [
             TextButton(
@@ -425,32 +428,46 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
             children: [
               TextField(
                 controller: suffixCtrl,
-                decoration: const InputDecoration(hintText: '例如：×4、全员、加速'),
+                autofocus: true,
+                decoration: InputDecoration(
+                  hintText: isSingAlong
+                      ? '例如：La la la~ / 副歌跟唱句'
+                      : '例如：×4、全员、加速',
+                ),
+                onSubmitted: (_) => Navigator.of(ctx).pop(true),
               ),
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                children: [
-                  for (final quick in const ['×2', '×4', '全员', '加速'])
-                    TonalChip(
-                      label: quick,
-                      color: scheme.secondaryContainer,
-                      foregroundColor: scheme.onSecondaryContainer,
-                      onPressed: () {
-                        suffixCtrl.text = quick;
-                        Navigator.of(ctx).pop(true);
-                      },
-                    ),
-                ],
-              ),
+              if (!isSingAlong) ...[
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    for (final quick in const ['×2', '×4', '全员', '加速'])
+                      TonalChip(
+                        label: quick,
+                        color: scheme.secondaryContainer,
+                        foregroundColor: scheme.onSecondaryContainer,
+                        onPressed: () {
+                          suffixCtrl.text = quick;
+                          Navigator.of(ctx).pop(true);
+                        },
+                      ),
+                  ],
+                ),
+              ],
             ],
           ),
         ),
       ),
     );
     if (ok == true) {
-      widget.controller.setCallTagSuffix(line.id, tag.presetId, suffixCtrl.text);
+      if (!isSingAlong || suffixCtrl.text.trim().isNotEmpty) {
+        widget.controller.setCallTagSuffix(
+          line.id,
+          tag.presetId,
+          suffixCtrl.text,
+        );
+      }
     }
     suffixCtrl.dispose();
   }
@@ -586,7 +603,7 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
                     shape: AppShape.lg,
                   ),
                   child: Text(
-                    'Space 播放/暂停 · 1~8 切换军 Call · G 切换当前行 GT 警报 · ↑/↓ 切行 · ←/→ 跳 2s · F 现场演练',
+                    'Space 播放/暂停 · 1~0 切换军 Call · G 切换当前行 GT 警报 · ↑/↓ 切行 · ←/→ 跳 2s · F 现场演练',
                     style: AppTextStyle.caption1.of(context).copyWith(
                       fontFamily: 'GoogleSans',
                       color: scheme.onSurfaceVariant,
@@ -610,7 +627,19 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
                           ),
                       compact: true,
                       showShortcut: MediaQuery.sizeOf(context).width >= 600,
-                      onTap: () => c.quickTagActiveLine(preset.id),
+                      onTap: () => triggerCallPresetWithUi(
+                        context: context,
+                        controller: c,
+                        presetId: preset.id,
+                      ),
+                      onContextAction: preset.builtIn
+                          ? null
+                          : (pos) => showCustomPresetContextMenu(
+                              context,
+                              controller: c,
+                              preset: preset,
+                              globalPosition: pos,
+                            ),
                     ),
                   ValueListenableBuilder<String?>(
                     valueListenable: c.playingLineIdListenable,
@@ -1013,6 +1042,14 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard> {
                     suffix: tag.suffix,
                     compact: true,
                     onTap: () => widget.onOpenSuffix(tag, preset),
+                    onContextAction: preset.builtIn
+                        ? null
+                        : (pos) => showCustomPresetContextMenu(
+                            context,
+                            controller: c,
+                            preset: preset,
+                            globalPosition: pos,
+                          ),
                   ),
               if (line.customShout.trim().isNotEmpty)
                 Container(
@@ -1120,7 +1157,20 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard> {
                     selected: line.calls.any((t) => t.presetId == preset.id),
                     compact: true,
                     showShortcut: false,
-                    onTap: () => c.toggleLineCall(line.id, preset.id),
+                    onTap: () => triggerCallPresetWithUi(
+                      context: context,
+                      controller: c,
+                      presetId: preset.id,
+                      lineId: line.id,
+                    ),
+                    onContextAction: preset.builtIn
+                        ? null
+                        : (pos) => showCustomPresetContextMenu(
+                            context,
+                            controller: c,
+                            preset: preset,
+                            globalPosition: pos,
+                          ),
                   ),
                   const SizedBox(width: 6),
                 ],

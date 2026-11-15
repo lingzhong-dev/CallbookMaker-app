@@ -96,6 +96,22 @@ class CallPreset {
     return const Color(0xFF0061FF);
   }
 
+  CallPreset copyWith({
+    String? id,
+    String? label,
+    String? colorHex,
+    CallCategory? category,
+    String? shortcut,
+    bool? builtIn,
+  }) => CallPreset(
+    id: id ?? this.id,
+    label: label ?? this.label,
+    colorHex: colorHex ?? this.colorHex,
+    category: category ?? this.category,
+    shortcut: shortcut ?? this.shortcut,
+    builtIn: builtIn ?? this.builtIn,
+  );
+
   Map<String, dynamic> toJson() => {
     'id': id,
     'label': label,
@@ -114,6 +130,8 @@ class CallPreset {
     builtIn: json['builtIn'] == true,
   );
 }
+
+const String singAlongPresetId = 'sing-along';
 
 const List<CallPreset> defaultCallPresets = [
   CallPreset(
@@ -178,6 +196,22 @@ const List<CallPreset> defaultCallPresets = [
     colorHex: '#2563EB',
     category: CallCategory.build,
     shortcut: '8',
+    builtIn: true,
+  ),
+  CallPreset(
+    id: 'sing-along',
+    label: '跟唱',
+    colorHex: '#EC4899',
+    category: CallCategory.compound,
+    shortcut: '9',
+    builtIn: true,
+  ),
+  CallPreset(
+    id: 'clap',
+    label: '拍手',
+    colorHex: '#14B8A6',
+    category: CallCategory.downbeat,
+    shortcut: '0',
     builtIn: true,
   ),
 ];

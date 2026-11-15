@@ -409,7 +409,7 @@ class _ExportViewState extends State<ExportView> {
   Future<void> _copyJson() async {
     if (!await _promptEditorInfoBeforeExport(formatBadge: 'JSON 工程')) return;
     final c = widget.controller;
-    await Clipboard.setData(ClipboardData(text: c.project.toPrettyJson()));
+    await Clipboard.setData(ClipboardData(text: c.exportProjectJsonString()));
     c.setStatus('已复制完整 CallBook JSON 工程到剪贴板');
   }
 

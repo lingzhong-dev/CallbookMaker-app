@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:prism_ui/icons/icons.dart';
@@ -13,6 +15,7 @@ import 'theme_view.dart';
 import 'widgets/archive_switcher_dialog.dart';
 import 'widgets/audio_source_panel.dart';
 import 'widgets/call_badge_pill.dart';
+import 'widgets/call_preset_dialogs.dart';
 import 'widgets/callbook_glyphs.dart';
 
 class HomeShell extends StatefulWidget {
@@ -115,7 +118,14 @@ class _HomeShellState extends State<HomeShell> {
     if (label.length == 1 && c.activeLineId != null) {
       for (final preset in c.allPresets) {
         if (preset.shortcut.toUpperCase() == label) {
-          c.toggleLineCall(c.activeLineId!, preset.id);
+          unawaited(
+            triggerCallPresetWithUi(
+              context: context,
+              controller: c,
+              presetId: preset.id,
+              lineId: c.activeLineId,
+            ),
+          );
           return KeyEventResult.handled;
         }
       }
@@ -565,11 +575,24 @@ class _HomeShellState extends State<HomeShell> {
                                                   compact: true,
                                                   showShortcut: false,
                                                   onTap: () =>
-                                                      c.quickTagActiveLine(
-                                                        preset.id,
+                                                      triggerCallPresetWithUi(
+                                                        context: context,
+                                                        controller: c,
+                                                        presetId: preset.id,
                                                         autoAdvance:
                                                             _autoAdvanceOnTag,
                                                       ),
+                                                  onContextAction:
+                                                      preset.builtIn
+                                                      ? null
+                                                      : (pos) =>
+                                                            showCustomPresetContextMenu(
+                                                              context,
+                                                              controller: c,
+                                                              preset: preset,
+                                                              globalPosition:
+                                                                  pos,
+                                                            ),
                                                 );
                                               },
                                             ),

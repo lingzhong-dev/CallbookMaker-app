@@ -256,5 +256,30 @@ void main() {
       expect(decodedSession.hasUnsavedChanges, isTrue);
       expect(decodedSession.hasFetchedExternalLyrics, isTrue);
     });
+
+    test('defaultCallPresets includes built-in 跟唱 (sing-along) and 拍手 (clap)', () {
+      expect(defaultCallPresets.length, 10);
+      final singAlong = defaultCallPresets.firstWhere(
+        (p) => p.id == singAlongPresetId,
+      );
+      expect(singAlong.label, '跟唱');
+      expect(singAlong.colorHex, '#EC4899');
+      expect(singAlong.category, CallCategory.compound);
+      expect(singAlong.shortcut, '9');
+      expect(singAlong.builtIn, isTrue);
+
+      final clap = defaultCallPresets.firstWhere((p) => p.id == 'clap');
+      expect(clap.label, '拍手');
+      expect(clap.colorHex, '#14B8A6');
+      expect(clap.category, CallCategory.downbeat);
+      expect(clap.shortcut, '0');
+      expect(clap.builtIn, isTrue);
+
+      final copied = singAlong.copyWith(label: '合唱', colorHex: '#2563EB');
+      expect(copied.id, singAlongPresetId);
+      expect(copied.label, '合唱');
+      expect(copied.colorHex, '#2563EB');
+      expect(copied.builtIn, isTrue);
+    });
   });
 }

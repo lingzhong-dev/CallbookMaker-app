@@ -351,7 +351,12 @@ class CallbookController extends ChangeNotifier {
   String? get playingLineId => _playingLineIdCache;
 
   int get taggedLineCount => _project.lines
-      .where((l) => l.calls.isNotEmpty || l.customShout.trim().isNotEmpty)
+      .where(
+        (l) =>
+            l.calls.isNotEmpty ||
+            l.customShout.trim().isNotEmpty ||
+            l.tailUpdraft,
+      )
       .length;
 
   GtAlert? getAlertForLine(String lineId) => _alertByLineIdCache[lineId];
@@ -1040,15 +1045,24 @@ class CallbookController extends ChangeNotifier {
     return ordered.first;
   }
 
-  bool toggleLineCall(String lineId, String presetId) {
+  bool toggleLineCall(String lineId, String presetId, {String? suffix}) {
     final lines = [..._project.lines];
     final idx = lines.indexWhere((l) => l.id == lineId);
     if (idx < 0) return false;
     final line = lines[idx];
     final exists = line.calls.any((c) => c.presetId == presetId);
+    final trimmedSuffix = suffix?.trim();
     final nextCalls = exists
         ? line.calls.where((c) => c.presetId != presetId).toList()
-        : [...line.calls, LineCallTag(presetId: presetId)];
+        : [
+            ...line.calls,
+            LineCallTag(
+              presetId: presetId,
+              suffix: (trimmedSuffix != null && trimmedSuffix.isNotEmpty)
+                  ? trimmedSuffix
+                  : null,
+            ),
+          ];
     lines[idx] = line.copyWith(calls: nextCalls);
     _setProject(_project.copyWith(lines: lines));
     _refreshCallDensitySeries();
@@ -1083,17 +1097,22 @@ class CallbookController extends ChangeNotifier {
     );
   }
 
-  void quickTagActiveLine(String presetId, {bool autoAdvance = false}) {
+  bool quickTagActiveLine(
+    String presetId, {
+    bool autoAdvance = false,
+    String? suffix,
+  }) {
     final target = resolveLineForQuickTag();
     if (target == null) {
       setStatus('暂无可打标的歌词行');
-      return;
+      return false;
     }
     _activeLineId = target.id;
-    final added = toggleLineCall(target.id, presetId);
+    final added = toggleLineCall(target.id, presetId, suffix: suffix);
     if (added && autoAdvance) {
       stepActiveLine(1);
     }
+    return added;
   }
 
   void setCallTagSuffix(String lineId, String presetId, String suffix) {
@@ -1474,16 +1493,90 @@ class CallbookController extends ChangeNotifier {
   }) {
     final clean = label.trim();
     if (clean.isEmpty) return;
+    final normalizedColor =
+        RegExp(r'^#[0-9A-Fa-f]{6}$').hasMatch(colorHex.trim())
+            ? colorHex.trim().toUpperCase()
+            : '#EC4899';
     final preset = CallPreset(
       id: 'custom-${DateTime.now().millisecondsSinceEpoch}',
       label: clean,
-      colorHex: colorHex,
+      colorHex: normalizedColor,
       category: category,
       shortcut: shortcut.trim().toUpperCase(),
     );
     _customPresets = [..._customPresets, preset];
     unawaited(_storage.saveCustomPresets(_customPresets));
+    _setStatusInternal('已添加自定义 Call 标签：$clean');
+    schedulePersist();
     notifyListeners();
+  }
+
+  bool updateCustomPreset({
+    required String presetId,
+    required String label,
+    required String colorHex,
+    CallCategory? category,
+    String? shortcut,
+  }) {
+    if (defaultCallPresets.any((p) => p.id == presetId)) return false;
+    final idx = _customPresets.indexWhere((p) => p.id == presetId);
+    if (idx < 0) return false;
+    final cleanLabel = label.trim();
+    if (cleanLabel.isEmpty) return false;
+    final current = _customPresets[idx];
+    final normalizedColor =
+        RegExp(r'^#[0-9A-Fa-f]{6}$').hasMatch(colorHex.trim())
+            ? colorHex.trim().toUpperCase()
+            : current.colorHex;
+    final updated = current.copyWith(
+      label: cleanLabel,
+      colorHex: normalizedColor,
+      category: category,
+      shortcut: shortcut?.trim().toUpperCase(),
+      builtIn: false,
+    );
+    final nextPresets = [..._customPresets];
+    nextPresets[idx] = updated;
+    _customPresets = nextPresets;
+    unawaited(_storage.saveCustomPresets(_customPresets));
+    _setStatusInternal('已更新自定义标签：${updated.label}');
+    schedulePersist();
+    notifyListeners();
+    return true;
+  }
+
+  bool deleteCustomPreset(String presetId) {
+    if (defaultCallPresets.any((p) => p.id == presetId)) return false;
+    final idx = _customPresets.indexWhere((p) => p.id == presetId);
+    if (idx < 0) return false;
+    final removed = _customPresets[idx];
+    _customPresets = [
+      for (final p in _customPresets)
+        if (p.id != presetId) p,
+    ];
+    unawaited(_storage.saveCustomPresets(_customPresets));
+
+    var linesChanged = false;
+    final nextLines = [
+      for (final line in _project.lines)
+        if (line.calls.any((c) => c.presetId == presetId))
+          (() {
+            linesChanged = true;
+            return line.copyWith(
+              calls: line.calls.where((c) => c.presetId != presetId).toList(),
+            );
+          })()
+        else
+          line,
+    ];
+    if (linesChanged) {
+      _setProject(_project.copyWith(lines: nextLines));
+      _refreshCallDensitySeries();
+    }
+    _setStatusInternal('已删除自定义标签：${removed.label}');
+    schedulePersist();
+    notifyListeners();
+    return true;
   }
 
   // Backend search, LRC import & local audio
@@ -1862,6 +1955,22 @@ class CallbookController extends ChangeNotifier {
     notifyListeners();
   }
 
+  String exportProjectJsonString() {
+    final map = Map<String, dynamic>.from(_project.toJson());
+    final metaMap = Map<String, dynamic>.from(
+      map['meta'] as Map<dynamic, dynamic>? ?? const {},
+    );
+    final audioUrl = (metaMap['audioUrl'] ?? '').toString();
+    if (audioUrl.startsWith('blob:')) {
+      metaMap['audioUrl'] = '';
+      map['meta'] = metaMap;
+    }
+    if (_customPresets.isNotEmpty) {
+      map['customPresets'] = [for (final p in _customPresets) p.toJson()];
+    }
+    return const JsonEncoder.withIndent('  ').convert(map);
+  }
+
   Future<bool> importProjectJson(String rawJson, {String? sourceName}) async {
     try {
       final decoded = jsonDecode(rawJson);
@@ -1874,6 +1983,24 @@ class CallbookController extends ChangeNotifier {
       if (parsed.lines.isEmpty && parsed.meta.title.trim().isEmpty) {
         setStatus('JSON 工程格式无效：缺少曲目或歌词行');
         return false;
+      }
+
+      if (map['customPresets'] is List) {
+        final rawPresets = map['customPresets'] as List<dynamic>;
+        final builtInIds = {for (final b in defaultCallPresets) b.id};
+        final existingById = {for (final p in _customPresets) p.id: p};
+        for (final item in rawPresets) {
+          if (item is Map) {
+            final preset = CallPreset.fromJson(Map<String, dynamic>.from(item));
+            if (preset.id.isNotEmpty &&
+                preset.label.trim().isNotEmpty &&
+                !builtInIds.contains(preset.id)) {
+              existingById[preset.id] = preset.copyWith(builtIn: false);
+            }
+          }
+        }
+        _customPresets = existingById.values.toList();
+        unawaited(_storage.saveCustomPresets(_customPresets));
       }
 
       final normalized = _normalizeProjectAlerts(parsed);

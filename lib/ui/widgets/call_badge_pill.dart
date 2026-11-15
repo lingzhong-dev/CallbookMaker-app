@@ -10,6 +10,7 @@ class CallBadgePill extends StatelessWidget {
     this.suffix,
     this.selected = true,
     this.onTap,
+    this.onContextAction,
     this.compact = false,
     this.showShortcut = true,
   });
@@ -18,6 +19,7 @@ class CallBadgePill extends StatelessWidget {
   final String? suffix;
   final bool selected;
   final VoidCallback? onTap;
+  final ValueChanged<Offset>? onContextAction;
   final bool compact;
   final bool showShortcut;
 
@@ -72,27 +74,28 @@ class CallBadgePill extends StatelessWidget {
           ),
           if (hasSuffix) ...[
             const SizedBox(width: 5),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-              decoration: ShapeDecoration(
-                color: selected
-                    ? const Color(0x33000000)
-                    : scheme.surfaceContainerHigh,
-                shape: AppShape.full,
-              ),
-              child: Text(
-                suffix!,
-                softWrap: false,
-                maxLines: 1,
-                overflow: TextOverflow.visible,
-                style: AppTextStyle.caption2
-                    .of(context, emphasized: true)
-                    .copyWith(
-                      fontFamily: 'GoogleSans',
-                      fontFeatures: const [FontFeature.tabularFigures()],
-                      color: fg,
-                      height: 1.1,
-                    ),
+            Flexible(
+              fit: FlexFit.loose,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                decoration: ShapeDecoration(
+                  color: selected
+                      ? const Color(0x33000000)
+                      : scheme.surfaceContainerHigh,
+                  shape: AppShape.full,
+                ),
+                child: Text(
+                  suffix!,
+                  softWrap: true,
+                  style: AppTextStyle.caption2
+                      .of(context, emphasized: true)
+                      .copyWith(
+                        fontFamily: 'GoogleSans',
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                        color: fg,
+                        height: 1.15,
+                      ),
+                ),
               ),
             ),
           ] else if (!selected && showShortcut && preset.shortcut.isNotEmpty) ...[
@@ -113,11 +116,17 @@ class CallBadgePill extends StatelessWidget {
       ),
     );
 
-    if (onTap == null) return badgeContent;
+    if (onTap == null && onContextAction == null) return badgeContent;
     return GestureDetector(
       onTap: onTap,
+      onSecondaryTapUp: onContextAction == null
+          ? null
+          : (details) => onContextAction!(details.globalPosition),
+      onLongPressStart: onContextAction == null
+          ? null
+          : (details) => onContextAction!(details.globalPosition),
       behavior: HitTestBehavior.opaque,
-      child: ElasticPress(child: badgeContent),
+      child: onTap != null ? ElasticPress(child: badgeContent) : badgeContent,
     );
   }
 }
