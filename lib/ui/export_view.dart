@@ -1,7 +1,9 @@
+import 'dart:convert';
 import 'dart:io' show File, Platform;
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -15,6 +17,7 @@ import '../models/callbook_models.dart';
 import '../state/callbook_controller.dart';
 import '../utils/lrc_ruby_parser.dart';
 import '../utils/xlsx_export.dart';
+import 'widgets/archive_switcher_dialog.dart';
 import 'widgets/call_badge_pill.dart';
 import 'widgets/callbook_glyphs.dart';
 import 'widgets/ruby_lyric_text.dart';
@@ -33,59 +36,170 @@ class _ExportViewState extends State<ExportView> {
   bool _exportingPng = false;
   bool _exportingXlsx = false;
 
-  Future<bool> _promptEditorInfoBeforeExport() async {
+  Future<bool> _promptEditorInfoBeforeExport({String? formatBadge}) async {
     final c = widget.controller;
-    final editorNameCtrl = TextEditingController(
-      text: c.project.meta.editorName,
+    final meta = c.project.meta;
+    final editorNameCtrl = TextEditingController(text: meta.editorName);
+    final editorNoteCtrl = TextEditingController(text: meta.editorNote);
+    final composerCtrl = TextEditingController(text: meta.composer);
+    final lyricistCtrl = TextEditingController(text: meta.lyricist);
+    final vocalistCtrl = TextEditingController(
+      text: meta.vocalist.trim().isNotEmpty ? meta.vocalist : meta.artist,
     );
-    final editorNoteCtrl = TextEditingController(
-      text: c.project.meta.editorNote,
-    );
+    final tunerCtrl = TextEditingController(text: meta.tuner);
+    var showTuner = meta.showTuner;
+
     try {
       final ok = await showFloatingDialog<bool>(
         context: context,
         child: Builder(
-          builder: (dialogCtx) => AlertDialog(
-            title: '确认编者与编者语',
-            hasFields: true,
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(dialogCtx).pop(false),
-                child: const Text('取消'),
-              ),
-              TextButton(
-                onPressed: () => Navigator.of(dialogCtx).pop(true),
-                child: const Text('确认并导出'),
-              ),
-            ],
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                TextField(
-                  controller: editorNameCtrl,
-                  decoration: const InputDecoration(
-                    hintText: '编者（你的圈名/cn）',
+          builder: (dialogCtx) {
+            final scheme = dialogCtx.colorScheme;
+            return StatefulBuilder(
+              builder: (dialogCtx, setModalState) => AlertDialog(
+                title: '导出前确认编者与曲目署名',
+                hasFields: true,
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(dialogCtx).pop(false),
+                    child: const Text('取消'),
                   ),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: editorNoteCtrl,
-                  maxLines: 3,
-                  minLines: 2,
-                  decoration: const InputDecoration(
-                    hintText: '编者语（例如：间奏 GT 警报处请注意跟着喊出声）',
+                  TextButton(
+                    onPressed: () => Navigator.of(dialogCtx).pop(true),
+                    child: const Text('确认并导出'),
                   ),
+                ],
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (formatBadge != null && formatBadge.isNotEmpty) ...[
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TonalChip(
+                          label: formatBadge,
+                          color: scheme.primaryContainer,
+                          foregroundColor: scheme.onPrimaryContainer,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                    ],
+                    Text(
+                      '确认后将立即同步至 Callbook 与导出文件',
+                      style: AppTextStyle.caption1.of(dialogCtx).copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: editorNameCtrl,
+                      decoration: const InputDecoration(
+                        hintText: '编者（你的圈名/cn）',
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: editorNoteCtrl,
+                      maxLines: 3,
+                      minLines: 2,
+                      decoration: const InputDecoration(
+                        hintText: '写给现场打 Call 同好的备注、切拍提示或寄语...',
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: scheme.surfaceContainerLow,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: scheme.outlineVariant),
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  '曲目署名确认',
+                                  style: AppTextStyle.caption1
+                                      .of(dialogCtx, emphasized: true)
+                                      .copyWith(color: scheme.onSurface),
+                                ),
+                              ),
+                              Text(
+                                '添加调教',
+                                style: AppTextStyle.caption2
+                                    .of(dialogCtx)
+                                    .copyWith(color: scheme.onSurfaceVariant),
+                              ),
+                              const SizedBox(width: 6),
+                              Switch(
+                                value: showTuner,
+                                onChanged: (v) =>
+                                    setModalState(() => showTuner = v),
+                                semanticLabel: '添加调教',
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: TextField(
+                                  controller: composerCtrl,
+                                  decoration: const InputDecoration(
+                                    hintText: '作曲',
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: TextField(
+                                  controller: lyricistCtrl,
+                                  decoration: const InputDecoration(
+                                    hintText: '作词',
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          TextField(
+                            controller: vocalistCtrl,
+                            decoration: const InputDecoration(
+                              hintText: '演唱',
+                            ),
+                          ),
+                          if (showTuner) ...[
+                            const SizedBox(height: 8),
+                            TextField(
+                              controller: tunerCtrl,
+                              decoration: const InputDecoration(
+                                hintText: '请输入调教作者',
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
-              ],
-            ),
-          ),
+              ),
+            );
+          },
         ),
       );
       if (ok != true || !mounted) return false;
       c.updateMeta(
         editorName: editorNameCtrl.text.trim(),
         editorNote: editorNoteCtrl.text.trim(),
+        composer: composerCtrl.text.trim(),
+        lyricist: lyricistCtrl.text.trim(),
+        vocalist: vocalistCtrl.text.trim(),
+        showTuner: showTuner,
+        tuner: tunerCtrl.text.trim(),
       );
       setState(() {});
       await WidgetsBinding.instance.endOfFrame;
@@ -93,6 +207,10 @@ class _ExportViewState extends State<ExportView> {
     } finally {
       editorNameCtrl.dispose();
       editorNoteCtrl.dispose();
+      composerCtrl.dispose();
+      lyricistCtrl.dispose();
+      vocalistCtrl.dispose();
+      tunerCtrl.dispose();
     }
   }
 
@@ -104,9 +222,44 @@ class _ExportViewState extends State<ExportView> {
     return stem.isEmpty ? 'callbook' : stem;
   }
 
-  Future<void> _exportQuickRefPng() async {
+  Future<void> _importJsonFile() async {
+    final c = widget.controller;
+    try {
+      final res = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: const ['json'],
+        withData: true,
+      );
+      if (res == null || res.files.isEmpty || !mounted) return;
+      final picked = res.files.first;
+      String? rawJson;
+      if (picked.bytes != null) {
+        rawJson = utf8.decode(picked.bytes!, allowMalformed: true);
+      } else if (picked.path != null && picked.path!.isNotEmpty) {
+        rawJson = await File(picked.path!).readAsString();
+      }
+      if (rawJson == null || rawJson.trim().isEmpty || !mounted) {
+        c.setStatus('所选 JSON 工程文件为空');
+        return;
+      }
+
+      final ok = await confirmArchiveSaveIfNeeded(
+        context,
+        c,
+        actionLabel: '导入 JSON 工程',
+        targetLabel: picked.name,
+      );
+      if (!ok || !mounted) return;
+
+      await c.importProjectJson(rawJson, sourceName: picked.name);
+    } catch (err) {
+      c.setStatus('导入 JSON 工程失败：$err');
+    }
+  }
+
+  Future<void> _exportCallbookPng() async {
     if (_exportingPng) return;
-    if (!await _promptEditorInfoBeforeExport()) return;
+    if (!await _promptEditorInfoBeforeExport(formatBadge: 'PNG 长图')) return;
     if (!mounted) return;
     setState(() => _exportingPng = true);
     final c = widget.controller;
@@ -157,7 +310,7 @@ class _ExportViewState extends State<ExportView> {
                 width: measuredExportWidth,
                 child: RepaintBoundary(
                   key: offscreenKey,
-                  child: _QuickRefSheet(
+                  child: _CallbookSheet(
                     controller: c,
                     presetMap: presetMap,
                     forExport: true,
@@ -177,7 +330,7 @@ class _ExportViewState extends State<ExportView> {
       final ctx = offscreenKey.currentContext;
       final ro = ctx?.findRenderObject();
       if (ro is! RenderRepaintBoundary) {
-        c.setStatus('离屏速查卡尚未完成渲染，请稍后再试');
+        c.setStatus('离屏 Callbook 视图尚未完成渲染，请稍后再试');
         return;
       }
 
@@ -199,12 +352,12 @@ class _ExportViewState extends State<ExportView> {
       try {
         await Share.shareXFiles(
           [XFile(file.path)],
-          text: '${c.project.meta.title} · Call 速查卡',
+          text: '${c.project.meta.title} · Callbook',
         );
       } catch (_) {
         // Desktop platforms without native share sheet still keep the written file.
       }
-      c.setStatus('高清速查卡 PNG 已生成：$outPath');
+      c.setStatus('PNG 长图已生成：$outPath');
     } catch (err) {
       c.setStatus('导出 PNG 失败：$err');
     } finally {
@@ -215,7 +368,9 @@ class _ExportViewState extends State<ExportView> {
 
   Future<void> _exportXlsx() async {
     if (_exportingXlsx) return;
-    if (!await _promptEditorInfoBeforeExport()) return;
+    if (!await _promptEditorInfoBeforeExport(formatBadge: 'Excel (.xlsx)')) {
+      return;
+    }
     if (!mounted) return;
     setState(() => _exportingXlsx = true);
     final c = widget.controller;
@@ -252,7 +407,7 @@ class _ExportViewState extends State<ExportView> {
   }
 
   Future<void> _copyJson() async {
-    if (!await _promptEditorInfoBeforeExport()) return;
+    if (!await _promptEditorInfoBeforeExport(formatBadge: 'JSON 工程')) return;
     final c = widget.controller;
     await Clipboard.setData(ClipboardData(text: c.project.toPrettyJson()));
     c.setStatus('已复制完整 CallBook JSON 工程到剪贴板');
@@ -283,7 +438,7 @@ class _ExportViewState extends State<ExportView> {
             : '> 编者：$editorDisplay ｜ 编者语：$noteDisplay',
       )
       ..writeln()
-      ..writeln('## 歌词与 Call 速查时间轴');
+      ..writeln('## 歌词与 Call 时间轴');
 
     for (final line in c.sortedLines) {
       final tags = [
@@ -323,14 +478,14 @@ class _ExportViewState extends State<ExportView> {
   }
 
   Future<void> _copyMarkdown() async {
-    if (!await _promptEditorInfoBeforeExport()) return;
+    if (!await _promptEditorInfoBeforeExport(formatBadge: 'Markdown')) return;
     final c = widget.controller;
     await Clipboard.setData(ClipboardData(text: _buildMarkdown()));
     c.setStatus('已复制 Markdown Call 本到剪贴板');
   }
 
   Future<void> _shareMarkdown() async {
-    if (!await _promptEditorInfoBeforeExport()) return;
+    if (!await _promptEditorInfoBeforeExport(formatBadge: '文本分享')) return;
     try {
       await Share.share(
         _buildMarkdown(),
@@ -365,23 +520,68 @@ class _ExportViewState extends State<ExportView> {
             radius: 22,
             padding: const EdgeInsets.all(16),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  '演出现场速查卡 · 多格式导出中心',
-                  style: AppTextStyle.headline
-                      .of(context, emphasized: true)
-                      .copyWith(color: scheme.onSurface),
-                ),
-                const SizedBox(height: 6),
-                ValueListenableBuilder<String>(
-                  valueListenable: c.statusListenable,
-                  builder: (context, statusMessage, _) => Text(
-                    '$statusMessage · 支持 2.5x 无裁切高清 PNG 长图、双工作表 Excel (.xlsx)、JSON 工程与 Markdown。',
-                    style: AppTextStyle.subheadline.of(context).copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
-                  ),
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final titleColumn = Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          c.siteText('导出当前Callbook'),
+                          style: AppTextStyle.headline
+                              .of(context, emphasized: true)
+                              .copyWith(color: scheme.onSurface),
+                        ),
+                        const SizedBox(height: 4),
+                        ValueListenableBuilder<String>(
+                          valueListenable: c.statusListenable,
+                          builder: (context, statusMessage, _) => Text(
+                            '$statusMessage · 支持高清 PNG 长图、结构化 Excel 表、JSON 工程备份与 Markdown',
+                            style: AppTextStyle.caption1.of(context).copyWith(
+                              color: scheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                      ],
+                    );
+                    final jsonActions = Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        TonalChip(
+                          label: '导出 JSON',
+                          color: scheme.surfaceContainerHigh,
+                          foregroundColor: scheme.onSurface,
+                          onPressed: _copyJson,
+                        ),
+                        TonalChip(
+                          label: '导入工程',
+                          color: scheme.surfaceContainerHigh,
+                          foregroundColor: scheme.onSurface,
+                          onPressed: _importJsonFile,
+                        ),
+                      ],
+                    );
+                    if (constraints.maxWidth < 560) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          titleColumn,
+                          const SizedBox(height: 10),
+                          jsonActions,
+                        ],
+                      );
+                    }
+                    return Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(child: titleColumn),
+                        const SizedBox(width: 12),
+                        jsonActions,
+                      ],
+                    );
+                  },
                 ),
                 const SizedBox(height: 12),
                 Wrap(
@@ -389,13 +589,13 @@ class _ExportViewState extends State<ExportView> {
                   runSpacing: 8,
                   children: [
                     FilledButton.icon(
-                      onPressed: _exportingPng ? null : _exportQuickRefPng,
+                      onPressed: _exportingPng ? null : _exportCallbookPng,
                       icon: const GlyphIcon(CallbookGlyphs.exportCard, size: 17),
-                      label: Text(_exportingPng ? '渲染中...' : '导出 / 分享高清 PNG'),
+                      label: Text(_exportingPng ? '导出中...' : '生成 PNG 长图'),
                     ),
                     TonalButton(
                       size: TonalButtonSize.compact,
-                      label: _exportingXlsx ? '生成表格中...' : '导出 Excel (.xlsx)',
+                      label: _exportingXlsx ? '生成中...' : '导出 Excel (.xlsx)',
                       onPressed: _exportingXlsx ? null : _exportXlsx,
                     ),
                     TonalButton(
@@ -408,11 +608,6 @@ class _ExportViewState extends State<ExportView> {
                       size: TonalButtonSize.compact,
                       label: '分享文本',
                       onPressed: _shareMarkdown,
-                    ),
-                    TonalButton(
-                      size: TonalButtonSize.compact,
-                      label: '复制 JSON 工程',
-                      onPressed: _copyJson,
                     ),
                   ],
                 ),
@@ -431,7 +626,7 @@ class _ExportViewState extends State<ExportView> {
                   minWidth: constraints.maxWidth >= 560 ? 116.0 : 88.0,
                   maxWidth: constraints.maxWidth >= 560 ? 220.0 : 128.0,
                 );
-                return _QuickRefSheet(
+                return _CallbookSheet(
                   controller: c,
                   presetMap: presetMap,
                   forExport: false,
@@ -446,8 +641,8 @@ class _ExportViewState extends State<ExportView> {
   }
 }
 
-class _QuickRefSheet extends StatelessWidget {
-  const _QuickRefSheet({
+class _CallbookSheet extends StatelessWidget {
+  const _CallbookSheet({
     required this.controller,
     required this.presetMap,
     required this.forExport,
@@ -465,12 +660,30 @@ class _QuickRefSheet extends StatelessWidget {
     final lines = c.sortedLines;
     final meta = c.project.meta;
     final fontFamily = c.useGoogleSans ? 'GoogleSans' : null;
+    final displayTitle = meta.title.trim().isEmpty
+        ? '未命名 Call 本'
+        : meta.title.trim();
+    final displayArtist = meta.artist.trim().isEmpty
+        ? 'Unknown Artist'
+        : meta.artist.trim();
     final editorDisplay = meta.editorName.trim().isEmpty
         ? '未署名'
         : meta.editorName.trim();
     final editorNoteDisplay = meta.editorNote.trim().isEmpty
         ? '暂无编者语'
         : meta.editorNote.trim();
+
+    final usedIds = <String>{
+      for (final line in lines)
+        for (final tag in line.calls) tag.presetId,
+    };
+    final filteredPresets = c.allPresets
+        .where((p) => usedIds.contains(p.id))
+        .toList();
+    final legendPresets = filteredPresets.isNotEmpty
+        ? filteredPresets
+        : c.allPresets;
+
     final gtCount = lines.where((l) => c.getAlertForLine(l.id) != null).length;
     final updraftCount = lines.where((l) => l.tailUpdraft).length;
 
@@ -495,31 +708,20 @@ class _QuickRefSheet extends StatelessWidget {
             final titleAndEditor = Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'LIVE CALL QUICK-REF SHEET',
-                  style: TextStyle(
-                    fontFamily: 'GoogleSans',
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 1.2,
-                    color: Color(0xFF0061FF),
-                  ),
-                ),
-                const SizedBox(height: 4),
                 Text(
-                  meta.title,
+                  displayTitle,
                   style: const TextStyle(
-                    fontSize: 22,
+                    fontSize: 20,
                     fontWeight: FontWeight.w800,
                     color: Color(0xFF0F172A),
                   ),
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  meta.artist,
+                  displayArtist,
                   style: const TextStyle(
                     fontSize: 13,
-                    color: Color(0xFF475569),
+                    color: Color(0xFF64748B),
                   ),
                 ),
                 const SizedBox(height: 6),
@@ -574,44 +776,98 @@ class _QuickRefSheet extends StatelessWidget {
               ),
             );
 
-            final creditsBox = Container(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 12,
-                vertical: 10,
-              ),
-              decoration: const ShapeDecoration(
-                color: Color(0xFFF1F5F9),
-                shape: AppShape.lg,
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  _SheetCreditLine(
-                    label: '作曲',
-                    value: _formatCreditValue(meta.composer),
-                  ),
-                  const SizedBox(height: 2),
-                  _SheetCreditLine(
-                    label: '作词',
-                    value: _formatCreditValue(meta.lyricist),
-                  ),
-                  const SizedBox(height: 2),
-                  _SheetCreditLine(
-                    label: '演唱',
-                    value: _formatCreditValue(
-                      meta.vocalist,
-                      fallback: meta.artist,
+            final creditsBox = Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  alignment: WrapAlignment.end,
+                  children: [
+                    _CreditTagPill(
+                      role: '作曲',
+                      value: _formatCreditValue(meta.composer),
+                      fontFamily: fontFamily,
                     ),
-                  ),
-                  if (meta.showTuner) ...[
-                    const SizedBox(height: 2),
-                    _SheetCreditLine(
-                      label: '调教',
-                      value: _formatCreditValue(meta.tuner),
+                    _CreditTagPill(
+                      role: '作词',
+                      value: _formatCreditValue(meta.lyricist),
+                      fontFamily: fontFamily,
                     ),
                   ],
-                ],
+                ),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  alignment: WrapAlignment.end,
+                  children: [
+                    _CreditTagPill(
+                      role: '演唱',
+                      value: _formatCreditValue(
+                        meta.vocalist,
+                        fallback: meta.artist,
+                      ),
+                      background: const Color(0xFF0F172A),
+                      roleColor: const Color(0xFFCBD5E1),
+                      valueColor: const Color(0xFFFFFFFF),
+                      fontFamily: fontFamily,
+                    ),
+                    if (meta.showTuner)
+                      _CreditTagPill(
+                        role: '调教',
+                        value: _formatCreditValue(meta.tuner),
+                        background: const Color(0xFFEEF2FF),
+                        borderColor: const Color(0xFFC7D2FE),
+                        roleColor: const Color(0xFF6366F1),
+                        valueColor: const Color(0xFF3730A3),
+                        fontFamily: fontFamily,
+                      ),
+                  ],
+                ),
+              ],
+            );
+
+            final footerLeft = Text(
+              'Generated by CallbookMaker · Material 3',
+              softWrap: forExport ? false : true,
+              maxLines: forExport ? 1 : null,
+              style: TextStyle(
+                fontFamily: fontFamily ?? 'GoogleSans',
+                fontSize: 10,
+                color: const Color(0xFF94A3B8),
               ),
+            );
+
+            final footerStats = Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '共 ${lines.length} 句歌词 · $gtCount 句 GT 警报 · ',
+                  softWrap: forExport ? false : true,
+                  maxLines: forExport ? 1 : null,
+                  style: TextStyle(
+                    fontFamily: fontFamily ?? 'GoogleSans',
+                    fontFeatures: const [ui.FontFeature.tabularFigures()],
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    color: const Color(0xFF94A3B8),
+                  ),
+                ),
+                _TailUpdraftExportPill(fontFamily: fontFamily),
+                Text(
+                  ' $updraftCount 处',
+                  softWrap: forExport ? false : true,
+                  maxLines: forExport ? 1 : null,
+                  style: TextStyle(
+                    fontFamily: fontFamily ?? 'GoogleSans',
+                    fontFeatures: const [ui.FontFeature.tabularFigures()],
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    color: const Color(0xFF94A3B8),
+                  ),
+                ),
+              ],
             );
 
             return Column(
@@ -646,7 +902,7 @@ class _QuickRefSheet extends StatelessWidget {
                   runSpacing: 6,
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    for (final p in c.allPresets)
+                    for (final p in legendPresets)
                       CallBadgePill(preset: p, compact: true),
                     _ExportPill(
                       label: 'GT 警报',
@@ -664,29 +920,50 @@ class _QuickRefSheet extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 14),
-                for (final line in lines)
-                  _QuickRefLineRow(
-                    line: line,
-                    gtAlert: c.getAlertForLine(line.id),
-                    presetMap: presetMap,
-                    displayLayers: c.displayLayers,
-                    callColWidth: uniformCallColWidth,
-                    forExport: forExport,
-                    fontFamily: fontFamily,
+                if (lines.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 28),
+                    child: Center(
+                      child: Text(
+                        '暂无时间轴歌词内容',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF94A3B8),
+                        ),
+                      ),
+                    ),
+                  )
+                else
+                  for (final line in lines)
+                    _CallbookLineRow(
+                      line: line,
+                      gtAlert: c.getAlertForLine(line.id),
+                      presetMap: presetMap,
+                      displayLayers: c.displayLayers,
+                      callColWidth: uniformCallColWidth,
+                      forExport: forExport,
+                      fontFamily: fontFamily,
+                    ),
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.only(top: 10),
+                  decoration: const BoxDecoration(
+                    border: Border(
+                      top: BorderSide(color: Color(0xFFE2E8F0)),
+                    ),
                   ),
-                const SizedBox(height: 10),
-                Text(
-                  '共 ${lines.length} 句歌词 · $gtCount 句 GT 警报${updraftCount > 0 ? ' · $updraftCount 句尾句上升气流' : ''}',
-                  textAlign: TextAlign.right,
-                  softWrap: forExport ? false : true,
-                  maxLines: forExport ? 1 : null,
-                  style: TextStyle(
-                    fontFamily: fontFamily ?? 'GoogleSans',
-                    fontFeatures: const [ui.FontFeature.tabularFigures()],
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: const Color(0xFF64748B),
-                  ),
+                  child: wideSheet
+                      ? Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [footerLeft, footerStats],
+                        )
+                      : Wrap(
+                          spacing: 12,
+                          runSpacing: 6,
+                          alignment: WrapAlignment.spaceBetween,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [footerLeft, footerStats],
+                        ),
                 ),
               ],
             );
@@ -697,8 +974,70 @@ class _QuickRefSheet extends StatelessWidget {
   }
 }
 
-class _QuickRefLineRow extends StatelessWidget {
-  const _QuickRefLineRow({
+class _CreditTagPill extends StatelessWidget {
+  const _CreditTagPill({
+    required this.role,
+    required this.value,
+    this.background = const Color(0xFFF1F5F9),
+    this.borderColor,
+    this.roleColor = const Color(0xFF64748B),
+    this.valueColor = const Color(0xFF0F172A),
+    this.fontFamily,
+  });
+
+  final String role;
+  final String value;
+  final Color background;
+  final Color? borderColor;
+  final Color roleColor;
+  final Color valueColor;
+  final String? fontFamily;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+      decoration: ShapeDecoration(
+        color: background,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(999),
+          side: borderColor != null
+              ? BorderSide(color: borderColor!)
+              : BorderSide.none,
+        ),
+      ),
+      child: Text.rich(
+        TextSpan(
+          children: [
+            TextSpan(
+              text: '$role ',
+              style: TextStyle(
+                fontFamily: fontFamily,
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: roleColor,
+              ),
+            ),
+            TextSpan(
+              text: value,
+              style: TextStyle(
+                fontFamily: fontFamily,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: valueColor,
+              ),
+            ),
+          ],
+        ),
+        softWrap: false,
+        maxLines: 1,
+      ),
+    );
+  }
+}
+
+class _CallbookLineRow extends StatelessWidget {
+  const _CallbookLineRow({
     required this.line,
     required this.gtAlert,
     required this.presetMap,
@@ -1057,28 +1396,6 @@ class _TailUpdraftExportPill extends StatelessWidget {
       fontFamily: fontFamily,
       fontSize: 11,
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2.5),
-    );
-  }
-}
-
-class _SheetCreditLine extends StatelessWidget {
-  const _SheetCreditLine({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Text(
-      '$label：$value',
-      textAlign: TextAlign.right,
-      softWrap: false,
-      maxLines: 1,
-      style: const TextStyle(
-        fontSize: 12,
-        fontWeight: FontWeight.w600,
-        color: Color(0xFF334155),
-      ),
     );
   }
 }

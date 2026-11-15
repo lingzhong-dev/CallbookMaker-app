@@ -89,10 +89,7 @@ void main() {
           // Verify Hero card clock actually updated live via FramePositionUpdater.
           expect(controller.currentTimeMs, greaterThan(1000));
           expect(find.text('00:00.00'), findsNothing);
-          expect(
-            find.textContaining('PLAYING · BAR'),
-            findsOneWidget,
-          );
+          expect(find.text('Running'), findsOneWidget);
 
           // Verify ThemeCrossFade never captured an overlay snapshot during playback.
           final fadeLayer = tester.widget<Widget>(

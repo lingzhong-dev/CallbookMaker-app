@@ -11,6 +11,7 @@ import 'export_view.dart';
 import 'practice_overlay.dart';
 import 'theme_view.dart';
 import 'widgets/archive_switcher_dialog.dart';
+import 'widgets/audio_source_panel.dart';
 import 'widgets/call_badge_pill.dart';
 import 'widgets/callbook_glyphs.dart';
 
@@ -60,8 +61,8 @@ class _HomeShellState extends State<HomeShell> {
   ];
 
   String _pageTitle(StudioRoute r) => switch (r) {
-    StudioRoute.dashboard => 'Live Call 控制台',
-    StudioRoute.export => '速查卡与多格式导出',
+    StudioRoute.dashboard => 'Callbook Maker',
+    StudioRoute.export => '导出',
     StudioRoute.theme => '外观主题与 Prism 设计系统',
   };
 
@@ -181,7 +182,9 @@ class _HomeShellState extends State<HomeShell> {
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            '${c.project.meta.title} · ${c.project.meta.bpm} BPM (${c.project.meta.timeSignature})',
+                            c.route == StudioRoute.dashboard
+                                ? '为你的偶像写下Callbook吧！'
+                                : '${c.project.meta.title} · ${c.project.meta.bpm} BPM (${c.project.meta.timeSignature})',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: AppTextStyle.caption1.of(context).copyWith(
@@ -233,109 +236,85 @@ class _HomeShellState extends State<HomeShell> {
                         ),
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    GestureDetector(
-                      onTap: () => c.setPracticeMode(true),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                        decoration: ShapeDecoration(
-                          color: scheme.primary,
-                          shape: AppShape.full,
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            GlyphIcon(
-                              CallbookGlyphs.fullscreen,
-                              size: 15,
-                              color: scheme.onPrimary,
+                    if (isMobile) ...[
+                      const SizedBox(width: 6),
+                      Semantics(
+                        label: '导入音源或LRC',
+                        button: true,
+                        child: GestureDetector(
+                          onTap: () => showAudioSourceModal(context, c),
+                          child: Container(
+                            width: 34,
+                            height: 34,
+                            decoration: ShapeDecoration(
+                              color: scheme.surfaceContainerHigh,
+                              shape: AppShape.circle,
                             ),
-                            const SizedBox(width: 6),
-                            Text(
-                              c.siteText('演练'),
-                              style: AppTextStyle.caption1
-                                  .of(context, emphasized: true)
-                                  .copyWith(color: scheme.onPrimary),
+                            alignment: Alignment.center,
+                            child: GlyphIcon(
+                              CallbookGlyphs.musicNote,
+                              size: 16,
+                              color: scheme.primary,
                             ),
-                          ],
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 6),
-                    Semantics(
-                      label: c.backendOnline ? '后端在线' : '纯 Dart 直连',
-                      button: true,
-                      child: GestureDetector(
-                        onTap: () => c.refreshGatewayStatus(probeDirect: true),
+                      const SizedBox(width: 6),
+                      Semantics(
+                        label: isDark ? '切换浅色主题' : '切换深色主题',
+                        button: true,
+                        child: GestureDetector(
+                          onTap: () => c.setThemeMode(
+                            isDark ? ThemeMode.light : ThemeMode.dark,
+                          ),
+                          child: Container(
+                            width: 34,
+                            height: 34,
+                            decoration: ShapeDecoration(
+                              color: scheme.surfaceContainerHigh,
+                              shape: AppShape.circle,
+                            ),
+                            alignment: Alignment.center,
+                            child: GlyphIcon(
+                              CallbookGlyphs.theme,
+                              size: 16,
+                              color: scheme.onSurface,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      GestureDetector(
+                        onTap: () => c.setPracticeMode(true),
                         child: Container(
-                          height: 34,
-                          padding: EdgeInsets.symmetric(
-                            horizontal: isMobile ? 9 : 11,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 11,
+                            vertical: 8,
                           ),
                           decoration: ShapeDecoration(
-                            color: c.backendOnline
-                                ? scheme.successContainer
-                                : scheme.primaryContainer,
+                            color: scheme.primary,
                             shape: AppShape.full,
                           ),
-                          alignment: Alignment.center,
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               GlyphIcon(
-                                c.backendOnline
-                                    ? Glyphs.check
-                                    : CallbookGlyphs.musicNote,
+                                CallbookGlyphs.fullscreen,
                                 size: 14,
-                                color: c.backendOnline
-                                    ? scheme.onSuccessContainer
-                                    : scheme.onPrimaryContainer,
+                                color: scheme.onPrimary,
                               ),
-                              if (!isMobile) ...[
-                                const SizedBox(width: 5),
-                                Text(
-                                  c.backendOnline ? '后端在线' : '纯 Dart 直连',
-                                  style: AppTextStyle.caption2
-                                      .of(context, emphasized: true)
-                                      .copyWith(
-                                        color: c.backendOnline
-                                            ? scheme.onSuccessContainer
-                                            : scheme.onPrimaryContainer,
-                                      ),
-                                ),
-                              ],
+                              const SizedBox(width: 5),
+                              Text(
+                                c.siteText('演练'),
+                                style: AppTextStyle.caption1
+                                    .of(context, emphasized: true)
+                                    .copyWith(color: scheme.onPrimary),
+                              ),
                             ],
                           ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 6),
-                    Semantics(
-                      label: isDark ? '切换浅色主题' : '切换深色主题',
-                      button: true,
-                      child: GestureDetector(
-                        onTap: () => c.setThemeMode(
-                          isDark ? ThemeMode.light : ThemeMode.dark,
-                        ),
-                        child: Container(
-                          width: 34,
-                          height: 34,
-                          decoration: ShapeDecoration(
-                            color: scheme.surfaceContainerHigh,
-                            shape: AppShape.circle,
-                          ),
-                          alignment: Alignment.center,
-                          child: GlyphIcon(
-                            CallbookGlyphs.theme,
-                            size: 16,
-                            color: scheme.onSurface,
-                          ),
-                        ),
-                      ),
-                    ),
+                    ],
                   ],
                 ),
               );
@@ -371,11 +350,11 @@ class _HomeShellState extends State<HomeShell> {
                           destinations: [
                             SidebarDestination(
                               glyph: CallbookGlyphs.dashboard,
-                              label: c.siteText('控制台'),
+                              label: c.siteText('主页'),
                             ),
                             SidebarDestination(
                               glyph: CallbookGlyphs.exportCard,
-                              label: c.siteText('速查卡导出'),
+                              label: c.siteText('导出'),
                             ),
                             SidebarDestination(
                               glyph: CallbookGlyphs.theme,
@@ -386,6 +365,33 @@ class _HomeShellState extends State<HomeShell> {
                           expanded: c.sidebarExpanded,
                           onSelected: (idx) => c.setRoute(_routes[idx]),
                           onToggle: c.toggleSidebarExpanded,
+                          headerBuilder: (context, progress, expanded) =>
+                              Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Callbook Maker',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: AppTextStyle.subheadline
+                                        .of(context, emphasized: true)
+                                        .copyWith(color: scheme.onSurface),
+                                  ),
+                                  Text(
+                                    'By 澪终',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: AppTextStyle.caption2
+                                        .of(context)
+                                        .copyWith(
+                                          color: scheme.onSurfaceVariant,
+                                        ),
+                                  ),
+                                ],
+                              ),
+                          footerBuilder: (context, progress, expanded) =>
+                              _buildSidebarFooter(context, c, scheme, isDark, progress),
                         ),
                         Expanded(child: mainColumn),
                       ],
@@ -648,26 +654,97 @@ class _HomeShellState extends State<HomeShell> {
                                               ),
                                               const SizedBox(width: 10),
                                               Expanded(
-                                                child: ListenableBuilder(
-                                                  listenable:
-                                                      c.playbackListenable,
-                                                  builder: (context, _) => Text(
-                                                    '${formatMsToClock(c.currentTimeMs)} · ${c.project.meta.bpm} BPM · ${c.currentBar}.${c.currentBeatInBar}',
-                                                    maxLines: 1,
-                                                    overflow:
-                                                        TextOverflow.ellipsis,
-                                                    style: AppTextStyle.caption1
-                                                        .of(context)
-                                                        .copyWith(
-                                                          fontFamily:
-                                                              'GoogleSans',
-                                                          fontFeatures: const [
-                                                            FontFeature
-                                                                .tabularFigures(),
-                                                          ],
-                                                          color: scheme
-                                                              .onSurfaceVariant,
-                                                        ),
+                                                child: Column(
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.start,
+                                                  mainAxisSize:
+                                                      MainAxisSize.min,
+                                                  children: [
+                                                    Text(
+                                                      c.project.meta.title,
+                                                      maxLines: 1,
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
+                                                      style: AppTextStyle
+                                                          .caption1
+                                                          .of(
+                                                            context,
+                                                            emphasized: true,
+                                                          )
+                                                          .copyWith(
+                                                            color: scheme
+                                                                .onSurface,
+                                                          ),
+                                                    ),
+                                                    ListenableBuilder(
+                                                      listenable:
+                                                          c.playbackListenable,
+                                                      builder: (context, _) =>
+                                                          Text(
+                                                            '${formatMsToClock(c.currentTimeMs)} · ${c.project.meta.bpm} BPM · ${c.currentBar}.${c.currentBeatInBar}',
+                                                            maxLines: 1,
+                                                            overflow:
+                                                                TextOverflow
+                                                                    .ellipsis,
+                                                            style: AppTextStyle
+                                                                .caption2
+                                                                .of(context)
+                                                                .copyWith(
+                                                                  fontFamily:
+                                                                      'GoogleSans',
+                                                                  fontFeatures: const [
+                                                                    FontFeature
+                                                                        .tabularFigures(),
+                                                                  ],
+                                                                  color: scheme
+                                                                      .onSurfaceVariant,
+                                                                ),
+                                                          ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                              const SizedBox(width: 8),
+                                              GestureDetector(
+                                                onTap: () =>
+                                                    c.setPracticeMode(true),
+                                                child: Container(
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
+                                                        horizontal: 10,
+                                                        vertical: 6,
+                                                      ),
+                                                  decoration: ShapeDecoration(
+                                                    color:
+                                                        scheme.primaryContainer,
+                                                    shape: AppShape.full,
+                                                  ),
+                                                  child: Row(
+                                                    mainAxisSize:
+                                                        MainAxisSize.min,
+                                                    children: [
+                                                      GlyphIcon(
+                                                        CallbookGlyphs
+                                                            .fullscreen,
+                                                        size: 13,
+                                                        color: scheme
+                                                            .onPrimaryContainer,
+                                                      ),
+                                                      const SizedBox(width: 4),
+                                                      Text(
+                                                        c.siteText('演练'),
+                                                        style: AppTextStyle
+                                                            .caption1
+                                                            .of(
+                                                              context,
+                                                              emphasized: true,
+                                                            )
+                                                            .copyWith(
+                                                              color: scheme
+                                                                  .onPrimaryContainer,
+                                                            ),
+                                                      ),
+                                                    ],
                                                   ),
                                                 ),
                                               ),
@@ -685,7 +762,7 @@ class _HomeShellState extends State<HomeShell> {
                               destinations: [
                                 NavigationDockDestination(
                                   glyph: CallbookGlyphs.dashboard,
-                                  label: c.siteText('控制台'),
+                                  label: c.siteText('主页'),
                                 ),
                                 NavigationDockDestination(
                                   glyph: CallbookGlyphs.exportCard,
@@ -704,7 +781,7 @@ class _HomeShellState extends State<HomeShell> {
                               destinations: [
                                 (
                                   glyph: CallbookGlyphs.dashboard,
-                                  label: c.siteText('控制台'),
+                                  label: c.siteText('主页'),
                                 ),
                                 (
                                   glyph: CallbookGlyphs.exportCard,
@@ -729,6 +806,150 @@ class _HomeShellState extends State<HomeShell> {
           ),
         );
       },
+    );
+  }
+
+  Widget _buildSidebarFooter(
+    BuildContext context,
+    CallbookController c,
+    ColorScheme scheme,
+    bool isDark,
+    double progress,
+  ) {
+    if (progress <= 0.55) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _SidebarCompactIconBtn(
+            tooltip: '导入音源 / LRC',
+            glyph: CallbookGlyphs.musicNote,
+            fill: scheme.surfaceContainerHigh,
+            iconColor: scheme.primary,
+            onTap: () => showAudioSourceModal(context, c),
+          ),
+          const SizedBox(height: 6),
+          _SidebarCompactIconBtn(
+            tooltip: 'Call 本存档 · ${c.archives.length}',
+            glyph: CallbookGlyphs.archive,
+            fill: scheme.surfaceContainerHigh,
+            iconColor: scheme.primary,
+            onTap: () => showArchiveQuickSwitchDialog(context, c),
+          ),
+          const SizedBox(height: 6),
+          _SidebarCompactIconBtn(
+            tooltip: '${c.siteText('演练模式')} F',
+            glyph: CallbookGlyphs.fullscreen,
+            fill: scheme.primary,
+            iconColor: scheme.onPrimary,
+            onTap: () => c.setPracticeMode(true),
+          ),
+          const SizedBox(height: 6),
+          Semantics(
+            label: isDark ? '切换浅色主题' : '切换深色主题',
+            button: true,
+            child: _SidebarCompactIconBtn(
+              tooltip: isDark ? '切换到浅色模式' : '切换到深色模式',
+              glyph: CallbookGlyphs.theme,
+              fill: scheme.surfaceContainerHigh,
+              iconColor: scheme.onSurface,
+              onTap: () => c.setThemeMode(
+                isDark ? ThemeMode.light : ThemeMode.dark,
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _SidebarFooterAction(
+          glyph: CallbookGlyphs.musicNote,
+          label: '导入音源 / LRC',
+          background: scheme.surfaceContainerHigh,
+          foreground: scheme.onSurface,
+          iconColor: scheme.primary,
+          onTap: () => showAudioSourceModal(context, c),
+        ),
+        const SizedBox(height: 6),
+        _SidebarFooterAction(
+          glyph: CallbookGlyphs.archive,
+          label: 'Call 本存档 · ${c.archives.length}',
+          background: scheme.surfaceContainerHigh,
+          foreground: scheme.onSurface,
+          iconColor: scheme.primary,
+          onTap: () => showArchiveQuickSwitchDialog(context, c),
+        ),
+        const SizedBox(height: 6),
+        _SidebarFooterAction(
+          glyph: CallbookGlyphs.fullscreen,
+          label: '${c.siteText('演练模式')} F',
+          background: scheme.primary,
+          foreground: scheme.onPrimary,
+          iconColor: scheme.onPrimary,
+          onTap: () => c.setPracticeMode(true),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: GestureDetector(
+                onTap: () => c.refreshGatewayStatus(probeDirect: true),
+                behavior: HitTestBehavior.opaque,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: ShapeDecoration(
+                        color: c.backendOnline ? scheme.success : scheme.warning,
+                        shape: AppShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        c.backendOnline ? '后端在线' : '纯 Dart 直连',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTextStyle.caption2.of(context).copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            Semantics(
+              label: isDark ? '切换浅色主题' : '切换深色主题',
+              button: true,
+              child: GestureDetector(
+                onTap: () => c.setThemeMode(
+                  isDark ? ThemeMode.light : ThemeMode.dark,
+                ),
+                child: Container(
+                  width: 30,
+                  height: 30,
+                  decoration: ShapeDecoration(
+                    color: scheme.surfaceContainerHigh,
+                    shape: AppShape.circle,
+                  ),
+                  alignment: Alignment.center,
+                  child: GlyphIcon(
+                    CallbookGlyphs.theme,
+                    size: 15,
+                    color: scheme.onSurface,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }
@@ -890,6 +1111,94 @@ class _QuickTrayChip extends StatelessWidget {
                 .of(context, emphasized: true)
                 .copyWith(color: foreground),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SidebarFooterAction extends StatelessWidget {
+  const _SidebarFooterAction({
+    required this.glyph,
+    required this.label,
+    required this.background,
+    required this.foreground,
+    required this.iconColor,
+    required this.onTap,
+  });
+
+  final Glyph glyph;
+  final String label;
+  final Color background;
+  final Color foreground;
+  final Color iconColor;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: ElasticPress(
+        child: Container(
+          height: 36,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          decoration: ShapeDecoration(
+            color: background,
+            shape: AppShape.all(12),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              GlyphIcon(glyph, size: 15, color: iconColor),
+              const SizedBox(width: 7),
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTextStyle.caption1
+                      .of(context, emphasized: true)
+                      .copyWith(color: foreground),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SidebarCompactIconBtn extends StatelessWidget {
+  const _SidebarCompactIconBtn({
+    required this.tooltip,
+    required this.glyph,
+    required this.fill,
+    required this.iconColor,
+    required this.onTap,
+  });
+
+  final String tooltip;
+  final Glyph glyph;
+  final Color fill;
+  final Color iconColor;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: 36,
+          height: 36,
+          decoration: ShapeDecoration(
+            color: fill,
+            shape: AppShape.all(10),
+          ),
+          alignment: Alignment.center,
+          child: GlyphIcon(glyph, size: 16, color: iconColor),
         ),
       ),
     );
