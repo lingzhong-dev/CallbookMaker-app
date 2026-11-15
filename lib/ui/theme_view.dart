@@ -233,7 +233,7 @@ class ThemeView extends StatelessWidget {
                 const SizedBox(height: 10),
                 _SwitchTileRow(
                   title: '全局启用 Google Sans 字体',
-                  subtitle: '统一 UI 排版与速查卡导出字体，数字启用等宽对齐',
+                  subtitle: '统一 UI 排版与 Callbook 导出字体，数字启用等宽对齐',
                   value: c.useGoogleSans,
                   onChanged: c.setUseGoogleSans,
                 ),

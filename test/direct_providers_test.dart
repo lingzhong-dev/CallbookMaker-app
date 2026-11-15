@@ -597,6 +597,12 @@ void main() {
           await tester.pump();
           await tester.pump(const Duration(milliseconds: 50));
 
+          final gatewayHeader = find.text('网易云直连 & 可选后端服务');
+          await tester.ensureVisible(gatewayHeader);
+          await tester.tap(gatewayHeader);
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 50));
+
           expect(captured, isEmpty);
           expect(tester.takeException(), isNull);
           expect(find.text('纯 Dart 直连'), findsAtLeastNWidgets(1));
@@ -654,6 +660,17 @@ void main() {
           await tester.pump();
           await tester.pump(const Duration(milliseconds: 50));
 
+          final gatewayHeader = find.text('网易云直连 & 可选后端服务');
+          await tester.scrollUntilVisible(
+            gatewayHeader,
+            240,
+            scrollable: find.byType(Scrollable).first,
+          );
+          await tester.pump();
+          await tester.tap(gatewayHeader);
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 50));
+
           final target = find.text('验证并保存 Cookie（纯 Dart 直连）');
           await tester.scrollUntilVisible(
             target,
@@ -664,7 +681,7 @@ void main() {
 
           expect(captured, isEmpty);
           expect(tester.takeException(), isNull);
-          expect(find.text('网易云直连 & 可选后端服务'), findsOneWidget);
+          expect(gatewayHeader, findsOneWidget);
           expect(find.text('已登录: MobileMikuTester'), findsOneWidget);
           expect(find.text('检测直连状态'), findsOneWidget);
           expect(target, findsOneWidget);

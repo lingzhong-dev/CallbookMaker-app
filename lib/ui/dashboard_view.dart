@@ -1,13 +1,13 @@
 import 'dart:math' as math;
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
+import 'package:prism_ui/icons/icons.dart';
 import 'package:prism_ui/prism_ui.dart';
 
 import '../state/callbook_controller.dart';
 import '../utils/lrc_ruby_parser.dart';
-import 'widgets/archive_switcher_dialog.dart';
+import 'widgets/audio_source_panel.dart';
 import 'widgets/callbook_glyphs.dart';
 import 'widgets/line_sparkline.dart';
 import 'widgets/scalloped_orb_button.dart';
@@ -23,8 +23,11 @@ class DashboardView extends StatefulWidget {
 }
 
 class _DashboardViewState extends State<DashboardView> {
+  final GlobalKey _timelineKey = GlobalKey();
+
   late final TextEditingController _titleCtrl;
   late final TextEditingController _artistCtrl;
+  late final TextEditingController _bpmCtrl;
   late final TextEditingController _composerCtrl;
   late final TextEditingController _lyricistCtrl;
   late final TextEditingController _vocalistCtrl;
@@ -32,6 +35,7 @@ class _DashboardViewState extends State<DashboardView> {
   late final TextEditingController _editorNameCtrl;
   late final TextEditingController _editorNoteCtrl;
 
+  final FocusNode _bpmFocus = FocusNode();
   final FocusNode _composerFocus = FocusNode();
   final FocusNode _lyricistFocus = FocusNode();
   final FocusNode _vocalistFocus = FocusNode();
@@ -39,11 +43,6 @@ class _DashboardViewState extends State<DashboardView> {
   final FocusNode _editorNameFocus = FocusNode();
   final FocusNode _editorNoteFocus = FocusNode();
 
-  final TextEditingController _searchCtrl = TextEditingController(
-    text: 'Starlight',
-  );
-  final TextEditingController _lrcCtrl = TextEditingController();
-  final TextEditingController _transCtrl = TextEditingController();
   late final TextEditingController _backendCtrl;
   late final TextEditingController _gatewayUrlCtrl;
   late final TextEditingController _neteaseCookieCtrl;
@@ -54,7 +53,8 @@ class _DashboardViewState extends State<DashboardView> {
   String _lastSyncedGatewayUrl = '';
   String _lastSyncedCookie = '';
   bool _obscureCookie = true;
-  String _searchSource = 'auto';
+  bool _showOffsetTools = false;
+  bool _showGatewayCard = false;
   String _lastSyncedTitle = '';
   String _lastSyncedArtist = '';
 
@@ -66,6 +66,7 @@ class _DashboardViewState extends State<DashboardView> {
     _lastSyncedArtist = meta.artist;
     _titleCtrl = TextEditingController(text: _lastSyncedTitle);
     _artistCtrl = TextEditingController(text: _lastSyncedArtist);
+    _bpmCtrl = TextEditingController(text: '${meta.bpm}');
     _composerCtrl = TextEditingController(text: meta.composer);
     _lyricistCtrl = TextEditingController(text: meta.lyricist);
     _vocalistCtrl = TextEditingController(text: meta.vocalist);
@@ -111,6 +112,7 @@ class _DashboardViewState extends State<DashboardView> {
       _artistCtrl.text = meta.artist;
     }
     _lastSyncedArtist = meta.artist;
+    _syncFieldIfIdle(_bpmCtrl, _bpmFocus, '${meta.bpm}');
     _syncFieldIfIdle(_composerCtrl, _composerFocus, meta.composer);
     _syncFieldIfIdle(_lyricistCtrl, _lyricistFocus, meta.lyricist);
     _syncFieldIfIdle(_vocalistCtrl, _vocalistFocus, meta.vocalist);
@@ -123,12 +125,14 @@ class _DashboardViewState extends State<DashboardView> {
   void dispose() {
     _titleCtrl.dispose();
     _artistCtrl.dispose();
+    _bpmCtrl.dispose();
     _composerCtrl.dispose();
     _lyricistCtrl.dispose();
     _vocalistCtrl.dispose();
     _tunerCtrl.dispose();
     _editorNameCtrl.dispose();
     _editorNoteCtrl.dispose();
+    _bpmFocus.dispose();
     _composerFocus.dispose();
     _lyricistFocus.dispose();
     _vocalistFocus.dispose();
@@ -136,9 +140,6 @@ class _DashboardViewState extends State<DashboardView> {
     _editorNameFocus.dispose();
     _editorNoteFocus.dispose();
     widget.controller.removeListener(_syncNetworkControllers);
-    _searchCtrl.dispose();
-    _lrcCtrl.dispose();
-    _transCtrl.dispose();
     _backendCtrl.dispose();
     _gatewayUrlCtrl.dispose();
     _neteaseCookieCtrl.dispose();
@@ -148,18 +149,23 @@ class _DashboardViewState extends State<DashboardView> {
     super.dispose();
   }
 
-  Future<void> _pickLocalAudio() async {
-    final c = widget.controller;
-    final res = await FilePicker.platform.pickFiles(
-      type: FileType.audio,
-      withData: false,
-    );
-    if (res == null || res.files.isEmpty) return;
-    final file = res.files.first;
-    final path = file.path;
-    if (path != null && path.isNotEmpty) {
-      await c.loadLocalAudioFile(path, file.name);
+  void _scrollToTimeline() {
+    final ctx = _timelineKey.currentContext;
+    if (ctx != null) {
+      Scrollable.ensureVisible(
+        ctx,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOutCubic,
+      );
     }
+  }
+
+  void _commitBpmInput(CallbookController c, String raw) {
+    final parsed = int.tryParse(raw.trim());
+    if (parsed != null) {
+      c.setBpm(parsed);
+    }
+    _bpmCtrl.text = '${c.project.meta.bpm}';
   }
 
   @override
@@ -170,81 +176,72 @@ class _DashboardViewState extends State<DashboardView> {
     final bottomInset = BottomInsetScope.of(context);
     final safeDuration = math.max(1000, c.durationMs).toDouble();
     final clampedPos = c.currentTimeMs.toDouble().clamp(0.0, safeDuration);
-    final coveragePct = c.project.lines.isEmpty
-        ? 0
-        : ((c.taggedLineCount / c.project.lines.length) * 100).round();
 
     return SingleChildScrollView(
       padding: EdgeInsets.fromLTRB(16, 4, 16, 20 + bottomInset),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final wide = constraints.maxWidth >= 900;
-              final heroCard = _buildHeroCard(
-                context,
-                c,
-                scheme,
-                safeDuration,
-                clampedPos,
-              );
-              final rightGrid = _buildMetricsBento(
-                context,
-                c,
-                scheme,
-                coveragePct,
-              );
-              if (wide) {
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(flex: 5, child: heroCard),
-                    const SizedBox(width: 12),
-                    Expanded(flex: 7, child: rightGrid),
-                  ],
-                );
-              }
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  heroCard,
-                  const SizedBox(height: 12),
-                  rightGrid,
-                ],
-              );
-            },
-          ),
-          const SizedBox(height: 12),
-          _buildControlStrip(context, c, scheme),
-          const SizedBox(height: 12),
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final twoCols = constraints.maxWidth >= 960;
-              final sourceColumn = _buildSourceAndLrcColumn(context, c, scheme);
-              final timeline = TimelineEditorWidget(controller: c, compact: true);
-              if (twoCols) {
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(flex: 4, child: sourceColumn),
-                    const SizedBox(width: 12),
-                    Expanded(flex: 7, child: timeline),
-                  ],
-                );
-              }
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  sourceColumn,
-                  const SizedBox(height: 12),
-                  timeline,
-                ],
-              );
-            },
-          ),
-        ],
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final twoCols = constraints.maxWidth >= 960;
+          final leftColumn = _buildLeftControlColumn(
+            context,
+            c,
+            scheme,
+            safeDuration,
+            clampedPos,
+          );
+          final timeline = KeyedSubtree(
+            key: _timelineKey,
+            child: TimelineEditorWidget(controller: c, compact: true),
+          );
+          if (twoCols) {
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(flex: 4, child: leftColumn),
+                const SizedBox(width: 16),
+                Expanded(flex: 8, child: timeline),
+              ],
+            );
+          }
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              leftColumn,
+              const SizedBox(height: 12),
+              timeline,
+            ],
+          );
+        },
       ),
+    );
+  }
+
+  Widget _buildLeftControlColumn(
+    BuildContext context,
+    CallbookController c,
+    ColorScheme scheme,
+    double safeDuration,
+    double clampedPos,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildHeroCard(context, c, scheme, safeDuration, clampedPos),
+        const SizedBox(height: 12),
+        _buildCreditsAndEditorCard(context, c, scheme),
+        const SizedBox(height: 12),
+        _buildAudioSettingsCard(context, c, scheme),
+        const SizedBox(height: 12),
+        _buildBpmSparkCard(context, c, scheme),
+        const SizedBox(height: 12),
+        _buildCoverageSparkCard(context, c, scheme),
+        const SizedBox(height: 12),
+        _buildExportJumpCard(context, c, scheme),
+        const SizedBox(height: 12),
+        AudioSourcePanel(controller: c),
+        const SizedBox(height: 12),
+        _buildGatewayConfigCard(context, c, scheme),
+      ],
     );
   }
 
@@ -285,231 +282,6 @@ class _DashboardViewState extends State<DashboardView> {
     widget.controller.setStatus('已粘贴 Cookie，点击下方按钮验证并保存即可生效');
   }
 
-  Widget _buildGatewayConfigCard(
-    BuildContext context,
-    CallbookController c,
-    ColorScheme scheme,
-  ) {
-    final gw = c.gatewayStatus;
-    final isDesktop = c.isDesktopHost;
-    final account = gw.neteaseAccount?.trim() ?? '';
-    final backendNodeGatewayActive =
-        c.backendOnline && (gw.managedByBackend || (gw.gatewayOnline && gw.nodeAvailable));
-    return Card(
-      inert: true,
-      radius: 22,
-      padding: const EdgeInsets.all(14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            '网易云直连 & 可选后端服务',
-            style: AppTextStyle.subheadline
-                .of(context, emphasized: true)
-                .copyWith(color: scheme.onSurface),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            c.backendOnline
-                ? '已连接 FastAPI 后端（日语假名/罗马音注音可用）；未开 Node 网关时自动使用内置纯 Dart 引擎直连'
-                : '免 Node / 免后端：App 内置纯 Dart EAPI 引擎直接检索网易云与 LRCLIB；粘贴 MUSIC_U 可登录账号，可选连接 FastAPI 获取假名注音',
-            style: AppTextStyle.caption1.of(context).copyWith(
-              color: scheme.onSurfaceVariant,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
-            children: [
-              TonalChip(
-                label: '纯 Dart 直连',
-                color: scheme.primaryContainer,
-                foregroundColor: scheme.onPrimaryContainer,
-              ),
-              TonalChip(
-                label: c.backendOnline ? '后端注音在线' : '后端未连 (可选)',
-                color: c.backendOnline
-                    ? scheme.successContainer
-                    : scheme.surfaceContainerHigh,
-                foregroundColor: c.backendOnline
-                    ? scheme.onSuccessContainer
-                    : scheme.onSurfaceVariant,
-              ),
-              if (backendNodeGatewayActive)
-                TonalChip(
-                  label: 'Node 网关运行中',
-                  color: scheme.successContainer,
-                  foregroundColor: scheme.onSuccessContainer,
-                ),
-              if (account.isNotEmpty)
-                TonalChip(
-                  label: '已登录: $account',
-                  color: scheme.successContainer,
-                  foregroundColor: scheme.onSuccessContainer,
-                )
-              else if (gw.cookieConfigured)
-                TonalChip(
-                  label: '已存 Cookie',
-                  color: scheme.secondaryContainer,
-                  foregroundColor: scheme.onSecondaryContainer,
-                ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _backendCtrl,
-                  focusNode: _backendUrlFocus,
-                  decoration: const InputDecoration(
-                    hintText: '可选 FastAPI 地址：桌面 127.0.0.1:8000 / 模拟器 10.0.2.2:8000',
-                  ),
-                  onSubmitted: (v) => c.setBackendUrl(v),
-                ),
-              ),
-              const SizedBox(width: 8),
-              TonalButton(
-                size: TonalButtonSize.compact,
-                label: '连接',
-                onPressed: () => c.setBackendUrl(_backendCtrl.text),
-              ),
-              if (isDesktop && !c.backendOnline) ...[
-                const SizedBox(width: 8),
-                TonalButton(
-                  size: TonalButtonSize.compact,
-                  label: c.isLaunchingBackend ? '启动中' : '启动后端',
-                  onPressed: c.isLaunchingBackend
-                      ? null
-                      : c.launchLocalBackendOnDesktop,
-                ),
-              ],
-            ],
-          ),
-          if (c.backendOnline) ...[
-            const SizedBox(height: 8),
-            TextField(
-              controller: _gatewayUrlCtrl,
-              focusNode: _gatewayUrlFocus,
-              decoration: const InputDecoration(
-                hintText: '可选后端网关地址（默认 http://127.0.0.1:3000）',
-              ),
-            ),
-          ],
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  '网易云 Cookie（可选：支持完整 Cookie 或 MUSIC_U）',
-                  style: AppTextStyle.caption1
-                      .of(context, emphasized: true)
-                      .copyWith(color: scheme.onSurface),
-                ),
-              ),
-              if (gw.cookieConfigured && gw.cookieMasked.isNotEmpty)
-                Text(
-                  '已存: ${gw.cookieMasked}',
-                  style: AppTextStyle.caption1.of(context).copyWith(
-                    color: scheme.onSurfaceVariant,
-                    fontFeatures: const [FontFeature.tabularFigures()],
-                  ),
-                ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          TextField(
-            controller: _neteaseCookieCtrl,
-            focusNode: _neteaseCookieFocus,
-            obscureText: _obscureCookie,
-            maxLines: _obscureCookie ? 1 : 3,
-            minLines: 1,
-            decoration: const InputDecoration(
-              hintText: '粘贴 MUSIC_U=... 完整 Cookie 或纯 MUSIC_U 字符串（留空即游客直连）',
-            ),
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              TonalButton(
-                size: TonalButtonSize.compact,
-                label: '粘贴 Cookie',
-                onPressed: _pasteCookieFromClipboard,
-              ),
-              TonalButton(
-                size: TonalButtonSize.compact,
-                label: _obscureCookie ? '显示明文' : '隐藏 Cookie',
-                onPressed: () =>
-                    setState(() => _obscureCookie = !_obscureCookie),
-              ),
-              TonalButton(
-                size: TonalButtonSize.compact,
-                label: '清空输入',
-                onPressed: () => setState(() => _neteaseCookieCtrl.clear()),
-              ),
-              TonalButton(
-                size: TonalButtonSize.compact,
-                label: '检测直连状态',
-                onPressed: () => c.refreshGatewayStatus(probeDirect: true),
-              ),
-              if (c.backendOnline && gw.managedByBackend)
-                TonalButton(
-                  size: TonalButtonSize.compact,
-                  label: '停止网关',
-                  onPressed:
-                      c.isConfiguringGateway ? null : c.stopManagedGateway,
-                ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          FilledButton(
-            onPressed: c.isConfiguringGateway
-                ? null
-                : () async {
-                    final ok = await c.oneClickConfigureAndStartGateway(
-                      cookie: _neteaseCookieCtrl.text,
-                      gatewayUrl: _gatewayUrlCtrl.text,
-                    );
-                    if (ok && mounted) {
-                      setState(() => _searchSource = 'custom_proxy');
-                    }
-                  },
-            child: Text(
-              c.isConfiguringGateway
-                  ? '正在验证与配置...'
-                  : (c.backendOnline && gw.nodeAvailable && gw.packageAvailable
-                        ? '一键写入 Cookie 并启动网关'
-                        : '验证并保存 Cookie（纯 Dart 直连）'),
-            ),
-          ),
-          if (gw.message.isNotEmpty || gw.pid != null) ...[
-            const SizedBox(height: 8),
-            Text(
-              '${gw.message}${gw.pid != null ? ' (PID ${gw.pid})' : ''}',
-              style: AppTextStyle.caption1.of(context).copyWith(
-                color: scheme.onSurfaceVariant,
-              ),
-            ),
-          ],
-          if (c.backendOnline &&
-              !gw.gatewayOnline &&
-              (!gw.nodeAvailable || !gw.packageAvailable)) ...[
-            const SizedBox(height: 4),
-            Text(
-              '提示：FastAPI 后端未配置 Node 网关，App 将直接使用内置纯 Dart 引擎直连网易云（同时保留后端注音增强）。',
-              style: AppTextStyle.caption1.of(context).copyWith(
-                color: scheme.onSurfaceVariant,
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
   Widget _buildHeroCard(
     BuildContext context,
     CallbookController c,
@@ -518,137 +290,155 @@ class _DashboardViewState extends State<DashboardView> {
     double clampedPos,
   ) {
     final beats = c.project.meta.beatsPerBar;
+    final sourceModeLabel = c.project.meta.audioUrl.isNotEmpty
+        ? (c.project.meta.platform == 'local' ? '本地音频' : '在线音源')
+        : '合成节拍 Demo';
+    final offsetMs = c.project.meta.offsetMs;
+
     return Card(
       inert: true,
       radius: 26,
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(16),
       child: Stack(
         clipBehavior: Clip.none,
         children: [
           Positioned(
-            right: -28,
-            bottom: -36,
+            right: -24,
+            top: -32,
             child: IgnorePointer(
-              child: ScallopedHeroWatermark(running: c.isPlaying, size: 172),
+              child: ScallopedHeroWatermark(running: c.isPlaying, size: 150),
             ),
           ),
           Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Wrap(
-                spacing: 8,
-                runSpacing: 6,
-                alignment: WrapAlignment.spaceBetween,
-                crossAxisAlignment: WrapCrossAlignment.center,
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  TonalChip(
-                    label: c.isPlaying
-                        ? 'PLAYING · BAR ${c.currentBar}.${c.currentBeatInBar}'
-                        : 'READY · ${c.project.meta.platform.toUpperCase()}',
-                    color: c.isPlaying
-                        ? scheme.primaryContainer
-                        : scheme.surfaceContainerHigh,
-                    foregroundColor: c.isPlaying
-                        ? scheme.onPrimaryContainer
-                        : scheme.onSurfaceVariant,
+                  Expanded(
+                    child: Wrap(
+                      spacing: 6,
+                      runSpacing: 4,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        Text(
+                          c.siteText('播放状态'),
+                          style: AppTextStyle.caption1
+                              .of(context, emphasized: true)
+                              .copyWith(color: scheme.onSurfaceVariant),
+                        ),
+                        TonalChip(
+                          label: c.isPlaying ? 'Running' : 'Standby',
+                          color: c.isPlaying
+                              ? scheme.successContainer
+                              : scheme.surfaceContainerHigh,
+                          foregroundColor: c.isPlaying
+                              ? scheme.onSuccessContainer
+                              : scheme.onSurfaceVariant,
+                        ),
+                        TonalChip(
+                          label: sourceModeLabel,
+                          color: scheme.primaryContainer,
+                          foregroundColor: scheme.onPrimaryContainer,
+                        ),
+                      ],
+                    ),
                   ),
-                  TonalButton(
-                    size: TonalButtonSize.compact,
-                    glyph: CallbookGlyphs.fullscreen,
-                    label: '舞台演练',
-                    onPressed: () => c.setPracticeMode(true),
+                  const SizedBox(width: 6),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      for (var b = 1; b <= beats; b++) ...[
+                        AnimatedContainer(
+                          duration: const Duration(milliseconds: 110),
+                          width: 9,
+                          height: 9,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: c.isPlaying && c.currentBeatInBar == b
+                                ? (b == 1 ? scheme.error : scheme.primary)
+                                : scheme.surfaceContainerHighest,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                      ],
+                      const SizedBox(width: 2),
+                      Text(
+                        '${c.currentBar}.${c.currentBeatInBar}',
+                        style: AppTextStyle.caption1
+                            .of(context, emphasized: true)
+                            .copyWith(
+                              fontFamily: 'GoogleSans',
+                              fontFeatures: const [
+                                FontFeature.tabularFigures(),
+                              ],
+                              color: scheme.onSurfaceVariant,
+                            ),
+                      ),
+                    ],
                   ),
                 ],
               ),
               const SizedBox(height: 12),
-              TextField(
-                controller: _titleCtrl,
-                decoration: const InputDecoration.collapsed(hintText: '曲目标题'),
-                onChanged: (v) {
-                  _lastSyncedTitle = v;
-                  c.updateMeta(title: v);
-                },
-              ),
-              const SizedBox(height: 6),
-              TextField(
-                controller: _artistCtrl,
-                decoration: const InputDecoration.collapsed(hintText: '艺人 / 团体'),
-                onChanged: (v) {
-                  _lastSyncedArtist = v;
-                  c.updateMeta(artist: v);
-                },
-              ),
-              const SizedBox(height: 16),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  ScallopedOrbButton(
-                    running: c.isPlaying,
-                    size: 84,
-                    onToggle: c.togglePlay,
-                  ),
-                  const SizedBox(width: 16),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          formatMsToClock(c.currentTimeMs),
-                          style: AppTextStyle.title1
+                        TextField(
+                          controller: _titleCtrl,
+                          style: AppTextStyle.headline
                               .of(context, emphasized: true)
-                              .copyWith(
-                                fontFamily: 'GoogleSans',
-                                fontFeatures: const [
-                                  FontFeature.tabularFigures(),
-                                ],
-                                color: scheme.onSurface,
-                              ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          '/ ${formatMsToClock(safeDuration.round())} · ${c.statusMessage}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: AppTextStyle.caption1.of(context).copyWith(
-                            color: scheme.onSurfaceVariant,
+                              .copyWith(color: scheme.onSurface),
+                          decoration: const InputDecoration.collapsed(
+                            hintText: '输入当前歌曲名称',
                           ),
+                          onChanged: (v) {
+                            _lastSyncedTitle = v;
+                            c.updateMeta(title: v);
+                          },
                         ),
-                        const SizedBox(height: 10),
-                        Row(
+                        const SizedBox(height: 6),
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          crossAxisAlignment: WrapCrossAlignment.center,
                           children: [
-                            for (var b = 1; b <= beats; b++) ...[
-                              AnimatedContainer(
-                                duration: const Duration(milliseconds: 110),
-                                width: b == 1 ? 14 : 11,
-                                height: b == 1 ? 14 : 11,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: c.isPlaying && c.currentBeatInBar == b
-                                      ? (b == 1
-                                            ? scheme.primary
-                                            : scheme.secondary)
-                                      : scheme.surfaceContainerHighest,
+                            ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 160),
+                              child: TextField(
+                                controller: _artistCtrl,
+                                style: AppTextStyle.caption1
+                                    .of(context)
+                                    .copyWith(color: scheme.onSurfaceVariant),
+                                decoration: const InputDecoration.collapsed(
+                                  hintText: '歌手 / 企划',
                                 ),
+                                onChanged: (v) {
+                                  _lastSyncedArtist = v;
+                                  c.updateMeta(artist: v);
+                                },
                               ),
-                              const SizedBox(width: 6),
-                            ],
-                            const Spacer(),
-                            Text(
-                              '${c.project.meta.bpm} BPM',
-                              style: AppTextStyle.caption1
-                                  .of(context, emphasized: true)
-                                  .copyWith(
-                                    fontFamily: 'GoogleSans',
-                                    fontFeatures: const [
-                                      FontFeature.tabularFigures(),
-                                    ],
-                                    color: scheme.primary,
-                                  ),
+                            ),
+                            TonalChip(
+                              label: '切换曲库 / 导入',
+                              color: scheme.surfaceContainerHigh,
+                              foregroundColor: scheme.primary,
+                              onPressed: () =>
+                                  showAudioSourceModal(context, c),
                             ),
                           ],
                         ),
                       ],
                     ),
+                  ),
+                  const SizedBox(width: 12),
+                  ScallopedOrbButton(
+                    running: c.isPlaying,
+                    size: 58,
+                    onToggle: c.togglePlay,
                   ),
                 ],
               ),
@@ -659,393 +449,144 @@ class _DashboardViewState extends State<DashboardView> {
                 max: safeDuration,
                 onChanged: (v) => c.seek(v.round()),
               ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildMetricsBento(
-    BuildContext context,
-    CallbookController c,
-    ColorScheme scheme,
-    int coveragePct,
-  ) {
-    final bpmCard = Card(
-      inert: true,
-      radius: 22,
-      padding: EdgeInsets.zero,
-      child: ClipRRect(
-        borderRadius: AppRadius.xl,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          '节拍同步 · ${c.project.meta.bpm} BPM',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: AppTextStyle.subheadline
-                              .of(context, emphasized: true)
-                              .copyWith(color: scheme.onSurface),
-                        ),
-                      ),
-                      TonalChip(
-                        label: 'Tap 测速',
-                        color: scheme.primaryContainer,
-                        foregroundColor: scheme.onPrimaryContainer,
-                        onPressed: c.tapTempo,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      SizedBox(
-                        width: 112,
-                        child: SegmentedControl<String>(
-                          segments: const [('4/4', '4/4'), ('3/4', '3/4')],
-                          value: c.project.meta.timeSignature,
-                          onChanged: c.setTimeSignature,
-                        ),
-                      ),
-                      TonalChip(
-                        label: '-5',
-                        color: scheme.surfaceContainerHigh,
-                        foregroundColor: scheme.onSurface,
-                        onPressed: () => c.setBpm(c.project.meta.bpm - 5),
-                      ),
-                      TonalChip(
-                        label: '+5',
-                        color: scheme.surfaceContainerHigh,
-                        foregroundColor: scheme.onSurface,
-                        onPressed: () => c.setBpm(c.project.meta.bpm + 5),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            SparklineMetricFooter(
-              values: c.beatPulseSeries,
-              revision: c.beatSeriesRevision,
-              color: scheme.primary,
-              height: 48,
-            ),
-          ],
-        ),
-      ),
-    );
-
-    final coverageCard = Card(
-      inert: true,
-      radius: 22,
-      padding: EdgeInsets.zero,
-      child: ClipRRect(
-        borderRadius: AppRadius.xl,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          '打标覆盖率 · $coveragePct%',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: AppTextStyle.subheadline
-                              .of(context, emphasized: true)
-                              .copyWith(color: scheme.onSurface),
-                        ),
-                      ),
-                      TonalChip(
-                        label: '${c.sortedAlerts.length} GT 警报',
-                        color: scheme.warningContainer,
-                        foregroundColor: scheme.onWarningContainer,
-                        onPressed: () => c.insertGtAlert(),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
                   Text(
-                    '${c.taggedLineCount} / ${c.project.lines.length} 行已配置 Call 动作 · 点击下方时间轴即可贴标',
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
+                    formatMsToClock(c.currentTimeMs),
                     style: AppTextStyle.caption1.of(context).copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            SparklineMetricFooter(
-              values: c.callDensitySeries,
-              revision: c.callDensityRevision,
-              color: scheme.tertiary,
-              height: 48,
-            ),
-          ],
-        ),
-      ),
-    );
-
-    final metroCard = Card(
-      inert: true,
-      radius: 20,
-      padding: const EdgeInsets.all(14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  '节拍器音频 (${(c.metronomeVolume * 100).round()}%)',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppTextStyle.subheadline
-                      .of(context, emphasized: true)
-                      .copyWith(color: scheme.onSurface),
-                ),
-              ),
-              TonalChip(
-                label: '试听',
-                color: scheme.secondaryContainer,
-                foregroundColor: scheme.onSecondaryContainer,
-                onPressed: c.testMetronomeClick,
-              ),
-              const SizedBox(width: 8),
-              Switch(
-                value: c.metronomeEnabled,
-                onChanged: c.setMetronomeEnabled,
-                semanticLabel: '开启节拍器',
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Slider(
-            value: c.metronomeVolume,
-            min: 0.2,
-            max: 1.5,
-            onChanged: c.setMetronomeVolume,
-          ),
-        ],
-      ),
-    );
-
-    final stageCard = Card(
-      inert: true,
-      radius: 20,
-      padding: const EdgeInsets.all(14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  'GT 警报提示音',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppTextStyle.subheadline
-                      .of(context, emphasized: true)
-                      .copyWith(color: scheme.onSurface),
-                ),
-              ),
-              Switch(
-                value: c.gtBeepEnabled,
-                onChanged: c.setGtBeepEnabled,
-                semanticLabel: 'GT 警报提示音',
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: TonalButton(
-                  size: TonalButtonSize.compact,
-                  glyph: CallbookGlyphs.exportCard,
-                  label: '速查卡与导出中心',
-                  onPressed: () => c.setRoute(StudioRoute.export),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-
-    return LayoutBuilder(
-      builder: (_, box) {
-        if (box.maxWidth >= 500) {
-          return Column(
-            children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(child: bpmCard),
-                  const SizedBox(width: 12),
-                  Expanded(child: coverageCard),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(child: metroCard),
-                  const SizedBox(width: 12),
-                  Expanded(child: stageCard),
-                ],
-              ),
-            ],
-          );
-        }
-        return Column(
-          children: [
-            bpmCard,
-            const SizedBox(height: 12),
-            coverageCard,
-            const SizedBox(height: 12),
-            metroCard,
-            const SizedBox(height: 12),
-            stageCard,
-          ],
-        );
-      },
-    );
-  }
-
-  Widget _buildControlStrip(
-    BuildContext context,
-    CallbookController c,
-    ColorScheme scheme,
-  ) {
-    return Card(
-      inert: true,
-      radius: 20,
-      padding: const EdgeInsets.all(14),
-      child: Wrap(
-        spacing: 14,
-        runSpacing: 10,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        children: [
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                '倍速',
-                style: AppTextStyle.caption1.of(context).copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
-              ),
-              const SizedBox(width: 8),
-              SizedBox(
-                width: 260,
-                child: SegmentedControl<double>(
-                  segments: const [
-                    (0.5, '0.5×'),
-                    (0.75, '0.75×'),
-                    (1.0, '1.0×'),
-                    (1.1, '1.1×'),
-                    (1.25, '1.25×'),
-                  ],
-                  value: c.playbackRate,
-                  onChanged: c.setPlaybackRate,
-                ),
-              ),
-            ],
-          ),
-          Wrap(
-            spacing: 4,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              Text(
-                '偏移 ${c.project.meta.offsetMs >= 0 ? "+" : ""}${c.project.meta.offsetMs}ms',
-                style: AppTextStyle.caption1
-                    .of(context, emphasized: true)
-                    .copyWith(
                       fontFamily: 'GoogleSans',
                       fontFeatures: const [FontFeature.tabularFigures()],
                       color: scheme.onSurfaceVariant,
                     ),
+                  ),
+                  Text(
+                    formatMsToClock(safeDuration.round()),
+                    style: AppTextStyle.caption1.of(context).copyWith(
+                      fontFamily: 'GoogleSans',
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(width: 4),
-              for (final delta in const [-100, -20])
-                TonalChip(
-                  label: '$delta',
-                  color: scheme.surfaceContainerHigh,
-                  foregroundColor: scheme.onSurface,
-                  onPressed: () => c.adjustOffset(delta),
-                ),
-              TonalChip(
-                label: '归零',
-                color: scheme.surfaceContainerHigh,
-                foregroundColor: scheme.onSurface,
-                onPressed: () => c.setOffset(0),
+              const SizedBox(height: 10),
+              const Divider(height: 1),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '播放倍速与校准偏移',
+                      style: AppTextStyle.caption1
+                          .of(context, emphasized: true)
+                          .copyWith(color: scheme.onSurfaceVariant),
+                    ),
+                  ),
+                  TonalChip(
+                    label:
+                        '首拍 ${offsetMs > 0 ? "+" : ""}${offsetMs}ms ${_showOffsetTools ? "▴" : "▾"}',
+                    color: scheme.surfaceContainerHigh,
+                    foregroundColor: scheme.onSurface,
+                    onPressed: () =>
+                        setState(() => _showOffsetTools = !_showOffsetTools),
+                  ),
+                ],
               ),
-              for (final delta in const [20, 100])
-                TonalChip(
-                  label: '+$delta',
-                  color: scheme.surfaceContainerHigh,
-                  foregroundColor: scheme.onSurface,
-                  onPressed: () => c.adjustOffset(delta),
-                ),
-            ],
-          ),
-          Wrap(
-            spacing: 6,
-            children: [
-              TonalChip(
-                label: '注音 Ruby',
-                color: c.displayLayers.showRuby
-                    ? scheme.primaryContainer
-                    : scheme.surfaceContainerHigh,
-                foregroundColor: c.displayLayers.showRuby
-                    ? scheme.onPrimaryContainer
-                    : scheme.onSurfaceVariant,
-                onPressed: () =>
-                    c.updateDisplayLayers(showRuby: !c.displayLayers.showRuby),
+              const SizedBox(height: 8),
+              SegmentedControl<double>(
+                segments: const [
+                  (0.5, '0.5×'),
+                  (0.75, '0.75×'),
+                  (1.0, '1.0×'),
+                  (1.1, '1.1×'),
+                  (1.25, '1.25×'),
+                ],
+                value: c.playbackRate,
+                onChanged: c.setPlaybackRate,
               ),
-              TonalChip(
-                label: '罗马音',
-                color: c.displayLayers.showRomaji
-                    ? scheme.primaryContainer
-                    : scheme.surfaceContainerHigh,
-                foregroundColor: c.displayLayers.showRomaji
-                    ? scheme.onPrimaryContainer
-                    : scheme.onSurfaceVariant,
-                onPressed: () => c.updateDisplayLayers(
-                  showRomaji: !c.displayLayers.showRomaji,
+              if (_showOffsetTools) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    for (final delta in const [-100, -20]) ...[
+                      Expanded(
+                        child: _OffsetChipButton(
+                          label: '$delta',
+                          color: scheme.surfaceContainerLow,
+                          foreground: scheme.onSurface,
+                          onTap: () => c.adjustOffset(delta),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                    ],
+                    Expanded(
+                      child: _OffsetChipButton(
+                        label: '归零',
+                        color: scheme.surfaceContainerLow,
+                        foreground: scheme.onSurfaceVariant,
+                        onTap: () => c.setOffset(0),
+                      ),
+                    ),
+                    for (final delta in const [20, 100]) ...[
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: _OffsetChipButton(
+                          label: '+$delta',
+                          color: scheme.surfaceContainerLow,
+                          foreground: scheme.onSurface,
+                          onTap: () => c.adjustOffset(delta),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
-              ),
-              TonalChip(
-                label: '译文',
-                color: c.displayLayers.showTranslation
-                    ? scheme.primaryContainer
-                    : scheme.surfaceContainerHigh,
-                foregroundColor: c.displayLayers.showTranslation
-                    ? scheme.onPrimaryContainer
-                    : scheme.onSurfaceVariant,
-                onPressed: () => c.updateDisplayLayers(
-                  showTranslation: !c.displayLayers.showTranslation,
-                ),
+              ],
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  TonalChip(
+                    label:
+                        '${c.displayLayers.showRuby ? "✓ " : ""}日语注音 (Furigana)',
+                    color: c.displayLayers.showRuby
+                        ? scheme.primaryContainer
+                        : scheme.surfaceContainerHigh,
+                    foregroundColor: c.displayLayers.showRuby
+                        ? scheme.onPrimaryContainer
+                        : scheme.onSurfaceVariant,
+                    onPressed: () => c.updateDisplayLayers(
+                      showRuby: !c.displayLayers.showRuby,
+                    ),
+                  ),
+                  TonalChip(
+                    label:
+                        '${c.displayLayers.showRomaji ? "✓ " : ""}罗马音 (Romaji)',
+                    color: c.displayLayers.showRomaji
+                        ? scheme.primaryContainer
+                        : scheme.surfaceContainerHigh,
+                    foregroundColor: c.displayLayers.showRomaji
+                        ? scheme.onPrimaryContainer
+                        : scheme.onSurfaceVariant,
+                    onPressed: () => c.updateDisplayLayers(
+                      showRomaji: !c.displayLayers.showRomaji,
+                    ),
+                  ),
+                  TonalChip(
+                    label:
+                        '${c.displayLayers.showTranslation ? "✓ " : ""}中文翻译',
+                    color: c.displayLayers.showTranslation
+                        ? scheme.primaryContainer
+                        : scheme.surfaceContainerHigh,
+                    foregroundColor: c.displayLayers.showTranslation
+                        ? scheme.onPrimaryContainer
+                        : scheme.onSurfaceVariant,
+                    onPressed: () => c.updateDisplayLayers(
+                      showTranslation: !c.displayLayers.showTranslation,
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -1069,7 +610,7 @@ class _DashboardViewState extends State<DashboardView> {
       children: [
         Text(
           label,
-          style: AppTextStyle.caption1
+          style: AppTextStyle.caption2
               .of(context, emphasized: true)
               .copyWith(color: scheme.onSurfaceVariant),
         ),
@@ -1110,63 +651,12 @@ class _DashboardViewState extends State<DashboardView> {
               children: [
                 Expanded(
                   child: Text(
-                    '制作人员与编者信息',
+                    '曲目制作与编者信息',
                     style: AppTextStyle.headline
                         .of(context, emphasized: true)
                         .copyWith(color: scheme.onSurface),
                   ),
                 ),
-                TonalChip(
-                  label: '速查卡同步',
-                  color: scheme.primaryContainer,
-                  foregroundColor: scheme.onPrimaryContainer,
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Expanded(
-                  child: _buildMetaInputField(
-                    context,
-                    scheme,
-                    label: '作曲',
-                    hint: 'SAWTOWNE',
-                    controller: _composerCtrl,
-                    focusNode: _composerFocus,
-                    onChanged: (v) => c.updateMeta(composer: v),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _buildMetaInputField(
-                    context,
-                    scheme,
-                    label: '作词',
-                    hint: 'SAWTOWNE',
-                    controller: _lyricistCtrl,
-                    focusNode: _lyricistFocus,
-                    onChanged: (v) => c.updateMeta(lyricist: v),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Expanded(
-                  child: _buildMetaInputField(
-                    context,
-                    scheme,
-                    label: '演唱',
-                    hint: '初音ミク',
-                    controller: _vocalistCtrl,
-                    focusNode: _vocalistFocus,
-                    onChanged: (v) => c.updateMeta(vocalist: v),
-                  ),
-                ),
-                const SizedBox(width: 8),
                 GestureDetector(
                   onTap: () => c.updateMeta(showTuner: !showTuner),
                   child: Row(
@@ -1188,38 +678,96 @@ class _DashboardViewState extends State<DashboardView> {
                 ),
               ],
             ),
-            if (showTuner) ...[
-              const SizedBox(height: 8),
-              _buildMetaInputField(
-                context,
-                scheme,
-                label: '调教',
-                hint: '输入调教 / 调声师',
-                controller: _tunerCtrl,
-                focusNode: _tunerFocus,
-                onChanged: (v) => c.updateMeta(tuner: v),
-              ),
-            ],
-            const SizedBox(height: 8),
-            _buildMetaInputField(
-              context,
-              scheme,
-              label: '编者',
-              hint: '输入编者署名（导出前也可确认）',
-              controller: _editorNameCtrl,
-              focusNode: _editorNameFocus,
-              onChanged: (v) => c.updateMeta(editorName: v),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: _buildMetaInputField(
+                    context,
+                    scheme,
+                    label: '作曲',
+                    hint: '如：SAWTOWNE',
+                    controller: _composerCtrl,
+                    focusNode: _composerFocus,
+                    onChanged: (v) => c.updateMeta(composer: v),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _buildMetaInputField(
+                    context,
+                    scheme,
+                    label: '作词',
+                    hint: '如：SAWTOWNE',
+                    controller: _lyricistCtrl,
+                    focusNode: _lyricistFocus,
+                    onChanged: (v) => c.updateMeta(lyricist: v),
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 8),
-            _buildMetaInputField(
-              context,
-              scheme,
-              label: '编者语',
-              hint: '输入给打 Call 观众的提示语（导出前也可确认）',
-              controller: _editorNoteCtrl,
-              focusNode: _editorNoteFocus,
-              maxLines: 2,
-              onChanged: (v) => c.updateMeta(editorNote: v),
+            Row(
+              children: [
+                Expanded(
+                  child: _buildMetaInputField(
+                    context,
+                    scheme,
+                    label: '演唱',
+                    hint: c.project.meta.artist.isNotEmpty
+                        ? c.project.meta.artist
+                        : '如：初音ミク',
+                    controller: _vocalistCtrl,
+                    focusNode: _vocalistFocus,
+                    onChanged: (v) => c.updateMeta(vocalist: v),
+                  ),
+                ),
+                if (showTuner) ...[
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _buildMetaInputField(
+                      context,
+                      scheme,
+                      label: '调教',
+                      hint: '调教师 / 调声',
+                      controller: _tunerCtrl,
+                      focusNode: _tunerFocus,
+                      onChanged: (v) => c.updateMeta(tuner: v),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            const SizedBox(height: 10),
+            const Divider(height: 1),
+            const SizedBox(height: 10),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: _buildMetaInputField(
+                    context,
+                    scheme,
+                    label: '编者',
+                    hint: '编者署名（导出前也可填）',
+                    controller: _editorNameCtrl,
+                    focusNode: _editorNameFocus,
+                    onChanged: (v) => c.updateMeta(editorName: v),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _buildMetaInputField(
+                    context,
+                    scheme,
+                    label: '编者语',
+                    hint: 'Call 本说明 / 寄语（可选）',
+                    controller: _editorNoteCtrl,
+                    focusNode: _editorNoteFocus,
+                    onChanged: (v) => c.updateMeta(editorNote: v),
+                  ),
+                ),
+              ],
             ),
           ],
         ),
@@ -1227,230 +775,736 @@ class _DashboardViewState extends State<DashboardView> {
     );
   }
 
-  Widget _buildSourceAndLrcColumn(
+  Widget _buildAudioSettingsCard(
     BuildContext context,
     CallbookController c,
     ColorScheme scheme,
   ) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _buildCreditsAndEditorCard(context, c, scheme),
-        const SizedBox(height: 12),
-        Card(
-          inert: true,
-          radius: 22,
-          padding: const EdgeInsets.all(14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+    return Card(
+      inert: true,
+      radius: 22,
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
             children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      '音源导入 · 曲库检索 & 本地文件',
-                      style: AppTextStyle.headline
+              Container(
+                width: 32,
+                height: 32,
+                decoration: ShapeDecoration(
+                  color: scheme.primaryContainer,
+                  shape: AppShape.circle,
+                ),
+                alignment: Alignment.center,
+                child: GlyphIcon(
+                  CallbookGlyphs.musicNote,
+                  size: 16,
+                  color: scheme.onPrimaryContainer,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '节拍器音频',
+                      style: AppTextStyle.subheadline
                           .of(context, emphasized: true)
                           .copyWith(color: scheme.onSurface),
                     ),
-                  ),
-                  TonalChip(
-                    label: '演练 Demo',
-                    color: scheme.secondaryContainer,
-                    foregroundColor: scheme.onSecondaryContainer,
-                    onPressed: () async {
-                      final ok = await confirmArchiveSaveIfNeeded(
-                        context,
-                        c,
-                        actionLabel: '加载演练 Demo',
-                        targetLabel: '175 BPM 合成 Demo',
-                      );
-                      if (!ok || !mounted) return;
-                      await c.loadDemoProject();
-                    },
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              SegmentedControl<String>(
-                segments: const [
-                  ('auto', '自动聚合'),
-                  ('custom_proxy', '网易云直连'),
-                  ('lrclib', 'LRCLIB'),
-                  ('mock', '演示库'),
-                ],
-                value: _searchSource,
-                onChanged: (v) => setState(() => _searchSource = v),
-              ),
-              if (_searchSource == 'custom_proxy' &&
-                  !c.gatewayStatus.cookieConfigured &&
-                  !c.gatewayStatus.gatewayOnline &&
-                  !c.customProxyEnabled) ...[
-                const SizedBox(height: 6),
-                Text(
-                  '纯 Dart 直连网易云已就绪（游客模式可直接检索公开曲目与歌词；如需 VIP/完整音源可在下方粘贴 Cookie）。',
-                  style: AppTextStyle.caption1.of(context).copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
-              const SizedBox(height: 10),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _searchCtrl,
-                      decoration: const InputDecoration(
-                        hintText: '搜索歌名 / 艺人 / Call 本曲目...',
+                    Text(
+                      c.metronomeEnabled
+                          ? '音量 ${(c.metronomeVolume * 100).round()}%'
+                          : '已静音',
+                      style: AppTextStyle.caption2.of(context).copyWith(
+                        color: scheme.onSurfaceVariant,
                       ),
-                      onSubmitted: (q) =>
-                          c.searchTracks(q, source: _searchSource),
                     ),
+                  ],
+                ),
+              ),
+              Switch(
+                value: c.metronomeEnabled,
+                onChanged: c.setMetronomeEnabled,
+                semanticLabel: '开启节拍器',
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Expanded(
+                child: Slider(
+                  value: c.metronomeVolume,
+                  min: 0.2,
+                  max: 1.5,
+                  onChanged: c.metronomeEnabled ? c.setMetronomeVolume : null,
+                ),
+              ),
+              const SizedBox(width: 8),
+              TonalChip(
+                label: '试听',
+                color: scheme.surfaceContainerHigh,
+                foregroundColor: scheme.onSurface,
+                onPressed: c.testMetronomeClick,
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          const Divider(height: 1),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: ShapeDecoration(
+                  color: scheme.warningContainer,
+                  shape: AppShape.circle,
+                ),
+                alignment: Alignment.center,
+                child: GlyphIcon(
+                  CallbookGlyphs.play,
+                  size: 15,
+                  color: scheme.onWarningContainer,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'GT 前置警报音',
+                      style: AppTextStyle.subheadline
+                          .of(context, emphasized: true)
+                          .copyWith(color: scheme.onSurface),
+                    ),
+                    Text(
+                      c.gtBeepEnabled ? '进场前自动提示' : '已关闭提示音',
+                      style: AppTextStyle.caption2.of(context).copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Switch(
+                value: c.gtBeepEnabled,
+                onChanged: c.setGtBeepEnabled,
+                semanticLabel: 'GT 警报提示音',
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          const Divider(height: 1),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: ShapeDecoration(
+                  color: scheme.surfaceContainerHigh,
+                  shape: AppShape.circle,
+                ),
+                alignment: Alignment.center,
+                child: GlyphIcon(
+                  CallbookGlyphs.studio,
+                  size: 15,
+                  color: scheme.onSurface,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '歌词时间轴跟随',
+                      style: AppTextStyle.subheadline
+                          .of(context, emphasized: true)
+                          .copyWith(color: scheme.onSurface),
+                    ),
+                    Text(
+                      c.followPlayback ? '自动居中高亮句' : '手动自由滚动',
+                      style: AppTextStyle.caption2.of(context).copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Switch(
+                value: c.followPlayback,
+                onChanged: c.setFollowPlayback,
+                semanticLabel: '歌词时间轴跟随',
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBpmSparkCard(
+    BuildContext context,
+    CallbookController c,
+    ColorScheme scheme,
+  ) {
+    return Card(
+      inert: true,
+      radius: 22,
+      padding: EdgeInsets.zero,
+      child: ClipRRect(
+        borderRadius: AppRadius.xl,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '节拍速率 (BPM)',
+                          style: AppTextStyle.caption1
+                              .of(context, emphasized: true)
+                              .copyWith(color: scheme.onSurfaceVariant),
+                        ),
+                      ),
+                      TonalChip(
+                        label: 'Tap',
+                        color: scheme.surfaceContainerHigh,
+                        foregroundColor: scheme.onSurface,
+                        onPressed: c.tapTempo,
+                      ),
+                      const SizedBox(width: 6),
+                      TonalChip(
+                        label: c.project.meta.timeSignature,
+                        color: scheme.surfaceContainerHigh,
+                        foregroundColor: scheme.onSurface,
+                        onPressed: () => c.setTimeSignature(
+                          c.project.meta.timeSignature == '4/4'
+                              ? '3/4'
+                              : '4/4',
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 8),
-                  FilledButton(
-                    onPressed: c.isSearching
-                        ? null
-                        : () => c.searchTracks(
-                            _searchCtrl.text,
-                            source: _searchSource,
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      SizedBox(
+                        width: 72,
+                        child: TextField(
+                          controller: _bpmCtrl,
+                          focusNode: _bpmFocus,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration.collapsed(
+                            hintText: '120',
                           ),
-                    child: Text(c.isSearching ? '检索中' : '搜索'),
+                          style: AppTextStyle.title1
+                              .of(context, emphasized: true)
+                              .copyWith(
+                                fontFamily: 'GoogleSans',
+                                fontFeatures: const [
+                                  FontFeature.tabularFigures(),
+                                ],
+                                color: scheme.onSurface,
+                              ),
+                          onSubmitted: (v) => _commitBpmInput(c, v),
+                          onEditingComplete: () =>
+                              _commitBpmInput(c, _bpmCtrl.text),
+                        ),
+                      ),
+                      Text(
+                        'BPM',
+                        style: AppTextStyle.caption1
+                            .of(context, emphasized: true)
+                            .copyWith(color: scheme.onSurfaceVariant),
+                      ),
+                      const Spacer(),
+                      TonalChip(
+                        label: '−',
+                        color: scheme.surfaceContainerHigh,
+                        foregroundColor: scheme.onSurface,
+                        onPressed: () => c.setBpm(c.project.meta.bpm - 1),
+                      ),
+                      const SizedBox(width: 6),
+                      TonalChip(
+                        label: '+',
+                        color: scheme.surfaceContainerHigh,
+                        foregroundColor: scheme.onSurface,
+                        onPressed: () => c.setBpm(c.project.meta.bpm + 1),
+                      ),
+                    ],
                   ),
                 ],
               ),
-              const SizedBox(height: 10),
-              TonalButton(
-                size: TonalButtonSize.compact,
-                glyph: CallbookGlyphs.musicNote,
-                label: '导入本地音频 (MP3/WAV/FLAC)',
-                onPressed: _pickLocalAudio,
-              ),
-              if (c.searchResults.isNotEmpty) ...[
-                const SizedBox(height: 10),
-                for (final track in c.searchResults.take(5))
-                  Container(
-                    margin: const EdgeInsets.only(bottom: 6),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 8,
-                    ),
-                    decoration: ShapeDecoration(
-                      color: scheme.surfaceContainerLow,
-                      shape: AppShape.lg,
-                    ),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                track.title,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: AppTextStyle.subheadline
-                                    .of(context, emphasized: true)
-                                    .copyWith(color: scheme.onSurface),
-                              ),
-                              Text(
-                                '${track.artist} · ${track.platform}${track.bpm != null ? " · ${track.bpm} BPM" : ""}',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: AppTextStyle.caption1.of(context).copyWith(
-                                  color: scheme.onSurfaceVariant,
-                                ),
-                              ),
-                            ],
+            ),
+            SparklineMetricFooter(
+              values: c.beatPulseSeries,
+              revision: c.beatSeriesRevision,
+              color: scheme.primary,
+              height: 36,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCoverageSparkCard(
+    BuildContext context,
+    CallbookController c,
+    ColorScheme scheme,
+  ) {
+    return Card(
+      inert: true,
+      radius: 22,
+      padding: EdgeInsets.zero,
+      child: ClipRRect(
+        borderRadius: AppRadius.xl,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          c.siteText('编写覆盖率'),
+                          style: AppTextStyle.caption1
+                              .of(context, emphasized: true)
+                              .copyWith(color: scheme.onSurfaceVariant),
+                        ),
+                      ),
+                      TonalChip(
+                        label: '+ GT 警报',
+                        color: scheme.warningContainer,
+                        foregroundColor: scheme.onWarningContainer,
+                        onPressed: () => c.insertGtAlert(),
+                      ),
+                      const SizedBox(width: 6),
+                      TonalChip(
+                        label: '定位时间轴',
+                        color: scheme.surfaceContainerHigh,
+                        foregroundColor: scheme.onSurface,
+                        onPressed: _scrollToTimeline,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.baseline,
+                    textBaseline: TextBaseline.alphabetic,
+                    children: [
+                      Text(
+                        '${c.taggedLineCount}',
+                        style: AppTextStyle.title1
+                            .of(context, emphasized: true)
+                            .copyWith(
+                              fontFamily: 'GoogleSans',
+                              fontFeatures: const [
+                                FontFeature.tabularFigures(),
+                              ],
+                              color: scheme.onSurface,
+                            ),
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          '/ ${c.sortedLines.length} 句已标 Call · ${c.sortedAlerts.length} GT 警报',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppTextStyle.caption1.of(context).copyWith(
+                            color: scheme.onSurfaceVariant,
                           ),
                         ),
-                        const SizedBox(width: 8),
-                        TonalChip(
-                          label: '载入',
-                          color: scheme.primaryContainer,
-                          foregroundColor: scheme.onPrimaryContainer,
-                          onPressed: () async {
-                            final ok = await confirmArchiveSaveIfNeeded(
-                              context,
-                              c,
-                              actionLabel: '拉取新曲目歌词',
-                              targetLabel: track.title,
-                            );
-                            if (!ok || !mounted) return;
-                            await c.loadRemoteTrack(track);
-                          },
-                        ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
-              ],
+                ],
+              ),
+            ),
+            SparklineMetricFooter(
+              values: c.callDensitySeries,
+              revision: c.callDensityRevision,
+              color: scheme.tertiary,
+              height: 36,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildExportJumpCard(
+    BuildContext context,
+    CallbookController c,
+    ColorScheme scheme,
+  ) {
+    return GestureDetector(
+      onTap: () => c.setRoute(StudioRoute.export),
+      child: ElasticPress(
+        child: Card(
+          inert: true,
+          radius: 22,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: ShapeDecoration(
+                  color: scheme.successContainer,
+                  shape: AppShape.circle,
+                ),
+                alignment: Alignment.center,
+                child: GlyphIcon(
+                  CallbookGlyphs.exportCard,
+                  size: 16,
+                  color: scheme.onSuccessContainer,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      c.siteText('导出Callbook'),
+                      style: AppTextStyle.subheadline
+                          .of(context, emphasized: true)
+                          .copyWith(color: scheme.onSurface),
+                    ),
+                    Text(
+                      'PNG 长图 · Excel · Markdown · JSON',
+                      style: AppTextStyle.caption2.of(context).copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              GlyphIcon(
+                Glyphs.chevronForward,
+                size: 16,
+                color: scheme.onSurfaceVariant,
+              ),
             ],
           ),
         ),
-        const SizedBox(height: 12),
+      ),
+    );
+  }
 
-        Card(
-          inert: true,
-          radius: 22,
-          padding: const EdgeInsets.all(14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                'LRC 歌词粘贴 & 日语注音生成',
-                style: AppTextStyle.headline
-                    .of(context, emphasized: true)
-                    .copyWith(color: scheme.onSurface),
+  Widget _buildGatewayConfigCard(
+    BuildContext context,
+    CallbookController c,
+    ColorScheme scheme,
+  ) {
+    final gw = c.gatewayStatus;
+    final isDesktop = c.isDesktopHost;
+    final account = gw.neteaseAccount?.trim() ?? '';
+    final backendNodeGatewayActive =
+        c.backendOnline &&
+        (gw.managedByBackend || (gw.gatewayOnline && gw.nodeAvailable));
+
+    return Card(
+      inert: true,
+      radius: 22,
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          GestureDetector(
+            onTap: () => setState(() => _showGatewayCard = !_showGatewayCard),
+            behavior: HitTestBehavior.opaque,
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '网易云直连 & 可选后端服务',
+                        style: AppTextStyle.subheadline
+                            .of(context, emphasized: true)
+                            .copyWith(color: scheme.onSurface),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        c.backendOnline
+                            ? '后端注音在线 · 支持纯 Dart 直连'
+                            : '纯 Dart 引擎直连就绪（点击展开配置）',
+                        style: AppTextStyle.caption2.of(context).copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                TonalChip(
+                  label: _showGatewayCard ? '收起' : '配置',
+                  color: scheme.surfaceContainerHigh,
+                  foregroundColor: scheme.onSurface,
+                  onPressed: () =>
+                      setState(() => _showGatewayCard = !_showGatewayCard),
+                ),
+              ],
+            ),
+          ),
+          if (_showGatewayCard) ...[
+            const SizedBox(height: 10),
+            Text(
+              c.backendOnline
+                  ? '已连接 FastAPI 后端（日语假名/罗马音注音可用）；未开 Node 网关时自动使用内置纯 Dart 引擎直连'
+                  : '免 Node / 免后端：App 内置纯 Dart EAPI 引擎直接检索网易云与 LRCLIB；粘贴 MUSIC_U 可登录账号，可选连接 FastAPI 获取假名注音',
+              style: AppTextStyle.caption1.of(context).copyWith(
+                color: scheme.onSurfaceVariant,
               ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                TonalChip(
+                  label: '纯 Dart 直连',
+                  color: scheme.primaryContainer,
+                  foregroundColor: scheme.onPrimaryContainer,
+                ),
+                TonalChip(
+                  label: c.backendOnline ? '后端注音在线' : '后端未连 (可选)',
+                  color: c.backendOnline
+                      ? scheme.successContainer
+                      : scheme.surfaceContainerHigh,
+                  foregroundColor: c.backendOnline
+                      ? scheme.onSuccessContainer
+                      : scheme.onSurfaceVariant,
+                ),
+                if (backendNodeGatewayActive)
+                  TonalChip(
+                    label: 'Node 网关运行中',
+                    color: scheme.successContainer,
+                    foregroundColor: scheme.onSuccessContainer,
+                  ),
+                if (account.isNotEmpty)
+                  TonalChip(
+                    label: '已登录: $account',
+                    color: scheme.successContainer,
+                    foregroundColor: scheme.onSuccessContainer,
+                  )
+                else if (gw.cookieConfigured)
+                  TonalChip(
+                    label: '已存 Cookie',
+                    color: scheme.secondaryContainer,
+                    foregroundColor: scheme.onSecondaryContainer,
+                  ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _backendCtrl,
+                    focusNode: _backendUrlFocus,
+                    decoration: const InputDecoration(
+                      hintText:
+                          '可选 FastAPI 地址：桌面 127.0.0.1:8000 / 模拟器 10.0.2.2:8000',
+                    ),
+                    onSubmitted: (v) => c.setBackendUrl(v),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                TonalButton(
+                  size: TonalButtonSize.compact,
+                  label: '连接',
+                  onPressed: () => c.setBackendUrl(_backendCtrl.text),
+                ),
+                if (isDesktop && !c.backendOnline) ...[
+                  const SizedBox(width: 8),
+                  TonalButton(
+                    size: TonalButtonSize.compact,
+                    label: c.isLaunchingBackend ? '启动中' : '启动后端',
+                    onPressed: c.isLaunchingBackend
+                        ? null
+                        : c.launchLocalBackendOnDesktop,
+                  ),
+                ],
+              ],
+            ),
+            if (c.backendOnline) ...[
               const SizedBox(height: 8),
               TextField(
-                controller: _lrcCtrl,
-                maxLines: 4,
-                minLines: 3,
+                controller: _gatewayUrlCtrl,
+                focusNode: _gatewayUrlFocus,
                 decoration: const InputDecoration(
-                  hintText: '[00:12.40] 君と響く Starlight...',
+                  hintText: '可选后端网关地址（默认 http://127.0.0.1:3000）',
                 ),
               ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: _transCtrl,
-                maxLines: 2,
-                minLines: 2,
-                decoration: const InputDecoration(
-                  hintText: '可选：中文翻译 LRC（按时间戳自动对齐）',
+            ],
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '网易云 Cookie（可选：支持完整 Cookie 或 MUSIC_U）',
+                    style: AppTextStyle.caption1
+                        .of(context, emphasized: true)
+                        .copyWith(color: scheme.onSurface),
+                  ),
                 ),
+                if (gw.cookieConfigured && gw.cookieMasked.isNotEmpty)
+                  Text(
+                    '已存: ${gw.cookieMasked}',
+                    style: AppTextStyle.caption1.of(context).copyWith(
+                      color: scheme.onSurfaceVariant,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            TextField(
+              controller: _neteaseCookieCtrl,
+              focusNode: _neteaseCookieFocus,
+              obscureText: _obscureCookie,
+              maxLines: _obscureCookie ? 1 : 3,
+              minLines: 1,
+              decoration: const InputDecoration(
+                hintText: '粘贴 MUSIC_U=... 完整 Cookie 或纯 MUSIC_U 字符串（留空即游客直连）',
               ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                TonalButton(
+                  size: TonalButtonSize.compact,
+                  label: '粘贴 Cookie',
+                  onPressed: _pasteCookieFromClipboard,
+                ),
+                TonalButton(
+                  size: TonalButtonSize.compact,
+                  label: _obscureCookie ? '显示明文' : '隐藏 Cookie',
+                  onPressed: () =>
+                      setState(() => _obscureCookie = !_obscureCookie),
+                ),
+                TonalButton(
+                  size: TonalButtonSize.compact,
+                  label: '清空输入',
+                  onPressed: () => setState(() => _neteaseCookieCtrl.clear()),
+                ),
+                TonalButton(
+                  size: TonalButtonSize.compact,
+                  label: '检测直连状态',
+                  onPressed: () => c.refreshGatewayStatus(probeDirect: true),
+                ),
+                if (c.backendOnline && gw.managedByBackend)
+                  TonalButton(
+                    size: TonalButtonSize.compact,
+                    label: '停止网关',
+                    onPressed:
+                        c.isConfiguringGateway ? null : c.stopManagedGateway,
+                  ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            FilledButton(
+              onPressed: c.isConfiguringGateway
+                  ? null
+                  : () async {
+                      await c.oneClickConfigureAndStartGateway(
+                        cookie: _neteaseCookieCtrl.text,
+                        gatewayUrl: _gatewayUrlCtrl.text,
+                      );
+                    },
+              child: Text(
+                c.isConfiguringGateway
+                    ? '正在验证与配置...'
+                    : (c.backendOnline &&
+                              gw.nodeAvailable &&
+                              gw.packageAvailable
+                          ? '一键写入 Cookie 并启动网关'
+                          : '验证并保存 Cookie（纯 Dart 直连）'),
+              ),
+            ),
+            if (gw.message.isNotEmpty || gw.pid != null) ...[
               const SizedBox(height: 8),
               Text(
-                '导入后自动识别前/间/尾奏（前奏 ≥ ${(c.sectionThresholds.introThresholdMs / 1000).round()}s / 间奏 ≥ ${(c.sectionThresholds.interludeThresholdMs / 1000).round()}s / 尾奏 ≥ ${(c.sectionThresholds.outroThresholdMs / 1000).round()}s，可在工作台微调或手工添加）',
+                '${gw.message}${gw.pid != null ? ' (PID ${gw.pid})' : ''}',
                 style: AppTextStyle.caption1.of(context).copyWith(
                   color: scheme.onSurfaceVariant,
                 ),
               ),
-              const SizedBox(height: 10),
-              FilledButton(
-                onPressed: () async {
-                  if (_lrcCtrl.text.trim().isEmpty) return;
-                  final ok = await confirmArchiveSaveIfNeeded(
-                    context,
-                    c,
-                    actionLabel: '导入新 LRC 歌词',
-                  );
-                  if (!ok || !mounted) return;
-                  await c.importLrcText(
-                    lrc: _lrcCtrl.text,
-                    translationLrc: _transCtrl.text,
-                  );
-                },
-                child: const Text('解析 LRC 并更新当前时间轴'),
+            ],
+            if (c.backendOnline &&
+                !gw.gatewayOnline &&
+                (!gw.nodeAvailable || !gw.packageAvailable)) ...[
+              const SizedBox(height: 4),
+              Text(
+                '提示：FastAPI 后端未配置 Node 网关，App 将直接使用内置纯 Dart 引擎直连网易云（同时保留后端注音增强）。',
+                style: AppTextStyle.caption1.of(context).copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
               ),
             ],
-          ),
-        ),
-        const SizedBox(height: 12),
+          ],
+        ],
+      ),
+    );
+  }
+}
 
-        _buildGatewayConfigCard(context, c, scheme),
-      ],
+class _OffsetChipButton extends StatelessWidget {
+  const _OffsetChipButton({
+    required this.label,
+    required this.color,
+    required this.foreground,
+    required this.onTap,
+  });
+
+  final String label;
+  final Color color;
+  final Color foreground;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        decoration: ShapeDecoration(
+          color: color,
+          shape: AppShape.md,
+        ),
+        alignment: Alignment.center,
+        child: Text(
+          label,
+          style: AppTextStyle.caption1
+              .of(context, emphasized: true)
+              .copyWith(
+                fontFamily: 'GoogleSans',
+                fontFeatures: const [FontFeature.tabularFigures()],
+                color: foreground,
+              ),
+        ),
+      ),
     );
   }
 }

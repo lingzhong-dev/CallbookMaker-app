@@ -53,6 +53,7 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
   String? _lastActiveLineId;
   String? _lastPlayingLineId;
   bool _showSectionPanel = false;
+  bool _showShortcuts = false;
 
   @override
   void initState() {
@@ -475,17 +476,32 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
                     runSpacing: 6,
                     children: [
                       Text(
-                        '打标时间轴',
+                        c.siteText('编写工作台'),
                         style: AppTextStyle.headline
                             .of(context, emphasized: true)
                             .copyWith(color: scheme.onSurface),
                       ),
                       TonalChip(
-                        label: c.sectionStats.total > 0
-                            ? '${c.sortedLines.length} 句（含 ${c.sectionStats.total} 段落）· ${c.sortedAlerts.length} GT 警报'
-                            : '${c.sortedLines.length} 句 · ${c.sortedAlerts.length} GT 警报',
+                        label:
+                            '${c.sortedLines.length} 句 · ${c.sectionStats.total} 段落 · ${c.sortedAlerts.length} GT 警报',
                         color: scheme.surfaceContainerHigh,
                         foregroundColor: scheme.onSurfaceVariant,
+                      ),
+                      Semantics(
+                        label: '键盘快捷键说明',
+                        button: true,
+                        child: TonalChip(
+                          label: '?',
+                          color: _showShortcuts
+                              ? scheme.primaryContainer
+                              : scheme.surfaceContainerHigh,
+                          foregroundColor: _showShortcuts
+                              ? scheme.onPrimaryContainer
+                              : scheme.onSurfaceVariant,
+                          onPressed: () => setState(() {
+                            _showShortcuts = !_showShortcuts;
+                          }),
+                        ),
                       ),
                     ],
                   );
@@ -495,7 +511,7 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
                       Text(
-                        '跟随',
+                        '跟随滚动',
                         style: AppTextStyle.caption1.of(context).copyWith(
                           color: scheme.onSurfaceVariant,
                         ),
@@ -507,20 +523,20 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
                       ),
                       TonalButton(
                         size: TonalButtonSize.compact,
-                        label: activeLineHasGt ? '取消 GT 警报' : '+ GT 警报',
+                        label: activeLineHasGt ? '取消 GT 警报' : 'GT 警报',
                         onPressed:
                             items.isEmpty ? null : () => c.insertGtAlert(),
                       ),
                       TonalButton(
                         size: TonalButtonSize.compact,
-                        label: _showSectionPanel ? '收起段落' : '+ 前/间/尾奏',
+                        label: _showSectionPanel ? '收起段落' : '前/间/尾奏',
                         onPressed: () => setState(() {
                           _showSectionPanel = !_showSectionPanel;
                         }),
                       ),
                       TonalButton(
                         size: TonalButtonSize.compact,
-                        label: '+ 加行',
+                        label: '加行',
                         onPressed: c.addEmptyLine,
                       ),
                     ],
@@ -549,6 +565,26 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
                 _InlineSectionPanel(
                   controller: c,
                   onClose: () => setState(() => _showSectionPanel = false),
+                ),
+              ],
+              if (_showShortcuts) ...[
+                const SizedBox(height: 10),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 9,
+                  ),
+                  decoration: ShapeDecoration(
+                    color: scheme.surfaceContainerLow,
+                    shape: AppShape.lg,
+                  ),
+                  child: Text(
+                    'Space 播放/暂停 · 1~8 切换军 Call · G 切换当前行 GT 警报 · ↑/↓ 切行 · ←/→ 跳 2s · F 现场演练',
+                    style: AppTextStyle.caption1.of(context).copyWith(
+                      fontFamily: 'GoogleSans',
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
                 ),
               ],
               const SizedBox(height: 10),
@@ -669,7 +705,7 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
             padding: const EdgeInsets.all(24),
             child: Center(
               child: Text(
-                '时间轴为空，点击「+ 加行」或导入 LRC 歌词开始制作 Call 本。',
+                '时间轴为空，点击「导入音源 / LRC」或右上角「加行」开始制作 Call 本。',
                 style: AppTextStyle.subheadline.of(context).copyWith(
                   color: scheme.onSurfaceVariant,
                 ),
@@ -786,7 +822,7 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
                   onTap: () => c.toggleTailUpdraft(line.id),
                 ),
                 TonalChip(
-                  label: gtAlert != null ? '取消 GT' : '+ GT',
+                  label: gtAlert != null ? '取消 GT' : 'GT',
                   color: gtAlert != null
                       ? scheme.warning
                       : scheme.warningContainer,
@@ -993,6 +1029,15 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
               ],
             ),
           ),
+          const SizedBox(height: 10),
+          _InlineCustomShoutField(
+            key: ValueKey('custom-shout-${line.id}'),
+            initialValue: line.customShout,
+            onChanged: (v) => c.updateLineDetails(
+              lineId: line.id,
+              customShout: v,
+            ),
+          ),
         ],
         if (gtAlert != null) ...[
           const SizedBox(height: 10),
@@ -1056,6 +1101,80 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
       ),
       onPressed: () => c.selectLine(line.id, seekToLine: true),
       child: body,
+    );
+  }
+}
+
+class _InlineCustomShoutField extends StatefulWidget {
+  const _InlineCustomShoutField({
+    super.key,
+    required this.initialValue,
+    required this.onChanged,
+  });
+
+  final String initialValue;
+  final ValueChanged<String> onChanged;
+
+  @override
+  State<_InlineCustomShoutField> createState() =>
+      _InlineCustomShoutFieldState();
+}
+
+class _InlineCustomShoutFieldState extends State<_InlineCustomShoutField> {
+  late final TextEditingController _ctrl = TextEditingController(
+    text: widget.initialValue,
+  );
+  final FocusNode _focus = FocusNode();
+
+  @override
+  void didUpdateWidget(covariant _InlineCustomShoutField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!_focus.hasFocus && _ctrl.text != widget.initialValue) {
+      _ctrl.text = widget.initialValue;
+    }
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    _focus.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = context.colorScheme;
+    return Container(
+      padding: const EdgeInsets.only(top: 8),
+      decoration: BoxDecoration(
+        border: Border(
+          top: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.45)),
+        ),
+      ),
+      child: Row(
+        children: [
+          Text(
+            '喊声 / 口上',
+            style: AppTextStyle.caption1
+                .of(context, emphasized: true)
+                .copyWith(color: scheme.tertiary),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: TextField(
+              controller: _ctrl,
+              focusNode: _focus,
+              style: AppTextStyle.caption1
+                  .of(context, emphasized: true)
+                  .copyWith(color: scheme.onSurface),
+              decoration: const InputDecoration.collapsed(
+                hintText: '输入自定义 Mix / 口上...',
+              ),
+              onChanged: widget.onChanged,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1149,7 +1268,7 @@ class _InlineGtEditorState extends State<_InlineGtEditor> {
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 Text(
-                  '进场时机',
+                  '喊声时机',
                   style: AppTextStyle.caption1
                       .of(context, emphasized: true)
                       .copyWith(color: scheme.onWarningContainer),
@@ -1167,7 +1286,7 @@ class _InlineGtEditorState extends State<_InlineGtEditor> {
                   ),
                 for (final beats in const [1, 2, 4, 8])
                   TonalChip(
-                    label: '前$beats拍',
+                    label: '前 $beats 拍',
                     color: widget.alert.leadBeats == beats
                         ? scheme.primaryContainer
                         : scheme.surfaceContainerHigh,
@@ -1188,8 +1307,7 @@ class _InlineGtEditorState extends State<_InlineGtEditor> {
                   controller: _cueCtrl,
                   focusNode: _cueFocus,
                   decoration: const InputDecoration(
-                    hintText:
-                        'Call 时机提示（如 se-no / hi hi / hi hi hihihihi / はいせーの！）',
+                    hintText: '编者手动输入喊声时机，如 se-no / hi hi / hihihihi',
                   ),
                   onChanged: (v) => widget.controller.updateLineGtAlert(
                     widget.lineId,
@@ -1200,7 +1318,7 @@ class _InlineGtEditorState extends State<_InlineGtEditor> {
                   controller: _noteCtrl,
                   focusNode: _noteFocus,
                   decoration: const InputDecoration(
-                    hintText: 'GT 提示备注（如 吉他进场，准备衔接 Call）',
+                    hintText: '可选备注（如：吉他进场，4拍后进PPPH）',
                   ),
                   onChanged: (v) => widget.controller.updateLineGtAlert(
                     widget.lineId,

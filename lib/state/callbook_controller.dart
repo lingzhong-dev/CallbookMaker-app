@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
@@ -1711,6 +1712,68 @@ class CallbookController extends ChangeNotifier {
     schedulePersist(markDirty: false);
     setStatus('已加载 175 BPM 内置演练工程');
     notifyListeners();
+  }
+
+  Future<bool> importProjectJson(String rawJson, {String? sourceName}) async {
+    try {
+      final decoded = jsonDecode(rawJson);
+      if (decoded is! Map<dynamic, dynamic>) {
+        setStatus('JSON 工程格式无效：根节点必须是对象');
+        return false;
+      }
+      final map = Map<String, dynamic>.from(decoded);
+      final parsed = CallProject.fromJson(map);
+      if (parsed.lines.isEmpty && parsed.meta.title.trim().isEmpty) {
+        setStatus('JSON 工程格式无效：缺少曲目或歌词行');
+        return false;
+      }
+
+      final normalized = _normalizeProjectAlerts(parsed);
+      _project = normalized;
+      final maxEnd = normalized.lines.fold<int>(
+        0,
+        (prev, l) => math.max(prev, l.endTimeMs),
+      );
+      _knownAudioDurationMs =
+          normalized.meta.platform == 'synthetic' ? 48000 : 0;
+      _durationMs = math.max(48000, maxEnd + 4000);
+      _currentTimeMs = 0;
+      _isPlaying = false;
+
+      if (normalized.meta.platform == 'local' &&
+          normalized.meta.audioUrl.isNotEmpty) {
+        await _audio.setAudioSource(
+          localPath: normalized.meta.audioUrl,
+          fallbackDurationMs: _durationMs,
+        );
+      } else if (normalized.meta.audioUrl.isNotEmpty &&
+          !normalized.meta.audioUrl.startsWith('blob:')) {
+        await _audio.setAudioSource(
+          url: normalized.meta.audioUrl,
+          fallbackDurationMs: _durationMs,
+        );
+      } else {
+        await _audio.setAudioSource(fallbackDurationMs: _durationMs);
+      }
+
+      _activeLineId = sortedLines.isNotEmpty ? sortedLines.first.id : null;
+      _activeArchiveId = null;
+      _hasFetchedExternalLyrics = true;
+      _hasUnsavedChanges = true;
+      _refreshCallDensitySeries();
+      _syncEngine();
+      _persistArchiveSession();
+      schedulePersist(markDirty: false);
+      final suffix = sourceName != null && sourceName.trim().isNotEmpty
+          ? ' ($sourceName)'
+          : '';
+      setStatus('已导入工程：${normalized.meta.title}$suffix');
+      notifyListeners();
+      return true;
+    } catch (err) {
+      setStatus('导入 JSON 工程失败：$err');
+      return false;
+    }
   }
 
   CallbookArchiveEntry saveCurrentToArchive({

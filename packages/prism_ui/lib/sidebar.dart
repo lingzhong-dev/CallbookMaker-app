@@ -37,6 +37,12 @@ class SidebarDestination {
   final String label;
 }
 
+typedef SidebarPaneBuilder = Widget Function(
+  BuildContext context,
+  double progress,
+  bool expanded,
+);
+
 /// Where the sidebar cannot widen in place, [onToggle] is null and the toggle
 /// opens the expanded pane over the content instead.
 ///
@@ -51,6 +57,8 @@ class NavigationSidebar extends StatefulWidget {
     required this.onSelected,
     this.onToggle,
     this.windowControls = Size.zero,
+    this.headerBuilder,
+    this.footerBuilder,
   });
 
   final List<SidebarDestination> destinations;
@@ -59,6 +67,8 @@ class NavigationSidebar extends StatefulWidget {
   final ValueChanged<int> onSelected;
   final VoidCallback? onToggle;
   final Size windowControls;
+  final SidebarPaneBuilder? headerBuilder;
+  final SidebarPaneBuilder? footerBuilder;
 
   @override
   State<NavigationSidebar> createState() => _NavigationSidebarState();
@@ -141,6 +151,8 @@ class _NavigationSidebarState extends State<NavigationSidebar>
                 _closeOverlay();
               },
               onToggle: _closeOverlay,
+              headerBuilder: widget.headerBuilder,
+              footerBuilder: widget.footerBuilder,
             ),
           ),
         );
@@ -158,6 +170,8 @@ class _NavigationSidebarState extends State<NavigationSidebar>
             selectedIndex: widget.selectedIndex,
             onSelected: widget.onSelected,
             onToggle: _handleToggle,
+            headerBuilder: widget.headerBuilder,
+            footerBuilder: widget.footerBuilder,
           ),
         ),
       ),
@@ -262,6 +276,8 @@ class _SidebarPane extends StatelessWidget {
     required this.selectedIndex,
     required this.onSelected,
     required this.onToggle,
+    this.headerBuilder,
+    this.footerBuilder,
   });
 
   final double progress;
@@ -271,6 +287,8 @@ class _SidebarPane extends StatelessWidget {
   final int selectedIndex;
   final ValueChanged<int> onSelected;
   final VoidCallback onToggle;
+  final SidebarPaneBuilder? headerBuilder;
+  final SidebarPaneBuilder? footerBuilder;
 
   @override
   Widget build(BuildContext context) {
@@ -294,29 +312,55 @@ class _SidebarPane extends StatelessWidget {
             _fitsOneLine(context, label, labelStyle, labelWidth)
         ? ''
         : label;
+    final toggleButton = _SidebarButton(
+      colors: colors,
+      height: itemHeight,
+      sideInset: sideInset,
+      tooltip: expanded
+          ? UiLocalizations.of(context).showLess
+          : UiLocalizations.of(context).showMore,
+      tooltipIsLabel: true,
+      onTap: onToggle,
+      child: SizedBox(
+        width: itemWidth,
+        child: Center(child: GlyphIcon(Glyphs.sidebar(progress))),
+      ),
+    );
     return SizedBox(
       width: lerpDouble(compactWidth, _expandedWidth, progress),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           SizedBox(height: windowControls.height + _verticalInset),
-          Align(
-            alignment: AlignmentDirectional.centerStart,
-            child: _SidebarButton(
-              colors: colors,
-              height: itemHeight,
-              sideInset: sideInset,
-              tooltip: expanded
-                  ? UiLocalizations.of(context).showLess
-                  : UiLocalizations.of(context).showMore,
-              tooltipIsLabel: true,
-              onTap: onToggle,
-              child: SizedBox(
-                width: itemWidth,
-                child: Center(child: GlyphIcon(Glyphs.sidebar(progress))),
-              ),
+          if (headerBuilder != null)
+            Row(
+              children: [
+                if (progress > 0.02)
+                  Expanded(
+                    child: ClipRect(
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        physics: const NeverScrollableScrollPhysics(),
+                        child: Opacity(
+                          opacity: labelOpacity,
+                          child: Padding(
+                            padding: EdgeInsetsDirectional.only(
+                              start: sideInset + _labelGap,
+                            ),
+                            child: headerBuilder!(context, progress, expanded),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                toggleButton,
+              ],
+            )
+          else
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: toggleButton,
             ),
-          ),
           const SizedBox(height: _toggleGap),
           Expanded(
             child: ScrollConfiguration(
@@ -359,6 +403,26 @@ class _SidebarPane extends StatelessWidget {
               ),
             ),
           ),
+          if (footerBuilder != null) ...[
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: sideInset),
+              child: const Divider(height: 1),
+            ),
+            const SizedBox(height: 8),
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: sideInset),
+              child: ClipRect(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  physics: const NeverScrollableScrollPhysics(),
+                  child: SizedBox(
+                    width: progress > 0.55 ? rowWidth : itemWidth,
+                    child: footerBuilder!(context, progress, expanded),
+                  ),
+                ),
+              ),
+            ),
+          ],
           const SizedBox(height: _verticalInset),
         ],
       ),

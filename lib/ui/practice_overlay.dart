@@ -9,44 +9,91 @@ import '../state/callbook_controller.dart';
 import '../utils/lrc_ruby_parser.dart';
 import '../utils/section_detector.dart';
 import 'widgets/call_badge_pill.dart';
-import 'widgets/callbook_glyphs.dart';
 import 'widgets/ruby_lyric_text.dart';
 import 'widgets/scalloped_orb_button.dart';
 
-class PracticeOverlay extends StatelessWidget {
+class PracticeOverlay extends StatefulWidget {
   const PracticeOverlay({super.key, required this.controller});
 
   final CallbookController controller;
 
   @override
+  State<PracticeOverlay> createState() => _PracticeOverlayState();
+}
+
+class _PracticeOverlayState extends State<PracticeOverlay> {
+  final ScrollController _scrollController = ScrollController();
+  final Map<String, GlobalKey> _lineKeys = {};
+  String? _lastPlayingLineId;
+
+  @override
+  void initState() {
+    super.initState();
+    _lastPlayingLineId = widget.controller.playingLineId;
+    widget.controller.addListener(_handleControllerChanged);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollToLine(_lastPlayingLineId ?? widget.controller.activeLineId);
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant PracticeOverlay oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.removeListener(_handleControllerChanged);
+      _lastPlayingLineId = widget.controller.playingLineId;
+      widget.controller.addListener(_handleControllerChanged);
+    }
+  }
+
+  void _handleControllerChanged() {
+    final c = widget.controller;
+    final nextPlaying = c.playingLineId;
+    if (nextPlaying != null && nextPlaying != _lastPlayingLineId) {
+      _lastPlayingLineId = nextPlaying;
+      if (c.isPracticeMode) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _scrollToLine(nextPlaying);
+        });
+      }
+    } else {
+      _lastPlayingLineId = nextPlaying;
+    }
+  }
+
+  void _scrollToLine(String? lineId) {
+    if (!mounted || lineId == null) return;
+    final ctx = _lineKeys[lineId]?.currentContext;
+    if (ctx != null) {
+      Scrollable.ensureVisible(
+        ctx,
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutCubic,
+        alignment: 0.42,
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_handleControllerChanged);
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final c = controller;
+    final c = widget.controller;
+    final scheme = context.colorScheme;
     final lines = c.sortedLines;
     final presetMap = {for (final p in c.allPresets) p.id: p};
-    final activeId = c.playingLineId ?? c.activeLineId;
-    var activeIdx = lines.indexWhere((l) => l.id == activeId);
-    if (activeIdx < 0 && lines.isNotEmpty) activeIdx = 0;
-
-    final currentLine = activeIdx >= 0 ? lines[activeIdx] : null;
-    final prevLine = activeIdx > 0 ? lines[activeIdx - 1] : null;
-    final nextLine =
-        activeIdx >= 0 && activeIdx + 1 < lines.length ? lines[activeIdx + 1] : null;
-
+    final playingId = c.playingLineId;
     final activeAlert = c.activeGtAlertStatus;
     final activeAlertCue = (activeAlert?.alert.callTimingCue ?? '').trim();
-    final currentGtAlert =
-        currentLine != null ? c.getAlertForLine(currentLine.id) : null;
-    final nextGtAlert =
-        nextLine != null ? c.getAlertForLine(nextLine.id) : null;
-    final currentGtCue = (currentGtAlert?.callTimingCue ?? '').trim();
-    final nextGtCue = (nextGtAlert?.callTimingCue ?? '').trim();
-    final isCurrentGtCountdown =
-        currentLine != null && activeAlert?.targetLineId == currentLine.id;
-    final isNextGtCountdown =
-        nextLine != null && activeAlert?.targetLineId == nextLine.id;
 
     final safeDuration = math.max(1000, c.durationMs).toDouble();
     final clampedPos = c.currentTimeMs.toDouble().clamp(0.0, safeDuration);
+    final pad = MediaQuery.paddingOf(context);
 
     // Pure OLED black stage without any screen-edge flashing borders.
     return Positioned.fill(
@@ -56,141 +103,59 @@ class PracticeOverlay extends StatelessWidget {
           style: TextStyle(
             fontFamily: c.useGoogleSans ? 'GoogleSans' : null,
           ),
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(
-              20,
-              MediaQuery.paddingOf(context).top + 16,
-              20,
-              MediaQuery.paddingOf(context).bottom + 18,
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // Top Stage Bar
-                Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            c.project.meta.title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: AppTextStyle.headline
-                                .of(context, emphasized: true)
-                                .copyWith(color: const Color(0xFFFFFFFF)),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            '${c.project.meta.bpm} BPM (${c.project.meta.timeSignature}) · BAR ${c.currentBar}.${c.currentBeatInBar}',
-                            style: AppTextStyle.caption1.of(context).copyWith(
-                              fontFamily: 'GoogleSans',
-                              fontFeatures: const [FontFeature.tabularFigures()],
-                              color: const Color(0xFF94A3B8),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      for (var b = 1; b <= c.project.meta.beatsPerBar; b++) ...[
-                        AnimatedContainer(
-                          duration: const Duration(milliseconds: 90),
-                          width: b == 1 ? 12 : 9,
-                          height: b == 1 ? 12 : 9,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: c.isPlaying && c.currentBeatInBar == b
-                                ? (b == 1
-                                      ? const Color(0xFF38BDF8)
-                                      : const Color(0xFF22D3EE))
-                                : const Color(0xFF1E293B),
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                      ],
-                    ],
-                  ),
-                  const SizedBox(width: 10),
-                  GestureDetector(
-                    onTap: () => c.setPracticeMode(false),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 8,
-                      ),
-                      decoration: const ShapeDecoration(
-                        color: Color(0xFF1E293B),
-                        shape: AppShape.full,
-                      ),
-                      child: const Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          GlyphIcon(
-                            Glyphs.close,
-                            size: 16,
-                            color: Color(0xFFFFFFFF),
-                          ),
-                          SizedBox(width: 6),
-                          Text(
-                            '退出演练',
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              color: Color(0xFFFFFFFF),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-
-              if (activeAlert != null) ...[
-                const SizedBox(height: 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Top High-Contrast GT Alert Banner
+              if (activeAlert != null)
                 Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: ShapeDecoration(
+                  padding: EdgeInsets.fromLTRB(20, pad.top + 12, 20, 12),
+                  decoration: BoxDecoration(
                     color: activeAlert.isTriggered
                         ? const Color(0xFF991B1B)
-                        : const Color(0xFF78350F),
-                    shape: AppShape.xl,
+                        : const Color(0xFFF59E0B),
+                    border: const Border(
+                      bottom: BorderSide(color: Color(0x33FFFFFF)),
+                    ),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       Wrap(
+                        alignment: WrapAlignment.center,
+                        crossAxisAlignment: WrapCrossAlignment.center,
                         spacing: 10,
                         runSpacing: 6,
-                        crossAxisAlignment: WrapCrossAlignment.center,
                         children: [
-                          TonalChip(
-                            label: activeAlert.isTriggered
-                                ? 'GT TRIGGER!'
-                                : '倒数 ${activeAlert.remainingBeats} 拍',
-                            color: activeAlert.isTriggered
-                                ? const Color(0xFFEF4444)
-                                : const Color(0xFFF59E0B),
-                            foregroundColor: const Color(0xFF000000),
+                          Text(
+                            activeAlert.isTriggered
+                                ? 'GT 警报触发！NOW!'
+                                : '即将进场 · 倒数 ${activeAlert.remainingBeats} 拍',
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w900,
+                              color: activeAlert.isTriggered
+                                  ? const Color(0xFFFFFFFF)
+                                  : const Color(0xFF000000),
+                            ),
                           ),
                           if (activeAlertCue.isNotEmpty)
                             TonalChip(
                               label: activeAlertCue,
-                              color: const Color(0xFFFEF3C7),
-                              foregroundColor: const Color(0xFF78350F),
+                              color: const Color(0x4D000000),
+                              foregroundColor: const Color(0xFFFFFFFF),
                             ),
-                          Text(
-                            activeAlert.alert.note,
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w700,
-                              color: Color(0xFFFFFFFF),
+                          if (activeAlert.alert.note.trim().isNotEmpty)
+                            Text(
+                              activeAlert.alert.note.trim(),
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w800,
+                                color: activeAlert.isTriggered
+                                    ? const Color(0xFFFFFFFF)
+                                    : const Color(0xFF000000),
+                              ),
                             ),
-                          ),
                         ],
                       ),
                       const SizedBox(height: 8),
@@ -198,407 +163,586 @@ class PracticeOverlay extends StatelessWidget {
                     ],
                   ),
                 ),
-              ],
 
-              // Center Teleprompter Focus Area
-              Expanded(
-                child: Center(
-                  child: SingleChildScrollView(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (prevLine != null) ...[
-                          Text(
-                            prevLine.text.original,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                              fontSize: 17,
-                              color: Color(0xFF475569),
-                            ),
-                          ),
-                          const SizedBox(height: 22),
-                        ],
-
-                        if (currentLine != null)
-                          AnimatedContainer(
-                            duration: const Duration(milliseconds: 220),
-                            padding: currentGtAlert != null
-                                ? const EdgeInsets.symmetric(
-                                    horizontal: 20,
-                                    vertical: 16,
-                                  )
-                                : EdgeInsets.zero,
-                            decoration: currentGtAlert != null
-                                ? BoxDecoration(
-                                    color: isCurrentGtCountdown
-                                        ? const Color(0xFF78350F)
-                                            .withValues(alpha: 0.65)
-                                        : const Color(0xFF451A03)
-                                            .withValues(alpha: 0.55),
-                                    borderRadius: BorderRadius.circular(22),
-                                    border: Border.all(
-                                      color: const Color(0xFFF59E0B),
-                                      width: isCurrentGtCountdown ? 2.2 : 1.5,
-                                    ),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: const Color(0xFFF59E0B)
-                                            .withValues(
-                                          alpha: isCurrentGtCountdown
-                                              ? 0.35
-                                              : 0.18,
-                                        ),
-                                        blurRadius:
-                                            isCurrentGtCountdown ? 24 : 14,
-                                      ),
-                                    ],
-                                  )
-                                : null,
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                if (currentLine.kind.isSection ||
-                                    currentGtAlert != null ||
-                                    currentLine.calls.isNotEmpty ||
-                                    currentLine.customShout
-                                        .trim()
-                                        .isNotEmpty ||
-                                    currentLine.tailUpdraft) ...[
-                                  Wrap(
-                                    alignment: WrapAlignment.center,
-                                    spacing: 8,
-                                    runSpacing: 8,
-                                    children: [
-                                      if (currentLine.kind.isSection)
-                                        TonalChip(
-                                          label:
-                                              '${currentLine.kind.zhLabel} · ${formatGapSec(math.max(0, currentLine.endTimeMs - currentLine.startTimeMs))}',
-                                          color: const Color(0xFF0EA5E9),
-                                          foregroundColor:
-                                              const Color(0xFFFFFFFF),
-                                        ),
-                                      if (currentGtAlert != null)
-                                        const TonalChip(
-                                          label: 'GT 警报',
-                                          color: Color(0xFFF59E0B),
-                                          foregroundColor: Color(0xFF000000),
-                                        ),
-                                      if (currentGtAlert != null &&
-                                          currentGtCue.isNotEmpty)
-                                        TonalChip(
-                                          label: currentGtCue,
-                                          color: const Color(0xFFFEF3C7),
-                                          foregroundColor:
-                                              const Color(0xFF78350F),
-                                        ),
-                                      for (final tag in currentLine.calls)
-                                        if (presetMap[tag.presetId]
-                                            case final CallPreset p?)
-                                          CallBadgePill(
-                                            preset: p,
-                                            suffix: tag.suffix,
-                                          ),
-                                      if (currentLine.customShout
-                                          .trim()
-                                          .isNotEmpty)
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 10,
-                                            vertical: 5,
-                                          ),
-                                          decoration: const ShapeDecoration(
-                                            color: Color(0xFF4F46E5),
-                                            shape: AppShape.full,
-                                          ),
-                                          child: Text(
-                                            currentLine.customShout.trim(),
-                                            softWrap: false,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.visible,
-                                            style: AppTextStyle.caption1
-                                                .of(context, emphasized: true)
-                                                .copyWith(
-                                                  color:
-                                                      const Color(0xFFFFFFFF),
-                                                ),
-                                          ),
-                                        ),
-                                      if (currentLine.tailUpdraft)
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 10,
-                                            vertical: 5,
-                                          ),
-                                          decoration: const ShapeDecoration(
-                                            color: Color(0xFF0284C7),
-                                            shape: AppShape.full,
-                                          ),
-                                          child: Text(
-                                            '尾句上升气流',
-                                            softWrap: false,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.visible,
-                                            style: AppTextStyle.caption1
-                                                .of(context, emphasized: true)
-                                                .copyWith(
-                                                  color:
-                                                      const Color(0xFFFFFFFF),
-                                                ),
-                                          ),
-                                        ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 16),
-                                ],
-                                RubyLyricText(
-                                  original: currentLine.text.original,
-                                  rubyHtml: currentLine.text.ruby,
-                                  showRuby: c.displayLayers.showRuby,
-                                  textAlign: TextAlign.center,
-                                  baseStyle: TextStyle(
-                                    fontSize: 32 * c.textScale,
-                                    fontWeight: FontWeight.w800,
-                                    height: 1.32,
-                                    color: const Color(0xFFFFFFFF),
-                                  ),
-                                  rtStyle: TextStyle(
-                                    fontSize: 15 * c.textScale,
-                                    fontWeight: FontWeight.w600,
-                                    color: const Color(0xFF38BDF8),
-                                  ),
-                                ),
-                                if (c.displayLayers.showRomaji &&
-                                    currentLine.text.romaji != null &&
-                                    currentLine.text.romaji!.isNotEmpty) ...[
-                                  const SizedBox(height: 10),
-                                  Text(
-                                    currentLine.text.romaji!,
-                                    textAlign: TextAlign.center,
-                                    style: const TextStyle(
-                                      fontFamily: 'GoogleSans',
-                                      fontSize: 16,
-                                      color: Color(0xFF7DD3FC),
-                                    ),
-                                  ),
-                                ],
-                                if (c.displayLayers.showTranslation &&
-                                    currentLine.text.translation != null &&
-                                    currentLine.text.translation!
-                                        .isNotEmpty) ...[
-                                  const SizedBox(height: 10),
-                                  Text(
-                                    currentLine.text.translation!,
-                                    textAlign: TextAlign.center,
-                                    style: const TextStyle(
-                                      fontSize: 19,
-                                      fontWeight: FontWeight.w500,
-                                      color: Color(0xFFCBD5E1),
-                                    ),
-                                  ),
-                                ],
-                              ],
-                            ),
-                          )
-                        else
-                          const Text(
-                            '当前曲目暂无歌词行',
-                            style: TextStyle(
-                              fontSize: 20,
-                              color: Color(0xFF64748B),
-                            ),
-                          ),
-
-                        if (nextLine != null) ...[
-                          const SizedBox(height: 30),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 12,
-                            ),
-                            decoration: BoxDecoration(
-                              color: nextGtAlert != null
-                                  ? (isNextGtCountdown
-                                        ? const Color(0xFF451A03)
-                                        : const Color(0xFF291709))
-                                  : const Color(0xFF0F172A),
-                              borderRadius: BorderRadius.circular(14),
-                              border: nextGtAlert != null
-                                  ? Border.all(
-                                      color: const Color(0xFFF59E0B),
-                                      width: 1.4,
-                                    )
-                                  : null,
-                            ),
-                            child: Column(
-                              children: [
-                                Wrap(
-                                  alignment: WrapAlignment.center,
-                                  spacing: 6,
-                                  runSpacing: 6,
-                                  children: [
-                                    const Text(
-                                      'NEXT',
-                                      style: TextStyle(
-                                        fontFamily: 'GoogleSans',
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w700,
-                                        color: Color(0xFF64748B),
-                                      ),
-                                    ),
-                                    if (nextGtAlert != null)
-                                      const TonalChip(
-                                        label: 'GT',
-                                        color: Color(0xFFF59E0B),
-                                        foregroundColor: Color(0xFF000000),
-                                      ),
-                                    if (nextGtAlert != null &&
-                                        nextGtCue.isNotEmpty)
-                                      TonalChip(
-                                        label: nextGtCue,
-                                        color: const Color(0xFFFEF3C7),
-                                        foregroundColor:
-                                            const Color(0xFF78350F),
-                                      ),
-                                    for (final tag in nextLine.calls)
-                                      if (presetMap[tag.presetId]
-                                          case final p?)
-                                        CallBadgePill(
-                                          preset: p,
-                                          suffix: tag.suffix,
-                                          compact: true,
-                                        ),
-                                  ],
-                                ),
-                                const SizedBox(height: 6),
-                                Text(
-                                  nextLine.text.original,
-                                  textAlign: TextAlign.center,
-                                  style: const TextStyle(
-                                    fontSize: 18,
-                                    color: Color(0xFF94A3B8),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
+              // Header Bar
+              Container(
+                padding: EdgeInsets.fromLTRB(
+                  20,
+                  activeAlert == null ? pad.top + 14 : 12,
+                  20,
+                  12,
+                ),
+                decoration: const BoxDecoration(
+                  color: Color(0xFF09090B),
+                  border: Border(
+                    bottom: BorderSide(color: Color(0xFF27272A)),
                   ),
                 ),
-              ),
-
-              // Bottom Stage Transport Deck
-              Container(
-                padding: const EdgeInsets.all(14),
-                decoration: const ShapeDecoration(
-                  color: Color(0xFF0F172A),
-                  shape: AppShape.xl,
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Row(
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final titleColumn = Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        ScallopedOrbButton(
-                          running: c.isPlaying,
-                          size: 56,
-                          onToggle: c.togglePlay,
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              Row(
-                                children: [
-                                  Text(
-                                    '${formatMsToClock(c.currentTimeMs)} / ${formatMsToClock(safeDuration.round())}',
-                                    style: const TextStyle(
-                                      fontFamily: 'GoogleSans',
-                                      fontFeatures: [
-                                        FontFeature.tabularFigures(),
-                                      ],
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w700,
-                                      color: Color(0xFFFFFFFF),
+                        Wrap(
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          spacing: 8,
+                          runSpacing: 4,
+                          children: [
+                            Text(
+                              'LIVE PRACTICE MODE · ${c.project.meta.bpm} BPM · 小节 ${c.currentBar}.${c.currentBeatInBar}',
+                              style: AppTextStyle.caption1
+                                  .of(context, emphasized: true)
+                                  .copyWith(
+                                    fontFamily: 'GoogleSans',
+                                    fontFeatures: const [
+                                      FontFeature.tabularFigures(),
+                                    ],
+                                    color: scheme.primary,
+                                  ),
+                            ),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                for (
+                                  var b = 1;
+                                  b <= c.project.meta.beatsPerBar;
+                                  b++
+                                ) ...[
+                                  AnimatedContainer(
+                                    duration: const Duration(milliseconds: 90),
+                                    width: b == 1 ? 10 : 8,
+                                    height: b == 1 ? 10 : 8,
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color:
+                                          c.isPlaying && c.currentBeatInBar == b
+                                          ? (b == 1
+                                                ? const Color(0xFF38BDF8)
+                                                : const Color(0xFF22D3EE))
+                                          : const Color(0xFF27272A),
                                     ),
                                   ),
-                                  const Spacer(),
-                                  GestureDetector(
-                                    onTap: () => c.setPracticeMode(false),
-                                    child: const GlyphIcon(
-                                      CallbookGlyphs.musicNote,
-                                      size: 16,
-                                      color: Color(0xFF94A3B8),
-                                    ),
-                                  ),
+                                  if (b < c.project.meta.beatsPerBar)
+                                    const SizedBox(width: 4),
                                 ],
-                              ),
-                              Slider(
-                                value: clampedPos,
-                                min: 0,
-                                max: safeDuration,
-                                onChanged: (v) => c.seek(v.round()),
-                              ),
-                            ],
-                          ),
+                              ],
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          c.project.meta.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppTextStyle.headline
+                              .of(context, emphasized: true)
+                              .copyWith(color: const Color(0xFFFFFFFF)),
                         ),
                       ],
-                    ),
-                    const SizedBox(height: 8),
-                    Wrap(
+                    );
+
+                    final headerControls = Wrap(
                       spacing: 8,
                       runSpacing: 6,
-                      alignment: WrapAlignment.center,
+                      crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
-                        for (final rate in const [0.75, 1.0, 1.25])
-                          TonalChip(
-                            label: '${rate}x',
-                            color: c.playbackRate == rate
-                                ? const Color(0xFF0284C7)
-                                : const Color(0xFF1E293B),
-                            foregroundColor: const Color(0xFFFFFFFF),
-                            onPressed: () => c.setPlaybackRate(rate),
-                          ),
                         TonalChip(
-                          label: 'Ruby',
+                          label: '注音',
                           color: c.displayLayers.showRuby
-                              ? const Color(0xFF0284C7)
-                              : const Color(0xFF1E293B),
-                          foregroundColor: const Color(0xFFFFFFFF),
+                              ? scheme.primary
+                              : const Color(0xFF18181B),
+                          foregroundColor: c.displayLayers.showRuby
+                              ? scheme.onPrimary
+                              : const Color(0xFFA1A1AA),
                           onPressed: () => c.updateDisplayLayers(
                             showRuby: !c.displayLayers.showRuby,
                           ),
                         ),
                         TonalChip(
-                          label: 'Romaji',
+                          label: '罗马音',
                           color: c.displayLayers.showRomaji
-                              ? const Color(0xFF0284C7)
-                              : const Color(0xFF1E293B),
-                          foregroundColor: const Color(0xFFFFFFFF),
+                              ? scheme.primary
+                              : const Color(0xFF18181B),
+                          foregroundColor: c.displayLayers.showRomaji
+                              ? scheme.onPrimary
+                              : const Color(0xFFA1A1AA),
                           onPressed: () => c.updateDisplayLayers(
                             showRomaji: !c.displayLayers.showRomaji,
                           ),
                         ),
                         TonalChip(
-                          label: '译文',
+                          label: '翻译',
                           color: c.displayLayers.showTranslation
-                              ? const Color(0xFF0284C7)
-                              : const Color(0xFF1E293B),
-                          foregroundColor: const Color(0xFFFFFFFF),
+                              ? scheme.primary
+                              : const Color(0xFF18181B),
+                          foregroundColor: c.displayLayers.showTranslation
+                              ? scheme.onPrimary
+                              : const Color(0xFFA1A1AA),
                           onPressed: () => c.updateDisplayLayers(
                             showTranslation: !c.displayLayers.showTranslation,
                           ),
                         ),
+                        GestureDetector(
+                          onTap: () => c.setPracticeMode(false),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 8,
+                            ),
+                            decoration: const ShapeDecoration(
+                              color: Color(0xFF27272A),
+                              shape: AppShape.full,
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                GlyphIcon(
+                                  Glyphs.close,
+                                  size: 16,
+                                  color: Color(0xFFFFFFFF),
+                                ),
+                                SizedBox(width: 6),
+                                Text(
+                                  '退出演练',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFFFFFFFF),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    );
+
+                    if (constraints.maxWidth < 720) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          titleColumn,
+                          const SizedBox(height: 10),
+                          headerControls,
+                        ],
+                      );
+                    }
+                    return Row(
+                      children: [
+                        Expanded(child: titleColumn),
+                        const SizedBox(width: 12),
+                        headerControls,
+                      ],
+                    );
+                  },
+                ),
+              ),
+
+              // Scrollable Teleprompter Feed
+              Expanded(
+                child: lines.isEmpty
+                    ? const Center(
+                        child: Text(
+                          '当前曲目暂无歌词行',
+                          style: TextStyle(
+                            fontSize: 18,
+                            color: Color(0xFF64748B),
+                          ),
+                        ),
+                      )
+                    : ListView.separated(
+                        controller: _scrollController,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 20,
+                          vertical: 28,
+                        ),
+                        itemCount: lines.length,
+                        separatorBuilder: (_, _) => const SizedBox(height: 16),
+                        itemBuilder: (context, index) {
+                          final line = lines[index];
+                          final lineAlert = c.getAlertForLine(line.id);
+                          final isPlaying = playingId == line.id;
+                          final isGtCountdown =
+                              activeAlert?.targetLineId == line.id;
+                          return KeyedSubtree(
+                            key: _lineKeys.putIfAbsent(line.id, GlobalKey.new),
+                            child: Center(
+                              child: ConstrainedBox(
+                                constraints: const BoxConstraints(
+                                  maxWidth: 880,
+                                ),
+                                child: _PracticeLineCard(
+                                  line: line,
+                                  lineAlert: lineAlert,
+                                  presetMap: presetMap,
+                                  displayLayers: c.displayLayers,
+                                  textScale: c.textScale,
+                                  primaryColor: scheme.primary,
+                                  isPlaying: isPlaying,
+                                  isGtCountdown: isGtCountdown,
+                                  onTap: () => c.seek(line.startTimeMs),
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+              ),
+
+              // Bottom Stage Transport Deck
+              Container(
+                padding: EdgeInsets.fromLTRB(20, 12, 20, pad.bottom + 14),
+                decoration: const BoxDecoration(
+                  color: Color(0xFF09090B),
+                  border: Border(
+                    top: BorderSide(color: Color(0xFF27272A)),
+                  ),
+                ),
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 880),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Slider(
+                          value: clampedPos,
+                          min: 0,
+                          max: safeDuration,
+                          onChanged: (v) => c.seek(v.round()),
+                        ),
+                        const SizedBox(height: 6),
+                        LayoutBuilder(
+                          builder: (context, constraints) {
+                            final clockText = Text(
+                              '${formatMsToClock(c.currentTimeMs)} / ${formatMsToClock(safeDuration.round())}',
+                              style: const TextStyle(
+                                fontFamily: 'GoogleSans',
+                                fontFeatures: [FontFeature.tabularFigures()],
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: Color(0xFFD4D4D8),
+                              ),
+                            );
+                            final transportButtons = Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Semantics(
+                                  label: '快退 2 秒',
+                                  button: true,
+                                  child: TonalChip(
+                                    label: '-2s',
+                                    color: const Color(0xFF27272A),
+                                    foregroundColor: const Color(0xFFFFFFFF),
+                                    onPressed: () =>
+                                        c.seek(c.currentTimeMs - 2000),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                ScallopedOrbButton(
+                                  running: c.isPlaying,
+                                  size: 54,
+                                  onToggle: c.togglePlay,
+                                ),
+                                const SizedBox(width: 12),
+                                Semantics(
+                                  label: '快进 2 秒',
+                                  button: true,
+                                  child: TonalChip(
+                                    label: '+2s',
+                                    color: const Color(0xFF27272A),
+                                    foregroundColor: const Color(0xFFFFFFFF),
+                                    onPressed: () =>
+                                        c.seek(c.currentTimeMs + 2000),
+                                  ),
+                                ),
+                              ],
+                            );
+                            final speedChips = Wrap(
+                              spacing: 6,
+                              runSpacing: 6,
+                              children: [
+                                for (final rate in const [0.75, 1.0, 1.25])
+                                  TonalChip(
+                                    label: '${rate}x',
+                                    color: (c.playbackRate - rate).abs() < 0.01
+                                        ? scheme.primary
+                                        : const Color(0xFF18181B),
+                                    foregroundColor:
+                                        (c.playbackRate - rate).abs() < 0.01
+                                        ? scheme.onPrimary
+                                        : const Color(0xFFD4D4D8),
+                                    onPressed: () => c.setPlaybackRate(rate),
+                                  ),
+                              ],
+                            );
+
+                            if (constraints.maxWidth < 540) {
+                              return Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  Row(
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceBetween,
+                                    children: [clockText, speedChips],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Center(child: transportButtons),
+                                ],
+                              );
+                            }
+
+                            return Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                clockText,
+                                transportButtons,
+                                speedChips,
+                              ],
+                            );
+                          },
+                        ),
                       ],
                     ),
-                  ],
+                  ),
                 ),
               ),
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _PracticeLineCard extends StatelessWidget {
+  const _PracticeLineCard({
+    required this.line,
+    required this.lineAlert,
+    required this.presetMap,
+    required this.displayLayers,
+    required this.textScale,
+    required this.primaryColor,
+    required this.isPlaying,
+    required this.isGtCountdown,
+    required this.onTap,
+  });
+
+  final LyricLine line;
+  final GtAlert? lineAlert;
+  final Map<String, CallPreset> presetMap;
+  final DisplayLayers displayLayers;
+  final double textScale;
+  final Color primaryColor;
+  final bool isPlaying;
+  final bool isGtCountdown;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final cue = (lineAlert?.callTimingCue ?? '').trim();
+    final gtNote = (lineAlert?.note ?? '').trim();
+    final shout = line.customShout.trim();
+
+    late final Color borderColor;
+    late final Color bgColor;
+    late final double opacity;
+    List<BoxShadow> shadows = const [];
+
+    if (isGtCountdown) {
+      borderColor = const Color(0xFFF59E0B);
+      bgColor = const Color(0xFF261805);
+      opacity = 1.0;
+      shadows = const [
+        BoxShadow(
+          color: Color(0x59F59E0B),
+          blurRadius: 28,
+        ),
+      ];
+    } else if (isPlaying && lineAlert != null) {
+      borderColor = const Color(0xFFF59E0B);
+      bgColor = const Color(0xFF1F1608);
+      opacity = 1.0;
+      shadows = const [
+        BoxShadow(
+          color: Color(0x40F59E0B),
+          blurRadius: 24,
+        ),
+      ];
+    } else if (isPlaying) {
+      borderColor = primaryColor;
+      bgColor = const Color(0xFF12151C);
+      opacity = 1.0;
+      shadows = [
+        BoxShadow(
+          color: primaryColor.withValues(alpha: 0.24),
+          blurRadius: 26,
+        ),
+      ];
+    } else if (lineAlert != null) {
+      borderColor = const Color(0xFFB45309);
+      bgColor = const Color(0xFF1A1307);
+      opacity = 0.88;
+    } else {
+      borderColor = const Color(0xFF27272A);
+      bgColor = const Color(0xFF09090B);
+      opacity = 0.62;
+    }
+
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Opacity(
+        opacity: opacity,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 18),
+          decoration: BoxDecoration(
+            color: bgColor,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(
+              color: borderColor,
+              width: (isPlaying || isGtCountdown) ? 1.8 : 1.0,
+            ),
+            boxShadow: shadows,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  Text(
+                    formatMsToClock(line.startTimeMs),
+                    style: const TextStyle(
+                      fontFamily: 'GoogleSans',
+                      fontFeatures: [FontFeature.tabularFigures()],
+                      fontSize: 12,
+                      color: Color(0xFFA1A1AA),
+                    ),
+                  ),
+                  if (line.kind.isSection)
+                    TonalChip(
+                      label:
+                          '${line.kind.zhLabel} · ${formatGapSec(math.max(1000, line.endTimeMs - line.startTimeMs))}',
+                      color: const Color(0xFF6366F1),
+                      foregroundColor: const Color(0xFFFFFFFF),
+                    ),
+                  if (lineAlert != null)
+                    TonalChip(
+                      label: cue.isNotEmpty ? 'GT 警报 · $cue' : 'GT 警报',
+                      color: const Color(0xFFF59E0B),
+                      foregroundColor: const Color(0xFF000000),
+                    ),
+                  if (lineAlert != null && gtNote.isNotEmpty)
+                    Text(
+                      gtNote,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFFFCD34D),
+                      ),
+                    ),
+                  for (final tag in line.calls)
+                    if (presetMap[tag.presetId] case final CallPreset p?)
+                      CallBadgePill(
+                        preset: p,
+                        suffix: tag.suffix,
+                      ),
+                  if (shout.isNotEmpty)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      decoration: const ShapeDecoration(
+                        color: Color(0xFFE11D48),
+                        shape: AppShape.full,
+                      ),
+                      child: Text(
+                        shout,
+                        softWrap: false,
+                        maxLines: 1,
+                        overflow: TextOverflow.visible,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                          color: Color(0xFFFFFFFF),
+                        ),
+                      ),
+                    ),
+                  if (line.tailUpdraft)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      decoration: const ShapeDecoration(
+                        color: Color(0xFF0284C7),
+                        shape: AppShape.full,
+                      ),
+                      child: const Text(
+                        '尾句上升气流',
+                        softWrap: false,
+                        maxLines: 1,
+                        overflow: TextOverflow.visible,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                          color: Color(0xFFFFFFFF),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              RubyLyricText(
+                original: line.text.original,
+                rubyHtml: line.text.ruby,
+                showRuby: displayLayers.showRuby,
+                baseStyle: TextStyle(
+                  fontSize: (isPlaying ? 32 : 22) * textScale,
+                  fontWeight: FontWeight.w800,
+                  height: 1.32,
+                  color: const Color(0xFFFFFFFF),
+                ),
+                rtStyle: TextStyle(
+                  fontSize: (isPlaying ? 15 : 11) * textScale,
+                  fontWeight: FontWeight.w600,
+                  color: const Color(0xFF38BDF8),
+                ),
+              ),
+              if (displayLayers.showRomaji &&
+                  line.text.romaji != null &&
+                  line.text.romaji!.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text(
+                  line.text.romaji!,
+                  style: TextStyle(
+                    fontFamily: 'GoogleSans',
+                    fontSize: isPlaying ? 16 : 13,
+                    color: const Color(0xFF7DD3FC),
+                  ),
+                ),
+              ],
+              if (displayLayers.showTranslation &&
+                  line.text.translation != null &&
+                  line.text.translation!.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text(
+                  line.text.translation!,
+                  style: TextStyle(
+                    fontSize: isPlaying ? 18 : 14,
+                    fontWeight: FontWeight.w500,
+                    color: const Color(0xFFD4D4D8),
+                  ),
+                ),
+              ],
+            ],
+          ),
         ),
       ),
     );
