@@ -3,6 +3,7 @@ import 'package:flutter/widgets.dart';
 import 'package:prism_ui/icons/icons.dart';
 import 'package:prism_ui/prism_ui.dart';
 
+import '../../data/default_songs.dart';
 import '../../state/callbook_controller.dart';
 import 'archive_switcher_dialog.dart';
 import 'callbook_glyphs.dart';
@@ -60,14 +61,13 @@ class _AudioSourcePanelState extends State<AudioSourcePanel> {
   static const List<(String, String)> _tabs = [
     ('search', '搜索曲库'),
     ('local', '本地音轨 + LRC'),
-    ('demo', '内置 Demo'),
+    ('defaults', '默认曲库'),
   ];
 
   static const List<(String, String)> _providers = [
     ('auto', '自动聚合'),
     ('custom_proxy', '网易云直连'),
     ('lrclib', 'LRCLIB'),
-    ('mock', '演示库'),
   ];
 
   String _sourceTab = 'search';
@@ -76,9 +76,7 @@ class _AudioSourcePanelState extends State<AudioSourcePanel> {
   bool _showTranslationBox = false;
   bool _parsingLrc = false;
 
-  final TextEditingController _searchCtrl = TextEditingController(
-    text: 'Starlight',
-  );
+  final TextEditingController _searchCtrl = TextEditingController();
   final TextEditingController _lrcCtrl = TextEditingController();
   final TextEditingController _transCtrl = TextEditingController();
 
@@ -173,7 +171,7 @@ class _AudioSourcePanelState extends State<AudioSourcePanel> {
         const SizedBox(height: 12),
         if (_sourceTab == 'search') _buildSearchTab(context, c, scheme),
         if (_sourceTab == 'local') _buildLocalTab(context, c, scheme),
-        if (_sourceTab == 'demo') _buildDemoTab(context, c, scheme),
+        if (_sourceTab == 'defaults') _buildDefaultSongsTab(context, c, scheme),
       ],
     );
 
@@ -430,59 +428,103 @@ class _AudioSourcePanelState extends State<AudioSourcePanel> {
     );
   }
 
-  Widget _buildDemoTab(
+  Widget _buildDefaultSongsTab(
     BuildContext context,
     CallbookController c,
     ColorScheme scheme,
   ) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: ShapeDecoration(
-        color: scheme.surfaceContainerLow,
-        shape: AppShape.lg,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              GlyphIcon(
-                CallbookGlyphs.musicNote,
-                size: 16,
-                color: scheme.primary,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  '使用内置节拍合成引擎播放 175 BPM 无版权鼓点与演示歌词，适合离线测试节拍同步与编写演练。',
-                  style: AppTextStyle.caption1.of(context).copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
+    final activeSpec = findDefaultSongByProject(c.project);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          '内置 3 首无预设 Call 的精选模板曲目，载入后会尝试自动匹配在线试听音源，亦可配合节拍器直接编写演练。',
+          style: AppTextStyle.caption1.of(context).copyWith(
+            color: scheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 10),
+        for (var i = 0; i < defaultSongs.length; i++) ...[
+          (() {
+            final spec = defaultSongs[i];
+            final isCurrent = activeSpec?.id == spec.id;
+            return Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: ShapeDecoration(
+                color: isCurrent
+                    ? scheme.primaryContainer.withValues(alpha: 0.45)
+                    : scheme.surfaceContainerLow,
+                shape: RoundedSuperellipseBorder(
+                  borderRadius: AppRadius.lg,
+                  side: isCurrent
+                      ? BorderSide(color: scheme.primary, width: 1.5)
+                      : BorderSide(color: scheme.outlineVariant),
                 ),
               ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          FilledButton(
-            onPressed: () async {
-              final ok = await confirmArchiveSaveIfNeeded(
-                context,
-                c,
-                actionLabel: '加载演练 Demo',
-                targetLabel: '175 BPM 合成 Demo',
-              );
-              if (!ok || !mounted) return;
-              await c.loadDemoProject();
-              if (mounted) {
-                widget.onImported?.call();
-              }
-            },
-            child: const Text('加载 175 BPM 演示曲目'),
-          ),
+              child: Row(
+                children: [
+                  GlyphIcon(
+                    CallbookGlyphs.musicNote,
+                    size: 16,
+                    color: isCurrent ? scheme.primary : scheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          spec.project.meta.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppTextStyle.subheadline
+                              .of(context, emphasized: true)
+                              .copyWith(color: scheme.onSurface),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          spec.subtitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppTextStyle.caption1.of(context).copyWith(
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  TonalChip(
+                    label: isCurrent ? '重新载入' : '载入曲目',
+                    color: isCurrent
+                        ? scheme.primary
+                        : scheme.primaryContainer,
+                    foregroundColor: isCurrent
+                        ? scheme.onPrimary
+                        : scheme.onPrimaryContainer,
+                    onPressed: () async {
+                      final ok = await confirmArchiveSaveIfNeeded(
+                        context,
+                        c,
+                        actionLabel: '切换默认曲目',
+                        targetLabel: spec.project.meta.title,
+                      );
+                      if (!ok || !mounted) return;
+                      await c.loadDefaultSong(spec.id);
+                      if (mounted) {
+                        widget.onImported?.call();
+                      }
+                    },
+                  ),
+                ],
+              ),
+            );
+          })(),
+          if (i < defaultSongs.length - 1) const SizedBox(height: 8),
         ],
-      ),
+      ],
     );
   }
 }

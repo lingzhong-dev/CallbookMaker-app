@@ -14,6 +14,22 @@ class ProjectStorage {
   static const _neteaseCookieKey = 'live_call_studio_netease_cookie_v1';
   static const _archivesKey = 'live_call_studio_archives_v1';
   static const _archiveSessionKey = 'live_call_studio_archive_session_v1';
+  static const _onboardingKey = 'live_call_studio_onboarding_v1';
+
+  Future<bool> hasSavedProjectKey() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.containsKey(_projectKey);
+  }
+
+  Future<bool> loadOnboardingCompleted() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_onboardingKey) ?? false;
+  }
+
+  Future<void> saveOnboardingCompleted(bool completed) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_onboardingKey, completed);
+  }
 
   Future<CallProject?> loadProject() async {
     final prefs = await SharedPreferences.getInstance();

@@ -266,6 +266,59 @@ class ThemeView extends StatelessWidget {
               ],
             ),
           ),
+          const SizedBox(height: 12),
+
+          // 4. Onboarding Guide Re-entry
+          Card(
+            inert: true,
+            radius: 22,
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: ShapeDecoration(
+                    color: scheme.primaryContainer,
+                    shape: AppShape.md,
+                  ),
+                  alignment: Alignment.center,
+                  child: GlyphIcon(
+                    CallbookGlyphs.musicNote,
+                    size: 18,
+                    color: scheme.primary,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '新手引导与默认曲库向导',
+                        style: AppTextStyle.subheadline
+                            .of(context, emphasized: true)
+                            .copyWith(color: scheme.onSurface),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '随时重新浏览 5 步核心功能介绍、快速切换应援主题色或更换初始曲目',
+                        style: AppTextStyle.caption1.of(context).copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                TonalButton(
+                  size: TonalButtonSize.compact,
+                  label: '重新查看功能引导',
+                  onPressed: c.reopenOnboarding,
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -344,7 +397,11 @@ class ThemeView extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        '君と響く Starlight Overdrive',
+                        c.project.meta.title.trim().isNotEmpty
+                            ? c.project.meta.title
+                            : '来自瓦纳海姆',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: AppTextStyle.subheadline
                             .of(context, emphasized: true)
                             .copyWith(color: scheme.onSurface),

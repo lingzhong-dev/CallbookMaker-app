@@ -2,6 +2,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:live_call_studio/main.dart';
 import 'package:live_call_studio/state/callbook_controller.dart';
+import 'package:live_call_studio/utils/lrc_ruby_parser.dart';
 
 import 'support/mock_audioplayers_harness.dart';
 
@@ -66,8 +67,8 @@ void main() {
         };
 
         try {
-          // Run 40 continuous playback frames (~640ms) inside the first lyric line
-          // (lines[0] spans 500..4400ms in demo project, so start at 600ms).
+          // Run 40 continuous playback frames (~640ms) inside the first timeline line
+          // (lines[0] is intro 0..12000ms in primary default song, so start at 600ms).
           audioHarness.mockMusicPositionMs = 600;
           await controller.seek(600);
           await tester.pump();
@@ -86,9 +87,14 @@ void main() {
           expect(rebuildCounts['_ReactiveTimelineLineCard'] ?? 0, 0);
           expect(rebuildCounts['TextField'] ?? 0, 0);
 
-          // Verify Hero card clock actually updated live via FramePositionUpdater.
+          // Verify Hero card clock actually updated live via FramePositionUpdater
+          // (the only remaining 00:00.00 belongs to the intro section badge).
           expect(controller.currentTimeMs, greaterThan(1000));
-          expect(find.text('00:00.00'), findsNothing);
+          expect(
+            find.text(formatMsToClock(controller.currentTimeMs)),
+            findsAtLeastNWidgets(1),
+          );
+          expect(find.text('00:00.00'), findsOneWidget);
           expect(find.text('Running'), findsOneWidget);
 
           // Verify ThemeCrossFade never captured an overlay snapshot during playback.
@@ -139,6 +145,7 @@ void main() {
         final controller = await createTestCallbookController(
           enableAudioOutput: false,
         );
+        controller.toggleLineGtAlert(lineId: controller.sortedLines[2].id);
         tester.view.physicalSize = const Size(1280, 820);
         tester.view.devicePixelRatio = 1.0;
 

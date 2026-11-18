@@ -6,6 +6,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:live_call_studio/services/api_client.dart';
+import 'package:live_call_studio/services/lrclib_direct_client.dart';
+import 'package:live_call_studio/services/netease_direct_client.dart';
 import 'package:live_call_studio/state/callbook_controller.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -170,14 +172,33 @@ class MockAudioplayersHarness {
 
 Future<CallbookController> createTestCallbookController({
   bool enableAudioOutput = true,
+  Map<String, Object> initialPrefs = const {
+    'live_call_studio_onboarding_v1': true,
+  },
+  http.Client? apiHttpClient,
+  http.Client? neteaseHttpClient,
+  http.Client? lrclibHttpClient,
 }) async {
-  SharedPreferences.setMockInitialValues({});
+  SharedPreferences.setMockInitialValues(initialPrefs);
   final api = CallbookApiClient(
     baseUrl: 'http://127.0.0.1:8000',
-    httpClient: MockClient((_) async => http.Response('offline', 503)),
+    httpClient:
+        apiHttpClient ?? MockClient((_) async => http.Response('offline', 503)),
+  );
+  final neteaseDirect = NeteaseDirectClient(
+    httpClient:
+        neteaseHttpClient ??
+        MockClient((_) async => http.Response('offline', 503)),
+  );
+  final lrclibDirect = LrclibDirectClient(
+    httpClient:
+        lrclibHttpClient ??
+        MockClient((_) async => http.Response('offline', 503)),
   );
   final controller = CallbookController(
     apiClient: api,
+    neteaseDirectClient: neteaseDirect,
+    lrclibDirectClient: lrclibDirect,
     enableAudioOutput: enableAudioOutput,
   );
   await controller.init();

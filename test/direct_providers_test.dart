@@ -5,12 +5,12 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:live_call_studio/data/default_songs.dart';
 import 'package:live_call_studio/main.dart';
 import 'package:live_call_studio/models/callbook_models.dart';
 import 'package:live_call_studio/services/api_client.dart';
 import 'package:live_call_studio/services/desktop_service_launcher.dart';
 import 'package:live_call_studio/services/lrclib_direct_client.dart';
-import 'package:live_call_studio/services/mock_catalog_provider.dart';
 import 'package:live_call_studio/services/netease_direct_client.dart';
 import 'package:live_call_studio/state/callbook_controller.dart';
 import 'package:live_call_studio/utils/lrc_ruby_parser.dart';
@@ -66,7 +66,9 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   setUp(() {
-    SharedPreferences.setMockInitialValues(const {});
+    SharedPreferences.setMockInitialValues(const {
+      'live_call_studio_onboarding_v1': true,
+    });
     _setupPluginMocks();
   });
 
@@ -74,18 +76,18 @@ void main() {
     test('NeteaseDirectClient.eapiEncrypt matches verified AES-128-ECB vector', () {
       const expectedHex =
           '2B5D64177AA6460FBAA3DCB1285E28954BBB4F7556E09B0FB25750F12398BB50'
-          '565A7F460E7CE78A1AF430E027FBE879C4A9F27F2EB9646649834AF9158B1E0F'
-          'EBFA3964E919E351E2A3C14BF6D237BCDC6D9CB0EDF0E411235E1DD89CCE6DCF'
-          '1592EFDBED2FA4BB612DD34C3BE69C1C8669C1DCE2A45A7DACAFA0C320D13BB2'
-          '539E9CA7FE3CE92B53D71E422E5857E4CC5E19F54C3EB44853D579745ED5DBA8'
-          '6FFF22C6A90DB73B53A7BFC2E2E4B85ED10A53692FD5606225E2CDCC0DB70646'
-          '60013F1CF221119F2F8BA038A692DE56A08921FCE489C33866E45B24AD51DD4F'
-          '5B4D7727666CA77EF901A839B3F4ADEBB6A27106D6C6223DBCC49EC284E67DBB';
+          'D9E6CCBB484BE997B1E9E23C9BC44B309856D3FAA5DB96F718E4E4FC9F4FEF9F'
+          '266459E5F9F3C9B60A2B275D0A17AB344FAF458E38B01057B24E16527088BA4A'
+          '19A989841057EFF3EB1AE13366EE91A31D64463F1D86B8A266CC541E448AFC57'
+          '6835673E4B512BFA123B8D354402B375F02CD44CCE7AEFD4FF4B95D00FD1E64D'
+          '40947D58BF835F0C2E64247C29C16439BBD93578A7F3F3883FBB3A73A2EEDB28'
+          '306BAAE14CAF6DA87665F7E8FAEF6CD4172B0F2570CBE2A85A8A88A53979C6EC'
+          '47F87DAD2EFB952AD92CB4818606A246';
 
       final actualHex = NeteaseDirectClient.eapiEncrypt(
         '/api/cloudsearch/pc',
         <String, Object?>{
-          's': 'Starlight',
+          's': 'Kizuna',
           'type': 1,
           'limit': 2,
           'offset': 0,
@@ -112,7 +114,7 @@ void main() {
 
     test('parseLrcOffline skips Netease JSON credits and parses inline bilingual lines', () {
       const lrc = '''
-{"t":0,"c":[{"tx":"作词 : SAWTOWNE"}]}
+{"t":0,"c":[{"tx":"作词 : ryo (supercell)"}]}
 [ti:Test]
 [00:05.00] 夜空を見上げて // 仰望夜空
 [00:10.00] 夢の中へ || 去往梦中
@@ -148,13 +150,13 @@ void main() {
               'songs': [
                 {
                   'id': 2127806975,
-                  'name': 'M@GICAL☆CURE!',
+                  'name': 'ワールドイズマイン',
                   'ar': [
-                    {'name': 'SAWTOWNE'},
+                    {'name': 'ryo (supercell)'},
                     {'name': '初音ミク'},
                   ],
-                  'al': {'name': 'MIKU EXPO'},
-                  'dt': 201875,
+                  'al': {'name': 'supercell'},
+                  'dt': 255000,
                 },
               ],
             },
@@ -173,12 +175,12 @@ void main() {
             'songs': [
               {
                 'id': 2127806975,
-                'name': 'M@GICAL☆CURE!',
+                'name': 'ワールドイズマイン',
                 'ar': [
-                  {'name': 'SAWTOWNE'},
+                  {'name': 'ryo (supercell)'},
                 ],
-                'al': {'name': 'MIKU EXPO 2024'},
-                'dt': 201875,
+                'al': {'name': 'supercell'},
+                'dt': 255000,
               },
             ],
           });
@@ -197,7 +199,7 @@ void main() {
             'data': [
               {
                 'id': 2127806975,
-                'url': 'https://m8.music.126.net/demo-track.mp3',
+                'url': 'https://m8.music.126.net/sample-track.mp3',
                 'code': 200,
               },
             ],
@@ -219,20 +221,20 @@ void main() {
         expect(authed.nickname, 'MikuStageUser');
         expect(authed.cookieMasked, 'MUSIC_U=vali***2345');
 
-        final tracks = await client.searchTracks('M@GICAL', cookie: 'validtoken12345');
+        final tracks = await client.searchTracks('ワールドイズマイン', cookie: 'validtoken12345');
         expect(tracks.length, 1);
         expect(tracks.first.provider, 'netease_direct');
-        expect(tracks.first.artist, 'SAWTOWNE / 初音ミク');
-        expect(tracks.first.durationMs, 201875);
+        expect(tracks.first.artist, 'ryo (supercell) / 初音ミク');
+        expect(tracks.first.durationMs, 255000);
 
         final detail = await client.fetchTrackDetail(
           '2127806975',
           cookie: 'validtoken12345',
         );
-        expect(detail.audioUrl, 'https://m8.music.126.net/demo-track.mp3');
+        expect(detail.audioUrl, 'https://m8.music.126.net/sample-track.mp3');
         expect(detail.lines.length, 2);
         expect(detail.lines.first.text.translation, '准备好了吗');
-        expect(detail.track.album, 'MIKU EXPO 2024');
+        expect(detail.track.album, 'supercell');
         expect(
           seenRequests.every(
             (r) =>
@@ -252,7 +254,7 @@ void main() {
           return _jsonResp([
             {
               'id': 42,
-              'trackName': 'Starlight Anthem',
+              'trackName': 'Luna Anthem',
               'artistName': 'Stage Unit',
               'albumName': 'Live Vol.1',
               'duration': 185.5,
@@ -263,7 +265,7 @@ void main() {
         if (req.url.path == '/api/get/42') {
           return _jsonResp({
             'id': 42,
-            'trackName': 'Starlight Anthem',
+            'trackName': 'Luna Anthem',
             'artistName': 'Stage Unit',
             'albumName': 'Live Vol.1',
             'duration': 185.5,
@@ -275,7 +277,7 @@ void main() {
 
       final client = LrclibDirectClient(httpClient: mockHttp);
       try {
-        final results = await client.searchTracks('Starlight');
+        final results = await client.searchTracks('Luna');
         expect(results.length, 1);
         expect(results.first.provider, 'lrclib');
         expect(results.first.durationMs, 185500);
@@ -291,21 +293,32 @@ void main() {
       }
     });
 
-    test('MockCatalogProvider returns offline copyright-free demos', () {
-      const mock = MockCatalogProvider();
-      final results = mock.searchTracks('unmatched-keyword');
-      expect(results.length, 3);
-      expect(results.first.id, 'mock-starlight-175');
-
-      final detail = mock.fetchTrackDetail('mock-starlight-175');
-      expect(detail, isNotNull);
-      expect(detail!.lines.length, 8);
-      expect(detail.lines.first.text.translation, '仰望夜空 让旋律回响吧');
+    test('Default songs catalog provides 3 clean presets without pre-filled Calls', () {
+      expect(defaultSongs.length, 3);
+      for (var i = 0; i < defaultSongs.length; i++) {
+        final clean = defaultSongs[i].buildCleanProject();
+        expect(clean.alerts, isEmpty);
+        expect(clean.lines.any((l) => l.kind.isSection), isTrue);
+        expect(clean.lines.any((l) => l.kind == LyricLineKind.outro), isTrue);
+        if (i < 2) {
+          expect(clean.lines.any((l) => l.kind == LyricLineKind.intro), isTrue);
+        }
+        expect(
+          clean.lines.every(
+            (l) =>
+                l.calls.isEmpty &&
+                l.customShout.isEmpty &&
+                !l.tailUpdraft &&
+                l.alignedCalls.isEmpty,
+          ),
+          isTrue,
+        );
+      }
     });
   });
 
   group('CallbookController Pure-Dart & Hybrid Mode Integration', () {
-    test('Standalone no-Node/no-backend mode searches, falls back, validates Cookie, and loads track cleanly', () async {
+    test('Standalone no-Node/no-backend mode searches, validates Cookie, and loads track cleanly', () async {
       final offlineBackend = MockClient((_) async => http.Response('offline', 503));
       final neteaseHttp = MockClient((req) async {
         final path = req.url.path;
@@ -399,17 +412,12 @@ void main() {
         expect(controller.project.meta.audioUrl, 'https://cdn.example.com/direct.mp3');
         expect(controller.sortedLines.any((l) => l.kind == LyricLineKind.intro), isTrue);
         expect(controller.sortedLines.any((l) => l.kind == LyricLineKind.outro), isTrue);
-
-        // Mock search without backend or external network
-        await controller.searchTracks('', source: 'mock');
-        expect(controller.searchResults.length, 3);
-        expect(controller.searchResults.first.provider, 'mock');
       } finally {
         controller.dispose();
       }
     });
 
-    test('Auto search falls back cleanly from Netease -> LRCLIB -> Mock offline', () async {
+    test('Auto search returns empty results cleanly and points to 默认曲库 when all sources offline', () async {
       final controller = CallbookController(
         apiClient: CallbookApiClient(
           baseUrl: 'http://127.0.0.1:8000',
@@ -426,8 +434,8 @@ void main() {
       try {
         await controller.init();
         await controller.searchTracks('anything', source: 'auto');
-        expect(controller.searchResults.length, 3);
-        expect(controller.searchResults.every((t) => t.provider == 'mock'), isTrue);
+        expect(controller.searchResults, isEmpty);
+        expect(controller.statusMessage, contains('默认曲库'));
       } finally {
         controller.dispose();
       }
@@ -441,7 +449,7 @@ void main() {
           return _jsonResp({
             'status': 'ok',
             'customProxyEnabled': false,
-            'providers': ['lrclib', 'mock'],
+            'providers': ['lrclib'],
           });
         }
         if (path == '/api/site-copy') {

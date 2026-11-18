@@ -10,6 +10,7 @@ import '../state/callbook_controller.dart';
 import '../utils/lrc_ruby_parser.dart';
 import 'dashboard_view.dart';
 import 'export_view.dart';
+import 'onboarding_overlay.dart';
 import 'practice_overlay.dart';
 import 'theme_view.dart';
 import 'widgets/archive_switcher_dialog.dart';
@@ -85,6 +86,7 @@ class _HomeShellState extends State<HomeShell> {
     if (!mounted || event is! KeyDownEvent) return false;
     final route = ModalRoute.of(context);
     if (route != null && !route.isCurrent) return false;
+    if (widget.controller.showOnboarding) return false;
     if (_isTextInputFocused()) return false;
 
     final keyboard = HardwareKeyboard.instance;
@@ -842,6 +844,7 @@ class _HomeShellState extends State<HomeShell> {
                     ),
 
                   if (c.isPracticeMode) PracticeOverlay(controller: c),
+                  if (c.showOnboarding) OnboardingOverlay(controller: c),
                 ],
               );
             },

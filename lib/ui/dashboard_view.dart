@@ -290,7 +290,7 @@ class _DashboardViewState extends State<DashboardView> {
     final beats = c.project.meta.beatsPerBar;
     final sourceModeLabel = c.project.meta.audioUrl.isNotEmpty
         ? (c.project.meta.platform == 'local' ? '本地音频' : '在线音源')
-        : '合成节拍 Demo';
+        : '节拍器演练';
     final offsetMs = c.project.meta.offsetMs;
 
     return Card(
@@ -706,7 +706,7 @@ class _DashboardViewState extends State<DashboardView> {
                     context,
                     scheme,
                     label: '作曲',
-                    hint: '如：SAWTOWNE',
+                    hint: '如：litterzy',
                     controller: _composerCtrl,
                     focusNode: _composerFocus,
                     onChanged: (v) => c.updateMeta(composer: v),
@@ -718,7 +718,7 @@ class _DashboardViewState extends State<DashboardView> {
                     context,
                     scheme,
                     label: '作词',
-                    hint: '如：SAWTOWNE',
+                    hint: '如：冥凰',
                     controller: _lyricistCtrl,
                     focusNode: _lyricistFocus,
                     onChanged: (v) => c.updateMeta(lyricist: v),

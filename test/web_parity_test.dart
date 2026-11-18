@@ -13,6 +13,8 @@ import 'package:live_call_studio/main.dart';
 import 'package:live_call_studio/models/callbook_models.dart';
 import 'package:live_call_studio/services/api_client.dart';
 import 'package:live_call_studio/services/desktop_service_launcher.dart';
+import 'package:live_call_studio/services/lrclib_direct_client.dart';
+import 'package:live_call_studio/services/netease_direct_client.dart';
 import 'package:live_call_studio/state/callbook_controller.dart';
 import 'package:live_call_studio/ui/export_view.dart';
 import 'package:live_call_studio/ui/home_shell.dart';
@@ -165,7 +167,11 @@ void _setupHeadlessPluginMocks({
 
 Future<CallbookController> _initController({
   http.Client? httpClient,
-  Map<String, Object> initialPrefs = const {},
+  http.Client? neteaseHttpClient,
+  http.Client? lrclibHttpClient,
+  Map<String, Object> initialPrefs = const {
+    'live_call_studio_onboarding_v1': true,
+  },
   bool enableAudioOutput = false,
 }) async {
   SharedPreferences.setMockInitialValues(initialPrefs);
@@ -175,8 +181,20 @@ Future<CallbookController> _initController({
     baseUrl: 'http://127.0.0.1:8000',
     httpClient: client,
   );
+  final neteaseDirect = NeteaseDirectClient(
+    httpClient:
+        neteaseHttpClient ??
+        MockClient((req) async => http.Response('offline', 503)),
+  );
+  final lrclibDirect = LrclibDirectClient(
+    httpClient:
+        lrclibHttpClient ??
+        MockClient((req) async => http.Response('offline', 503)),
+  );
   final controller = CallbookController(
     apiClient: api,
+    neteaseDirectClient: neteaseDirect,
+    lrclibDirectClient: lrclibDirect,
     enableAudioOutput: enableAudioOutput,
   );
   await controller.init();
@@ -622,24 +640,19 @@ void main() {
         final controller = await _initController();
         controller.setRoute(StudioRoute.export);
         try {
-          // Verify demo-outro-1 uses valid front-wave x4 preset matching Web demoProject.ts
-          final outro = controller.project.lines.firstWhere(
-            (l) => l.id == 'demo-outro-1',
+          final lyricLines = controller.sortedLines
+              .where((l) => l.kind == LyricLineKind.lyric)
+              .toList();
+          final lineA = lyricLines[0].id;
+          final lineB = lyricLines[1].id;
+          final lineC = lyricLines[2].id;
+          final outro = controller.sortedLines.firstWhere(
+            (l) => l.kind == LyricLineKind.outro,
           );
-          expect(
-            outro.calls.any(
-              (c) => c.presetId == 'front-wave' && c.suffix == '×4',
-            ),
-            isTrue,
-          );
-          expect(
-            outro.calls.every(
-              (c) => defaultCallPresets.any((p) => p.id == c.presetId),
-            ),
-            isTrue,
-          );
+          expect(outro.calls, isEmpty);
+          expect(controller.sortedAlerts, isEmpty);
 
-          // Render HomeShell (starts on ExportView to bypass buggy DashboardView Wrap->SegmentedControl),
+          // Render HomeShell (starts on ExportView to bypass unrelated Dashboard layout),
           // enabling full HomeShell keyboard shortcut & PracticeOverlay testing!
           await _pumpWithViewport(
             tester,
@@ -651,26 +664,26 @@ void main() {
           );
           expect(tester.takeException(), isNull);
 
-          // Select demo-2, test tag + suffix + tailUpdraft
-          controller.selectLine('demo-2');
-          expect(controller.toggleLineCall('demo-2', 'ppph'), isTrue);
-          controller.setCallTagSuffix('demo-2', 'ppph', '×4');
+          // Select lineA, test tag + suffix + tailUpdraft
+          controller.selectLine(lineA);
+          expect(controller.toggleLineCall(lineA, 'ppph'), isTrue);
+          controller.setCallTagSuffix(lineA, 'ppph', '×4');
           expect(
             controller.sortedLines
-                .firstWhere((l) => l.id == 'demo-2')
+                .firstWhere((l) => l.id == lineA)
                 .calls
                 .any((t) => t.presetId == 'ppph' && t.suffix == '×4'),
             isTrue,
           );
 
-          expect(controller.toggleTailUpdraft('demo-2'), isTrue);
-          final updatedDemo2 = controller.sortedLines.firstWhere(
-            (l) => l.id == 'demo-2',
+          expect(controller.toggleTailUpdraft(lineA), isTrue);
+          final updatedLineA = controller.sortedLines.firstWhere(
+            (l) => l.id == lineA,
           );
-          expect(updatedDemo2.tailUpdraft, isTrue);
-          expect(updatedDemo2.calls.isNotEmpty, isTrue);
+          expect(updatedLineA.tailUpdraft, isTrue);
+          expect(updatedLineA.calls.isNotEmpty, isTrue);
 
-          // Custom preset creation (no delete method exists in Flutter vs Web)
+          // Custom preset creation
           controller.addCustomPreset(
             label: '园长',
             colorHex: '#EC4899',
@@ -682,40 +695,41 @@ void main() {
             isTrue,
           );
 
-          // GT alert update & active countdown computation
+          // GT alert creation, update & active countdown computation
+          controller.toggleLineGtAlert(lineId: lineC);
           controller.updateLineGtAlert(
-            'demo-4',
+            lineC,
             callTimingCue: 'hi hi',
             leadBeats: 4,
             note: '加速推进',
           );
-          final demo4Alert = controller.getAlertForLine('demo-4')!;
-          await controller.seek(demo4Alert.triggerTimeMs - 500);
+          final lineCAlert = controller.getAlertForLine(lineC)!;
+          await controller.seek(lineCAlert.triggerTimeMs - 500);
           await tester.pump();
           final countdown = controller.activeGtAlertStatus;
           expect(countdown, isNotNull);
-          expect(countdown!.targetLineId, 'demo-4');
+          expect(countdown!.targetLineId, lineC);
           expect(countdown.isTriggered, isFalse);
           expect(countdown.remainingBeats, greaterThan(0));
 
           // Keyboard shortcut 'G' toggles GT alert, '1' toggles front-wave, 'F' & 'Escape' toggle PracticeOverlay
-          controller.selectLine('demo-3');
+          controller.selectLine(lineB);
           await tester.pump();
           await tester.sendKeyEvent(LogicalKeyboardKey.keyG);
           await tester.pump();
-          expect(controller.getAlertForLine('demo-3'), isNotNull);
+          expect(controller.getAlertForLine(lineB), isNotNull);
           await tester.sendKeyEvent(LogicalKeyboardKey.keyG);
           await tester.pump();
-          expect(controller.getAlertForLine('demo-3'), isNull);
+          expect(controller.getAlertForLine(lineB), isNull);
 
           final hadFront = controller.sortedLines
-              .firstWhere((l) => l.id == 'demo-3')
+              .firstWhere((l) => l.id == lineB)
               .calls
               .any((t) => t.presetId == 'front-wave');
           await tester.sendKeyEvent(LogicalKeyboardKey.digit1);
           await tester.pump();
           final nowHasFront = controller.sortedLines
-              .firstWhere((l) => l.id == 'demo-3')
+              .firstWhere((l) => l.id == lineB)
               .calls
               .any((t) => t.presetId == 'front-wave');
           expect(nowHasFront, !hadFront);
@@ -778,7 +792,10 @@ void main() {
       timeout: const Timeout(Duration(seconds: 20)),
       (tester) async {
         final controller = await _initController();
-        controller.selectLine('demo-2');
+        final targetLineId = controller.sortedLines
+            .firstWhere((l) => l.kind == LyricLineKind.lyric)
+            .id;
+        controller.selectLine(targetLineId);
         try {
           await _pumpWithViewport(
             tester,
@@ -807,7 +824,7 @@ void main() {
           await tester.pump();
           expect(
             controller.sortedLines
-                .firstWhere((l) => l.id == 'demo-2')
+                .firstWhere((l) => l.id == targetLineId)
                 .calls
                 .any((t) => t.presetId == 'clap'),
             isTrue,
@@ -821,7 +838,7 @@ void main() {
           await tester.pumpAndSettle();
           expect(
             controller.sortedLines
-                .firstWhere((l) => l.id == 'demo-2')
+                .firstWhere((l) => l.id == targetLineId)
                 .calls
                 .any((t) => t.presetId == singAlongPresetId),
             isFalse,
@@ -839,11 +856,11 @@ void main() {
           await tester.tap(find.text('确认跟唱'));
           await tester.pumpAndSettle();
 
-          final demo2AfterSingAlong = controller.sortedLines.firstWhere(
-            (l) => l.id == 'demo-2',
+          final targetAfterSingAlong = controller.sortedLines.firstWhere(
+            (l) => l.id == targetLineId,
           );
           expect(
-            demo2AfterSingAlong.calls.any(
+            targetAfterSingAlong.calls.any(
               (t) =>
                   t.presetId == singAlongPresetId &&
                   t.suffix == 'La la la 一起唱!',
@@ -861,7 +878,7 @@ void main() {
           expect(find.text('修改名称 / 颜色'), findsNothing);
           expect(find.text('删除自定义标签'), findsNothing);
 
-          // 5. Add a custom preset, attach it to demo-2, then right-click to edit name & color
+          // 5. Add a custom preset, attach it to targetLineId, then right-click to edit name & color
           controller.addCustomPreset(
             label: '园长Call',
             colorHex: '#EC4899',
@@ -876,7 +893,7 @@ void main() {
           await tester.pump();
           expect(
             controller.sortedLines
-                .firstWhere((l) => l.id == 'demo-2')
+                .firstWhere((l) => l.id == targetLineId)
                 .calls
                 .any((t) => t.presetId == customPreset.id),
             isTrue,
@@ -925,7 +942,7 @@ void main() {
           expect(controller.customPresets, isEmpty);
           expect(
             controller.sortedLines
-                .firstWhere((l) => l.id == 'demo-2')
+                .firstWhere((l) => l.id == targetLineId)
                 .calls
                 .any((t) => t.presetId == customPreset.id),
             isFalse,
@@ -968,17 +985,17 @@ void main() {
           final promptFuture = confirmArchiveSaveIfNeeded(
             ctx,
             controller,
-            actionLabel: '加载演练 Demo',
-            targetLabel: '175 BPM 合成 Demo',
+            actionLabel: '切换默认曲目',
+            targetLabel: 'キズナミュージック♪（友谊的华章）',
           );
           await tester.pump();
-          expect(find.text('保存当前 Call 本再加载演练 Demo？'), findsOneWidget);
+          expect(find.text('保存当前 Call 本再切换默认曲目？'), findsOneWidget);
           await tester.tap(find.text('保存并继续'));
           await tester.pump();
           final ok = await promptFuture;
           expect(ok, isTrue);
 
-          await controller.loadDemoProject();
+          await controller.loadDefaultSong('default-kizuna-music');
           await tester.pump();
           expect(controller.archives.length, 1);
           expect(controller.archives.first.name, 'First Saved Song');
@@ -1026,13 +1043,14 @@ void main() {
         final controller = await _initController();
         controller.setRoute(StudioRoute.export);
         controller.updateMeta(
-          composer: 'SAWTOWNE',
-          lyricist: 'SAWTOWNE',
-          vocalist: '初音ミク',
-          tuner: 'MixMaster',
+          composer: 'litterzy',
+          lyricist: '冥凰',
+          vocalist: '洛天依',
+          tuner: 'Creuzer',
           showTuner: true,
         );
         controller.toggleTailUpdraft(controller.sortedLines.first.id);
+        controller.toggleLineGtAlert(lineId: controller.sortedLines[1].id);
         try {
           await _pumpWithViewport(
             tester,
@@ -1103,7 +1121,7 @@ void main() {
           await tester.pump();
           await tester.tap(find.text('确认并导出'));
           await tester.pump();
-          expect(clipboardText, contains('# Starlight Overdrive'));
+          expect(clipboardText, contains('# 来自瓦纳海姆'));
           expect(clipboardText, contains('## 歌词与 Call 时间轴'));
           expect(clipboardText, contains('编者：澪终'));
           expect(clipboardText, contains('尾句上升气流'));
@@ -1146,7 +1164,7 @@ void main() {
               jsonEncode({
                 'status': 'ok',
                 'customProxyEnabled': gatewayRunning,
-                'providers': ['custom_proxy', 'lrclib', 'mock'],
+                'providers': ['custom_proxy', 'lrclib'],
               }),
               200,
               headers: {'content-type': 'application/json; charset=utf-8'},
@@ -1683,7 +1701,7 @@ void main() {
           final composerField = find.byWidgetPredicate(
             (w) =>
                 w is prism.TextField &&
-                w.decoration?.hintText == '如：SAWTOWNE',
+                w.decoration?.hintText == '如：litterzy',
           ).first;
           expect(composerField, findsOneWidget);
           await _scrollToAndTap(tester, composerField);

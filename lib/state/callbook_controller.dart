@@ -6,12 +6,12 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:prism_ui/prism_ui.dart' as prism;
 
+import '../data/default_songs.dart';
 import '../models/callbook_models.dart';
 import '../services/api_client.dart';
 import '../services/audio_metronome_service.dart';
 import '../services/desktop_service_launcher.dart';
 import '../services/lrclib_direct_client.dart';
-import '../services/mock_catalog_provider.dart';
 import '../services/netease_direct_client.dart';
 import '../services/project_storage.dart';
 import '../utils/aligned_calls.dart';
@@ -141,14 +141,12 @@ class CallbookController extends ChangeNotifier {
     ProjectStorage? storage,
     NeteaseDirectClient? neteaseDirectClient,
     LrclibDirectClient? lrclibDirectClient,
-    MockCatalogProvider? mockCatalogProvider,
     DesktopServiceLauncher? desktopLauncher,
     bool enableAudioOutput = true,
   }) : _api = apiClient ?? CallbookApiClient(),
        _storage = storage ?? ProjectStorage(),
        _neteaseDirect = neteaseDirectClient ?? NeteaseDirectClient(),
        _lrclibDirect = lrclibDirectClient ?? LrclibDirectClient(),
-       _mockCatalog = mockCatalogProvider ?? const MockCatalogProvider(),
        _desktopLauncher = desktopLauncher ?? DesktopServiceLauncher() {
     _audio = AudioMetronomeService(
       enablePlatformAudio: enableAudioOutput,
@@ -181,7 +179,6 @@ class CallbookController extends ChangeNotifier {
   late final ProjectStorage _storage;
   late final NeteaseDirectClient _neteaseDirect;
   late final LrclibDirectClient _lrclibDirect;
-  late final MockCatalogProvider _mockCatalog;
   late final DesktopServiceLauncher _desktopLauncher;
   late final AudioMetronomeService _audio;
 
@@ -198,7 +195,7 @@ class CallbookController extends ChangeNotifier {
 
   bool _disposed = false;
 
-  CallProject _project = CallProject.demo();
+  CallProject _project = defaultPrimarySong.buildCleanProject();
   List<LyricLine> _sortedLinesCache = const [];
   List<GtAlert> _sortedAlertsCache = const [];
   Map<String, GtAlert> _alertByLineIdCache = const {};
@@ -212,6 +209,8 @@ class CallbookController extends ChangeNotifier {
   String? _activeLineId;
   StudioRoute _route = StudioRoute.dashboard;
   bool _sidebarExpanded = true;
+  bool _showOnboarding = false;
+  bool _onboardingReopened = false;
 
   // Theme State (`FlClashThemeManager` equivalent)
   prism.ThemeMode _themeMode = prism.ThemeMode.system;
@@ -237,8 +236,8 @@ class CallbookController extends ChangeNotifier {
   double _metronomeVolume = 0.95;
   double _playbackRate = 1.0;
   int _currentTimeMs = 0;
-  int _durationMs = 48000;
-  int _knownAudioDurationMs = 48000;
+  int _durationMs = defaultPrimarySong.durationMs;
+  int _knownAudioDurationMs = defaultPrimarySong.durationMs;
   SectionDetectThresholds _sectionThresholds = const SectionDetectThresholds();
   int _currentBar = 1;
   int _currentBeatInBar = 1;
@@ -308,6 +307,8 @@ class CallbookController extends ChangeNotifier {
   String? get activeLineId => _activeLineId;
   StudioRoute get route => _route;
   bool get sidebarExpanded => _sidebarExpanded;
+  bool get showOnboarding => _showOnboarding;
+  bool get onboardingReopened => _onboardingReopened;
 
   prism.ThemeMode get themeMode => _themeMode;
   Color get seedColor => _seedColor;
@@ -536,6 +537,32 @@ class CallbookController extends ChangeNotifier {
     return proj.copyWith(alerts: normalized);
   }
 
+  int _resolveKnownDurationMs(CallProject proj) {
+    final defaultSpec = findDefaultSongByProject(proj);
+    if (defaultSpec != null) {
+      return defaultSpec.durationMs;
+    }
+    if (proj.meta.platform == 'synthetic') {
+      return 48000;
+    }
+    return 0;
+  }
+
+  int _computeProjectDurationMs(
+    CallProject proj, {
+    int knownAudioDurationMs = 0,
+  }) {
+    final maxEnd = proj.lines.fold<int>(
+      0,
+      (prev, l) => math.max(prev, l.endTimeMs),
+    );
+    final hasOutro = proj.lines.any((l) => l.kind == LyricLineKind.outro);
+    if (knownAudioDurationMs > 0 || hasOutro) {
+      return math.max(48000, math.max(knownAudioDurationMs, maxEnd));
+    }
+    return math.max(48000, maxEnd + 4000);
+  }
+
   Future<void> _restoreAudioSourceForProject(
     CallProject proj, {
     required int durationMs,
@@ -575,41 +602,98 @@ class CallbookController extends ChangeNotifier {
       }
     }
 
-    final trackId = (meta.trackId ?? '').trim();
-    if (refreshExpiredRemoteUrl &&
-        meta.platform == 'netease' &&
-        trackId.isNotEmpty) {
+    var trackId = (meta.trackId ?? '').trim();
+    if (refreshExpiredRemoteUrl && meta.platform == 'netease') {
       try {
         TrackDetailResponse? refreshed;
-        if (_backendOnline) {
-          try {
-            refreshed = await _api
-                .fetchTrackDetail('netease', trackId)
-                .timeout(const Duration(seconds: 6));
-          } catch (_) {
-            refreshed = null;
+        if (trackId.isEmpty) {
+          final defaultSpec = findDefaultSongByProject(proj);
+          final query = defaultSpec != null
+              ? defaultSpec.neteaseSearchQuery
+              : '${meta.title} ${meta.artist}'.trim();
+          if (query.isNotEmpty) {
+            List<TrackSummary> matches = const [];
+            if (_backendOnline &&
+                (_customProxyEnabled || _gatewayStatus.gatewayOnline)) {
+              try {
+                final resp = await _api
+                    .searchTracks(query, source: 'custom_proxy')
+                    .timeout(const Duration(seconds: 5));
+                matches = resp.results;
+              } catch (_) {
+                matches = const [];
+              }
+            }
+            if (matches.isEmpty) {
+              try {
+                matches = await _neteaseDirect
+                    .searchTracks(
+                      query,
+                      limit: 5,
+                      cookie: _savedNeteaseCookie,
+                    )
+                    .timeout(const Duration(seconds: 5));
+              } catch (_) {
+                matches = const [];
+              }
+            }
+            if (isStale()) return;
+            if (matches.isNotEmpty) {
+              final shortTitle = meta.title.split('（').first.toLowerCase();
+              final picked = matches.firstWhere(
+                (t) {
+                  final candidate = t.title.toLowerCase();
+                  return candidate.contains(shortTitle) ||
+                      shortTitle.contains(candidate);
+                },
+                orElse: () => matches.first,
+              );
+              trackId = picked.id.trim();
+            }
           }
         }
-        refreshed ??= await _neteaseDirect
-            .fetchTrackDetail(
-              trackId,
-              cookie: _savedNeteaseCookie,
-            )
-            .timeout(const Duration(seconds: 6));
-        if (isStale()) return;
-        final freshUrl = refreshed.audioUrl.trim();
-        if (freshUrl.isNotEmpty && !freshUrl.startsWith('blob:')) {
-          _setProject(
-            _project.copyWith(
-              meta: _project.meta.copyWith(audioUrl: freshUrl),
-            ),
-          );
-          await _audio.setAudioSource(
-            url: freshUrl,
-            fallbackDurationMs: durationMs,
-          );
-          schedulePersist(markDirty: false);
-          return;
+
+        if (trackId.isNotEmpty) {
+          if (_backendOnline) {
+            try {
+              refreshed = await _api
+                  .fetchTrackDetail('netease', trackId)
+                  .timeout(const Duration(seconds: 6));
+            } catch (_) {
+              refreshed = null;
+            }
+          }
+          refreshed ??= await _neteaseDirect
+              .fetchTrackDetail(
+                trackId,
+                cookie: _savedNeteaseCookie,
+              )
+              .timeout(const Duration(seconds: 6));
+          if (isStale()) return;
+          final freshUrl = refreshed.audioUrl.trim();
+          if (freshUrl.isNotEmpty && !freshUrl.startsWith('blob:')) {
+            if (_project.meta.title == proj.meta.title &&
+                _project.meta.platform == proj.meta.platform) {
+              _setProject(
+                _project.copyWith(
+                  meta: _project.meta.copyWith(
+                    trackId: trackId,
+                    audioUrl: freshUrl,
+                  ),
+                ),
+              );
+            }
+            try {
+              await _audio.setAudioSource(
+                url: freshUrl,
+                fallbackDurationMs: durationMs,
+              );
+              schedulePersist(markDirty: false);
+              return;
+            } catch (_) {
+              if (isStale()) return;
+            }
+          }
         }
       } catch (_) {
         if (isStale()) return;
@@ -641,35 +725,73 @@ class CallbookController extends ChangeNotifier {
       _applySavedThemeMap(savedTheme);
       _invalidateThemeCache();
     }
+
+    final hasRawSavedProject = await _storage.hasSavedProjectKey();
     final savedProj = await _storage.loadProject();
-    if (savedProj != null && savedProj.lines.isNotEmpty) {
-      _setProject(_normalizeProjectAlerts(savedProj));
-      _knownAudioDurationMs =
-          savedProj.meta.platform == 'synthetic' ? 48000 : 0;
-    } else {
-      _setProject(_normalizeProjectAlerts(_project));
-      _knownAudioDurationMs = 48000;
-    }
-    final maxEnd = _project.lines.fold<int>(
-      0,
-      (prev, l) => math.max(prev, l.endTimeMs),
-    );
-    _durationMs = math.max(48000, maxEnd + 4000);
-    _currentTimeMs = 0;
     _customPresets = await _storage.loadCustomPresets();
     _displayLayers = await _storage.loadDisplayLayers();
     _archives = await _storage.loadArchives();
-    final savedSession = await _storage.loadArchiveSession();
-    if (savedSession != null) {
-      final stillExists = savedSession.activeArchiveId != null &&
-          _archives.any((a) => a.id == savedSession.activeArchiveId);
-      _activeArchiveId = stillExists ? savedSession.activeArchiveId : null;
-      _hasUnsavedChanges = savedSession.hasUnsavedChanges;
-      _hasFetchedExternalLyrics = savedSession.hasFetchedExternalLyrics;
-    } else if (savedProj != null && savedProj.meta.platform != 'synthetic') {
-      _hasFetchedExternalLyrics = true;
-      _hasUnsavedChanges = true;
+    final onboardingCompleted = await _storage.loadOnboardingCompleted();
+    final isFreshInstall =
+        !onboardingCompleted && !hasRawSavedProject && _archives.isEmpty;
+
+    if (isFreshInstall) {
+      final seeded = buildDefaultArchiveEntries();
+      _archives = seeded;
+      _setProject(_normalizeProjectAlerts(seeded.first.project));
+      _knownAudioDurationMs = _resolveKnownDurationMs(_project);
+      _durationMs = _computeProjectDurationMs(
+        _project,
+        knownAudioDurationMs: _knownAudioDurationMs,
+      );
+      _activeArchiveId = seeded.first.id;
+      _hasUnsavedChanges = false;
+      _hasFetchedExternalLyrics = false;
+      _showOnboarding = true;
+      _onboardingReopened = false;
+      await _storage.saveArchives(_archives);
+      await _storage.saveProject(_project);
+      await _storage.saveArchiveSession(
+        ArchiveSessionState(
+          activeArchiveId: _activeArchiveId,
+          hasUnsavedChanges: false,
+          hasFetchedExternalLyrics: false,
+        ),
+      );
+    } else {
+      if (!onboardingCompleted) {
+        await _storage.saveOnboardingCompleted(true);
+      }
+      _showOnboarding = false;
+      _onboardingReopened = false;
+      if (savedProj != null && savedProj.lines.isNotEmpty) {
+        _setProject(_normalizeProjectAlerts(savedProj));
+      } else {
+        _setProject(
+          _normalizeProjectAlerts(defaultPrimarySong.buildCleanProject()),
+        );
+      }
+      _knownAudioDurationMs = _resolveKnownDurationMs(_project);
+      _durationMs = _computeProjectDurationMs(
+        _project,
+        knownAudioDurationMs: _knownAudioDurationMs,
+      );
+      final savedSession = await _storage.loadArchiveSession();
+      if (savedSession != null) {
+        final stillExists = savedSession.activeArchiveId != null &&
+            _archives.any((a) => a.id == savedSession.activeArchiveId);
+        _activeArchiveId = stillExists ? savedSession.activeArchiveId : null;
+        _hasUnsavedChanges = savedSession.hasUnsavedChanges;
+        _hasFetchedExternalLyrics = savedSession.hasFetchedExternalLyrics;
+      } else if (savedProj != null &&
+          savedProj.meta.platform != 'synthetic' &&
+          findDefaultSongByProject(savedProj) == null) {
+        _hasFetchedExternalLyrics = true;
+        _hasUnsavedChanges = true;
+      }
     }
+
+    _currentTimeMs = 0;
     if (sortedLines.isNotEmpty) {
       _activeLineId = sortedLines.first.id;
     }
@@ -749,7 +871,7 @@ class CallbookController extends ChangeNotifier {
         neteaseAccount: prevAccount,
         message: hasCookie
             ? '纯 Dart 直连就绪（免 Node · 已加载本地 Cookie${prevAccount != null && prevAccount.isNotEmpty ? " · $prevAccount" : ""}）'
-            : '纯 Dart 直连就绪（免 Node · 支持网易云游客直连 / LRCLIB / 演示库）',
+            : '纯 Dart 直连就绪（免 Node · 支持网易云游客直连 / LRCLIB / 默认曲库）',
       );
       _setStatusInternal('纯 Dart 直连模式 · 免 Node/后端直接搜歌演练');
     }
@@ -1566,10 +1688,13 @@ class CallbookController extends ChangeNotifier {
     bool silent = false,
     int? explicitDurationMs,
   }) {
+    final isDefaultTemplate = findDefaultSongByProject(_project) != null;
     final totalDur = explicitDurationMs ??
         (_knownAudioDurationMs > 0
             ? _knownAudioDurationMs
-            : (_project.meta.platform != 'synthetic' && _durationMs > 1000
+            : (_project.meta.platform != 'synthetic' &&
+                    !isDefaultTemplate &&
+                    _durationMs > 1000
                   ? _durationMs
                   : null));
     final prevLines = _project.lines;
@@ -1914,7 +2039,7 @@ class CallbookController extends ChangeNotifier {
 
   Future<void> searchTracks(String query, {String source = 'auto'}) async {
     final cleanQuery = query.trim();
-    if (cleanQuery.isEmpty && source != 'mock') return;
+    if (cleanQuery.isEmpty) return;
     _isSearching = true;
     notifyListeners();
     try {
@@ -1923,23 +2048,6 @@ class CallbookController extends ChangeNotifier {
           (_customProxyEnabled ||
               _gatewayStatus.managedByBackend ||
               (_gatewayStatus.gatewayOnline && _gatewayStatus.nodeAvailable));
-
-      if (source == 'mock') {
-        List<TrackSummary> results;
-        if (_backendOnline) {
-          try {
-            final resp = await _api.searchTracks(cleanQuery, source: 'mock');
-            results = resp.results;
-          } catch (_) {
-            results = _mockCatalog.searchTracks(cleanQuery);
-          }
-        } else {
-          results = _mockCatalog.searchTracks(cleanQuery);
-        }
-        _searchResults = results;
-        setStatus('搜索完成 (演示曲库) · ${results.length} 首');
-        return;
-      }
 
       if (source == 'lrclib') {
         List<TrackSummary> results;
@@ -2021,12 +2129,11 @@ class CallbookController extends ChangeNotifier {
           return;
         }
       } catch (_) {
-        // Fallback to built-in offline mock catalog
+        // Fall through to empty result status
       }
 
-      final mockResults = _mockCatalog.searchTracks(cleanQuery);
-      _searchResults = mockResults;
-      setStatus('外网曲库暂不可达或无匹配，已自动切换至演示曲库 (mock) · ${mockResults.length} 首');
+      _searchResults = const [];
+      setStatus('未检索到匹配曲目，可尝试切换音源或使用「默认曲库」/「本地音轨 + LRC」');
     } catch (err) {
       setStatus('搜索失败：$err');
     } finally {
@@ -2056,20 +2163,6 @@ class CallbookController extends ChangeNotifier {
           }
         } else {
           detail = await _lrclibDirect.fetchTrackDetail(summary.id);
-        }
-      } else if (providerName == 'mock') {
-        if (_backendOnline) {
-          try {
-            detail = await _api.fetchTrackDetail('mock', summary.id);
-          } catch (_) {
-            detail =
-                _mockCatalog.fetchTrackDetail(summary.id) ??
-                (throw Exception('未找到内置演示曲目 (${summary.id})'));
-          }
-        } else {
-          detail =
-              _mockCatalog.fetchTrackDetail(summary.id) ??
-              (throw Exception('未找到内置演示曲目 (${summary.id})'));
         }
       } else {
         if (_backendOnline) {
@@ -2135,36 +2228,31 @@ class CallbookController extends ChangeNotifier {
         totalDurationMs:
             _knownAudioDurationMs > 0 ? _knownAudioDurationMs : null,
       );
-      final maxEnd = detected.lines.fold<int>(
-        0,
-        (prev, l) => math.max(prev, l.endTimeMs),
+      final nextProject = CallProject(
+        meta: CallProjectMeta(
+          title: detail.track.title,
+          artist: detail.track.artist,
+          vocalist: detail.track.artist,
+          showTuner: false,
+          platform: detail.track.platform,
+          trackId: detail.track.id,
+          audioUrl: detail.audioUrl,
+          bpm: detail.track.bpm ?? _project.meta.bpm,
+          timeSignature: _project.meta.timeSignature,
+          offsetMs: 0,
+        ),
+        alerts: const [],
+        lines: detected.lines,
       );
       final switchSeq = ++_sourceSwitchSeq;
       _clearUndoHistory();
       _currentTimeMs = 0;
       _isPlaying = false;
-      _durationMs = math.max(
-        48000,
-        math.max(_knownAudioDurationMs, maxEnd + 4000),
+      _durationMs = _computeProjectDurationMs(
+        nextProject,
+        knownAudioDurationMs: _knownAudioDurationMs,
       );
-      _setProject(
-        CallProject(
-          meta: CallProjectMeta(
-            title: detail.track.title,
-            artist: detail.track.artist,
-            vocalist: detail.track.artist,
-            showTuner: false,
-            platform: detail.track.platform,
-            trackId: detail.track.id,
-            audioUrl: detail.audioUrl,
-            bpm: detail.track.bpm ?? _project.meta.bpm,
-            timeSignature: _project.meta.timeSignature,
-            offsetMs: 0,
-          ),
-          alerts: const [],
-          lines: detected.lines,
-        ),
-      );
+      _setProject(nextProject);
       _recomputePlaybackDerivedStates();
       _activeLineId = sortedLines.isNotEmpty ? sortedLines.first.id : null;
       _activeArchiveId = null;
@@ -2231,29 +2319,34 @@ class CallbookController extends ChangeNotifier {
     } else {
       lines = parseLrcOffline(lrc, translationLrc: translationLrc);
     }
+    final hasMeasuredExternalAudio =
+        _knownAudioDurationMs > 0 &&
+        (_project.meta.platform == 'local' ||
+            _project.meta.audioUrl.trim().isNotEmpty);
     final durationForOutro =
-        _project.meta.platform != 'synthetic' && _knownAudioDurationMs > 0
-            ? _knownAudioDurationMs
-            : null;
+        hasMeasuredExternalAudio ? _knownAudioDurationMs : null;
     final detected = detectAndMergeSections(
       lines,
       thresholds: _sectionThresholds,
       totalDurationMs: durationForOutro,
-    );
-    final maxEnd = detected.lines.fold<int>(
-      0,
-      (prev, l) => math.max(prev, l.endTimeMs),
     );
     _clearUndoHistory();
     await _audio.pause();
     await _audio.seek(0);
     _isPlaying = false;
     _currentTimeMs = 0;
-    _durationMs = math.max(
-      48000,
-      math.max(_knownAudioDurationMs, maxEnd + 4000),
+    if (!hasMeasuredExternalAudio) {
+      _knownAudioDurationMs = 0;
+    }
+    final nextProject = _project.copyWith(
+      lines: detected.lines,
+      alerts: const [],
     );
-    _setProject(_project.copyWith(lines: detected.lines, alerts: const []));
+    _durationMs = _computeProjectDurationMs(
+      nextProject,
+      knownAudioDurationMs: _knownAudioDurationMs,
+    );
+    _setProject(nextProject);
     _recomputePlaybackDerivedStates();
     _activeLineId = sortedLines.isNotEmpty ? sortedLines.first.id : null;
     _activeArchiveId = null;
@@ -2308,29 +2401,116 @@ class CallbookController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> loadDemoProject() async {
+  Future<void> loadDefaultSong(
+    String songId, {
+    bool preferArchive = false,
+    bool silent = false,
+  }) async {
+    final spec = findDefaultSongById(songId) ?? defaultPrimarySong;
     final switchSeq = ++_sourceSwitchSeq;
     _clearUndoHistory();
-    _knownAudioDurationMs = 48000;
-    _durationMs = 48000;
+    await _audio.pause();
+    await _audio.seek(0);
+
+    CallbookArchiveEntry? matchingArchive;
+    for (final entry in _archives) {
+      if (entry.id == spec.archiveId) {
+        matchingArchive = entry;
+        break;
+      }
+    }
+
+    final CallProject nextProject;
+    final bool useArchive =
+        matchingArchive != null &&
+        (preferArchive ||
+            (matchingArchive.taggedCount == 0 &&
+                matchingArchive.alertCount == 0));
+    if (useArchive) {
+      nextProject = _normalizeProjectAlerts(
+        CallProject.fromJson(matchingArchive.project.toJson()),
+      );
+      _customPresets = [
+        for (final p in matchingArchive.customPresets)
+          CallPreset.fromJson(p.toJson()),
+      ];
+      _activeArchiveId = matchingArchive.id;
+    } else {
+      nextProject = spec.buildCleanProject();
+      _activeArchiveId = null;
+    }
+
+    _knownAudioDurationMs = spec.durationMs;
+    _durationMs = _computeProjectDurationMs(
+      nextProject,
+      knownAudioDurationMs: _knownAudioDurationMs,
+    );
     _currentTimeMs = 0;
     _isPlaying = false;
-    _setProject(_normalizeProjectAlerts(CallProject.demo()));
+    _setProject(nextProject);
     _recomputePlaybackDerivedStates();
     _activeLineId = sortedLines.isNotEmpty ? sortedLines.first.id : null;
-    _activeArchiveId = null;
     _hasFetchedExternalLyrics = false;
     _hasUnsavedChanges = false;
     _refreshCallDensitySeries();
     _syncEngine();
     _persistArchiveSession();
     schedulePersist(markDirty: false);
-    _setStatusInternal('已加载 175 BPM 内置演练工程');
+    if (!silent) {
+      _setStatusInternal('已载入默认曲目：${nextProject.meta.title}');
+    }
     _playbackNotifier.notifyListeners();
     notifyListeners();
-    await _audio.setAudioSource(fallbackDurationMs: 48000);
+
+    await _restoreAudioSourceForProject(
+      nextProject,
+      durationMs: _durationMs,
+      switchToken: switchSeq,
+      refreshExpiredRemoteUrl: true,
+    );
     if (_disposed || switchSeq != _sourceSwitchSeq) return;
     _playbackNotifier.notifyListeners();
+    notifyListeners();
+  }
+
+  void reopenOnboarding() {
+    if (_showOnboarding) return;
+    if (_isPracticeMode) {
+      _isPracticeMode = false;
+    }
+    _showOnboarding = true;
+    _onboardingReopened = true;
+    notifyListeners();
+  }
+
+  Future<void> skipOnboarding() async {
+    _showOnboarding = false;
+    _onboardingReopened = false;
+    await _storage.saveOnboardingCompleted(true);
+    notifyListeners();
+  }
+
+  Future<void> completeOnboarding({
+    String? selectedSongId,
+    bool userExplicitlyPickedSong = false,
+  }) async {
+    final wasReopened = _onboardingReopened;
+    _showOnboarding = false;
+    _onboardingReopened = false;
+    await _storage.saveOnboardingCompleted(true);
+
+    final targetId = selectedSongId?.trim();
+    if (targetId != null && targetId.isNotEmpty) {
+      final currentSpec = findDefaultSongByProject(_project);
+      final shouldSwitch = wasReopened
+          ? (userExplicitlyPickedSong && currentSpec?.id != targetId)
+          : (currentSpec?.id != targetId);
+      if (shouldSwitch) {
+        await loadDefaultSong(targetId, preferArchive: !wasReopened);
+        return;
+      }
+    }
+    notifyListeners();
   }
 
   String exportProjectJsonString() {
@@ -2385,13 +2565,11 @@ class CallbookController extends ChangeNotifier {
       _clearUndoHistory();
       final normalized = _normalizeProjectAlerts(parsed);
       _setProject(normalized);
-      final maxEnd = normalized.lines.fold<int>(
-        0,
-        (prev, l) => math.max(prev, l.endTimeMs),
+      _knownAudioDurationMs = _resolveKnownDurationMs(normalized);
+      _durationMs = _computeProjectDurationMs(
+        normalized,
+        knownAudioDurationMs: _knownAudioDurationMs,
       );
-      _knownAudioDurationMs =
-          normalized.meta.platform == 'synthetic' ? 48000 : 0;
-      _durationMs = math.max(48000, maxEnd + 4000);
       _currentTimeMs = 0;
       _isPlaying = false;
       _recomputePlaybackDerivedStates();
@@ -2516,13 +2694,11 @@ class CallbookController extends ChangeNotifier {
     _customPresets = [
       for (final p in found.customPresets) CallPreset.fromJson(p.toJson()),
     ];
-    final maxEnd = restored.lines.fold<int>(
-      0,
-      (prev, l) => math.max(prev, l.endTimeMs),
+    _knownAudioDurationMs = _resolveKnownDurationMs(restored);
+    _durationMs = _computeProjectDurationMs(
+      restored,
+      knownAudioDurationMs: _knownAudioDurationMs,
     );
-    _knownAudioDurationMs =
-        restored.meta.platform == 'synthetic' ? 48000 : 0;
-    _durationMs = math.max(48000, maxEnd + 4000);
     _currentTimeMs = 0;
     _isPlaying = false;
 

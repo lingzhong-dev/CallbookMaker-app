@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:live_call_studio/data/default_songs.dart';
 import 'package:live_call_studio/models/callbook_models.dart';
 import 'package:live_call_studio/utils/aligned_calls.dart';
 import 'package:live_call_studio/utils/lrc_ruby_parser.dart';
@@ -12,8 +13,8 @@ void main() {
   group('LRC & Furigana Parser', () {
     test('parseRubySegments extracts kanji and rt annotations accurately', () {
       const rubyHtml =
-          '<ruby>君<rt>きみ</rt></ruby>と<ruby>響<rt>ひび</rt></ruby>く Starlight';
-      final segments = parseRubySegments(rubyHtml, '君と響く Starlight');
+          '<ruby>君<rt>きみ</rt></ruby>と<ruby>響<rt>ひび</rt></ruby>く Vanaheim';
+      final segments = parseRubySegments(rubyHtml, '君と響く Vanaheim');
 
       expect(segments.length, 4);
       expect(segments[0].base, '君');
@@ -22,13 +23,13 @@ void main() {
       expect(segments[1].rt, isNull);
       expect(segments[2].base, '響');
       expect(segments[2].rt, 'ひび');
-      expect(segments[3].base, 'く Starlight');
+      expect(segments[3].base, 'く Vanaheim');
       expect(segments[3].rt, isNull);
     });
 
     test('parseLrcOffline aligns original and translation LRC lines', () {
       const lrc = '''
-[ti:Starlight]
+[ti:Vanaheim]
 [00:10.50] 最初の行
 [00:15.00] 次の行
 ''';
@@ -69,30 +70,40 @@ void main() {
   });
 
   group('CallProject Serialization', () {
-    test('CallProject demo roundtrips cleanly through JSON', () {
-      final demo = CallProject.demo();
-      final decoded = CallProject.fromJson(demo.toJson());
+    test('Default CallProject builds cleanly without preset Calls and roundtrips through JSON', () {
+      final primary = defaultPrimarySong.buildCleanProject();
+      final decoded = CallProject.fromJson(primary.toJson());
 
-      expect(decoded.meta.title, demo.meta.title);
-      expect(decoded.meta.bpm, demo.meta.bpm);
-      expect(decoded.meta.timeSignature, demo.meta.timeSignature);
-      expect(decoded.meta.composer, 'SAWTOWNE');
-      expect(decoded.meta.lyricist, 'SAWTOWNE');
-      expect(decoded.meta.vocalist, '初音ミク');
-      expect(decoded.meta.showTuner, isFalse);
-      expect(decoded.alerts.length, demo.alerts.length);
-      expect(decoded.alerts.first.targetLineId, 'demo-4');
-      expect(decoded.alerts.first.callTimingCue, 'se-no');
-      expect(decoded.lines.length, demo.lines.length);
-      expect(decoded.lines.first.calls.length, demo.lines.first.calls.length);
+      expect(decoded.meta.title, '来自瓦纳海姆');
+      expect(decoded.meta.bpm, 148);
+      expect(decoded.meta.timeSignature, '4/4');
+      expect(decoded.meta.composer, 'litterzy');
+      expect(decoded.meta.lyricist, '冥凰');
+      expect(decoded.meta.vocalist, '洛天依');
+      expect(decoded.meta.tuner, 'Creuzer');
+      expect(decoded.meta.showTuner, isTrue);
+      expect(decoded.alerts, isEmpty);
+      expect(decoded.lines.length, primary.lines.length);
+      expect(decoded.lines.any((l) => l.kind == LyricLineKind.intro), isTrue);
+      expect(decoded.lines.any((l) => l.kind == LyricLineKind.outro), isTrue);
+      expect(
+        decoded.lines.every(
+          (l) =>
+              l.calls.isEmpty &&
+              l.customShout.isEmpty &&
+              !l.tailUpdraft &&
+              l.alignedCalls.isEmpty,
+        ),
+        isTrue,
+      );
     });
 
     test('CallProjectMeta and GtAlert serialize extended credits & cues', () {
       const meta = CallProjectMeta(
-        title: 'M@GICAL☆CURE! LOVE ♥ SHOT!',
-        artist: 'SAWTOWNE feat. Hatsune Miku',
-        composer: 'SAWTOWNE',
-        lyricist: 'SAWTOWNE',
+        title: 'ワールドイズマイン',
+        artist: 'supercell feat. 初音ミク',
+        composer: 'ryo (supercell)',
+        lyricist: 'ryo (supercell)',
         vocalist: '初音ミク',
         tuner: 'MixMaster',
         showTuner: true,
@@ -100,8 +111,8 @@ void main() {
         editorNote: '注意间奏 GT 警报处全员跟喊',
       );
       final decodedMeta = CallProjectMeta.fromJson(meta.toJson());
-      expect(decodedMeta.composer, 'SAWTOWNE');
-      expect(decodedMeta.lyricist, 'SAWTOWNE');
+      expect(decodedMeta.composer, 'ryo (supercell)');
+      expect(decodedMeta.lyricist, 'ryo (supercell)');
       expect(decodedMeta.vocalist, '初音ミク');
       expect(decodedMeta.tuner, 'MixMaster');
       expect(decodedMeta.showTuner, isTrue);
@@ -201,14 +212,27 @@ void main() {
     });
 
     test('buildCallBookXlsxBytes produces valid dual-sheet OOXML zip without fills', () {
-      final base = CallProject.demo();
+      final base = defaultPrimarySong.buildCleanProject();
       final modifiedLines = [
         for (var i = 0; i < base.lines.length; i++)
           i == 0
-              ? base.lines[i].copyWith(customShout: '随节奏')
+              ? base.lines[i].copyWith(
+                  calls: const [LineCallTag(presetId: 'front-wave', suffix: '×4')],
+                  customShout: '随节奏',
+                )
               : (i == 3 ? base.lines[i].copyWith(tailUpdraft: true) : base.lines[i]),
       ];
-      final proj = base.copyWith(lines: modifiedLines);
+      final proj = base.copyWith(
+        lines: modifiedLines,
+        alerts: [
+          GtAlert(
+            id: 'gt-xlsx-1',
+            triggerTimeMs: base.lines[2].startTimeMs,
+            targetLineId: base.lines[2].id,
+            callTimingCue: 'se-no',
+          ),
+        ],
+      );
       final bytes = buildCallBookXlsxBytes(
         proj,
         defaultCallPresets,
@@ -234,15 +258,15 @@ void main() {
     });
 
     test('CallbookArchiveEntry and ArchiveSessionState serialize cleanly', () {
-      final base = CallProject.demo();
+      final base = defaultPrimarySong.buildCleanProject();
       final taggedLines = [
         for (var i = 0; i < base.lines.length; i++)
           i == 0 ? base.lines[i].copyWith(tailUpdraft: true) : base.lines[i],
       ];
       final proj = base.copyWith(lines: taggedLines);
       final entry = CallbookArchiveEntry(
-        id: 'arch-demo-1',
-        name: 'Starlight Archive',
+        id: 'arch-vanaheim-1',
+        name: 'Vanaheim Archive',
         createdAt: 1700000000000,
         savedAt: 1700000050000,
         project: proj,
@@ -253,8 +277,8 @@ void main() {
       );
 
       final decoded = CallbookArchiveEntry.fromJson(entry.toJson());
-      expect(decoded.id, 'arch-demo-1');
-      expect(decoded.name, 'Starlight Archive');
+      expect(decoded.id, 'arch-vanaheim-1');
+      expect(decoded.name, 'Vanaheim Archive');
       expect(decoded.lineCount, proj.lines.length);
       expect(decoded.taggedCount, CallbookArchiveEntry.computeTaggedCount(proj));
       expect(decoded.alertCount, proj.alerts.length);
@@ -262,12 +286,12 @@ void main() {
       expect(decoded.project.lines.first.tailUpdraft, isTrue);
 
       const session = ArchiveSessionState(
-        activeArchiveId: 'arch-demo-1',
+        activeArchiveId: 'arch-vanaheim-1',
         hasUnsavedChanges: true,
         hasFetchedExternalLyrics: true,
       );
       final decodedSession = ArchiveSessionState.fromJson(session.toJson());
-      expect(decodedSession.activeArchiveId, 'arch-demo-1');
+      expect(decodedSession.activeArchiveId, 'arch-vanaheim-1');
       expect(decodedSession.hasUnsavedChanges, isTrue);
       expect(decodedSession.hasFetchedExternalLyrics, isTrue);
     });
