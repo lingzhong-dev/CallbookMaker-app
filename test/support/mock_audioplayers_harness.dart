@@ -93,13 +93,20 @@ class MockAudioplayersHarness {
             break;
           case 'seek':
             if (playerId.isNotEmpty) {
+              final targetPos = (args['position'] as num?)?.toInt();
               if (autoCompleteSeek) {
+                if (targetPos != null && _musicPlayerIds.contains(playerId)) {
+                  mockMusicPositionMs = targetPos;
+                }
                 scheduleMicrotask(() => emitSeekComplete(playerId));
               } else if (_musicPlayerIds.contains(playerId)) {
                 final c = Completer<void>();
                 _manualSeekCompleters.add(c);
                 scheduleMicrotask(() async {
                   await c.future;
+                  if (targetPos != null) {
+                    mockMusicPositionMs = targetPos;
+                  }
                   emitSeekComplete(playerId);
                 });
               }

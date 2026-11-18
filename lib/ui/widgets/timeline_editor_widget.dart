@@ -54,15 +54,24 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
   final Map<String, GlobalKey> _lineKeys = {};
   String? _lastActiveLineId;
   String? _lastPlayingLineId;
+  String? _lastLineListSignature;
   String? _pendingScrollLineId;
   bool _showSectionPanel = false;
   bool _showShortcuts = false;
+
+  String _computeLineListSignature(List<TimelineLineItem> items) {
+    if (items.isEmpty) return '';
+    return '${items.length}:${items.first.line.id}:${items.last.line.id}';
+  }
 
   @override
   void initState() {
     super.initState();
     _lastActiveLineId = widget.controller.activeLineId;
     _lastPlayingLineId = widget.controller.playingLineId;
+    _lastLineListSignature = _computeLineListSignature(
+      widget.controller.timelineItems,
+    );
     widget.controller.addListener(_handleFollowScroll);
     widget.controller.playingLineIdListenable.addListener(_handleFollowScroll);
   }
@@ -76,6 +85,9 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
           .removeListener(_handleFollowScroll);
       _lastActiveLineId = widget.controller.activeLineId;
       _lastPlayingLineId = widget.controller.playingLineId;
+      _lastLineListSignature = _computeLineListSignature(
+        widget.controller.timelineItems,
+      );
       widget.controller.addListener(_handleFollowScroll);
       widget.controller.playingLineIdListenable.addListener(_handleFollowScroll);
     }
@@ -83,6 +95,15 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
 
   void _handleFollowScroll() {
     final c = widget.controller;
+    final items = c.timelineItems;
+    final nextSig = _computeLineListSignature(items);
+    if (nextSig != _lastLineListSignature) {
+      _lastLineListSignature = nextSig;
+      final validIds = {for (final item in items) item.line.id};
+      _lineKeys.removeWhere((id, _) => !validIds.contains(id));
+      _lastPlayingLineId = null;
+    }
+
     final nextActive = c.activeLineId;
     final nextPlaying = c.playingLineId;
 
@@ -570,6 +591,16 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
                           _showSectionPanel = !_showSectionPanel;
                         }),
                       ),
+                      if (c.canUndo)
+                        Semantics(
+                          label: '撤销 ${c.lastUndoLabel ?? ''}'.trim(),
+                          button: true,
+                          child: TonalButton(
+                            size: TonalButtonSize.compact,
+                            label: '撤销',
+                            onPressed: c.undoLastTimelineEdit,
+                          ),
+                        ),
                       TonalButton(
                         size: TonalButtonSize.compact,
                         label: '加行',

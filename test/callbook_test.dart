@@ -47,6 +47,20 @@ void main() {
       expect(lines[1].text.translation, '第二行翻译');
     });
 
+    test('parseLrcOffline handles CR-only line endings without collapsing lines', () {
+      const crOnlyLrc = '[00:05.00] 一行目\r[00:10.00] 二行目\r[00:15.00] 三行目';
+      const crOnlyTrans = '[00:05.00] 第一行\r[00:10.00] 第二行\r[00:15.00] 第三行';
+
+      final lines = parseLrcOffline(crOnlyLrc, translationLrc: crOnlyTrans);
+      expect(lines.length, 3);
+      expect(lines[0].text.original, '一行目');
+      expect(lines[0].text.translation, '第一行');
+      expect(lines[1].text.original, '二行目');
+      expect(lines[1].endTimeMs, 15000);
+      expect(lines[2].text.original, '三行目');
+      expect(lines[2].text.translation, '第三行');
+    });
+
     test('formatMsToClock formats milliseconds cleanly', () {
       expect(formatMsToClock(0), '00:00.00');
       expect(formatMsToClock(12540), '00:12.54');

@@ -53,8 +53,7 @@ class AudioMetronomeService {
   final void Function()? onEnded;
   final bool enablePlatformAudio;
 
-  late final AudioPlayer? _musicPlayer =
-      enablePlatformAudio ? AudioPlayer() : null;
+  AudioPlayer? _musicPlayer;
   late final AudioPlayer? _accentClickPlayer =
       enablePlatformAudio ? AudioPlayer() : null;
   late final AudioPlayer? _subClickPlayer =
@@ -77,9 +76,12 @@ class AudioMetronomeService {
   StreamSubscription<Duration>? _durSub;
   StreamSubscription<void>? _completeSub;
   Timer? _clockTimer;
+  Timer? _positionWatchdogTimer;
+  DateTime _lastPositionEventWall = DateTime.fromMillisecondsSinceEpoch(0);
 
   bool _disposed = false;
   bool _hasExternalAudio = false;
+  bool _hasPreparedMusicSource = false;
   bool _isPlaying = false;
   bool _metronomeEnabled = true;
   bool _gtBeepEnabled = true;
@@ -90,6 +92,9 @@ class AudioMetronomeService {
   int _offsetMs = 0;
   int _durationMs = 48000;
   int _currentTimeMs = 0;
+
+  int _sourceLoadToken = 0;
+  Future<void> _sourceOpChain = Future<void>.value();
 
   bool _seekInFlight = false;
   int? _pendingSeekMs;
@@ -108,9 +113,75 @@ class AudioMetronomeService {
   int get durationMs => _durationMs;
   bool get hasExternalAudio => _hasExternalAudio;
 
+  AudioPlayer _createAndAttachMusicPlayer() {
+    final player = AudioPlayer();
+    _musicPlayer = player;
+    _attachMusicListeners(player);
+    return player;
+  }
+
+  void _attachMusicListeners(AudioPlayer music) {
+    unawaited(_posSub?.cancel());
+    unawaited(_durSub?.cancel());
+    unawaited(_completeSub?.cancel());
+
+    _posSub = music.onPositionChanged.listen((pos) {
+      if (_disposed || !_hasExternalAudio || _musicPlayer != music) return;
+      _lastPositionEventWall = DateTime.now();
+      if (_seekInFlight || _pendingSeekMs != null) return;
+      final nextMs = pos.inMilliseconds;
+      if (nextMs == _currentTimeMs) return;
+      _currentTimeMs = nextMs;
+      onTimeUpdate(_currentTimeMs);
+      if (_isPlaying) {
+        _evaluateClocks(_currentTimeMs);
+      }
+    });
+
+    _durSub = music.onDurationChanged.listen((dur) {
+      if (_disposed || _musicPlayer != music) return;
+      if (dur.inMilliseconds > 0) {
+        _durationMs = dur.inMilliseconds;
+        onDurationChanged?.call(_durationMs);
+      }
+    });
+
+    _completeSub = music.onPlayerComplete.listen((_) {
+      if (_disposed || _musicPlayer != music) return;
+      _isPlaying = false;
+      _clockTimer?.cancel();
+      _positionWatchdogTimer?.cancel();
+      onEnded?.call();
+    });
+  }
+
+  AudioPlayer? _recreateMusicPlayer() {
+    if (!enablePlatformAudio || _disposed) return null;
+    final old = _musicPlayer;
+    _hasPreparedMusicSource = false;
+    unawaited(_posSub?.cancel());
+    unawaited(_durSub?.cancel());
+    unawaited(_completeSub?.cancel());
+    _posSub = null;
+    _durSub = null;
+    _completeSub = null;
+    if (old != null) {
+      old.positionUpdater = null;
+      unawaited(
+        old
+            .stop()
+            .catchError((Object _) {})
+            .timeout(const Duration(milliseconds: 500), onTimeout: () {})
+            .whenComplete(() => old.dispose().catchError((Object _) {})),
+      );
+    }
+    return _createAndAttachMusicPlayer();
+  }
+
   Future<void> init() async {
-    final music = _musicPlayer;
-    if (!enablePlatformAudio || music == null) return;
+    if (!enablePlatformAudio) return;
+    _musicPlayer ??= AudioPlayer();
+    final music = _musicPlayer!;
     // Configure click/alert players without awaiting setSource() so headless
     // test mocks that do not emit audio.onPrepared never hang during init().
     for (final cuePlayer in [
@@ -128,32 +199,7 @@ class AudioMetronomeService {
       }
     }
 
-    _posSub = music.onPositionChanged.listen((pos) {
-      if (_disposed || !_hasExternalAudio) return;
-      if (_seekInFlight || _pendingSeekMs != null) return;
-      final nextMs = pos.inMilliseconds;
-      if (nextMs == _currentTimeMs) return;
-      _currentTimeMs = nextMs;
-      onTimeUpdate(_currentTimeMs);
-      if (_isPlaying) {
-        _evaluateClocks(_currentTimeMs);
-      }
-    });
-
-    _durSub = music.onDurationChanged.listen((dur) {
-      if (_disposed) return;
-      if (dur.inMilliseconds > 0) {
-        _durationMs = dur.inMilliseconds;
-        onDurationChanged?.call(_durationMs);
-      }
-    });
-
-    _completeSub = music.onPlayerComplete.listen((_) {
-      if (_disposed) return;
-      _isPlaying = false;
-      _clockTimer?.cancel();
-      onEnded?.call();
-    });
+    _attachMusicListeners(music);
   }
 
   void configure({
@@ -194,8 +240,42 @@ class AudioMetronomeService {
     String? url,
     String? localPath,
     int? fallbackDurationMs,
+  }) {
+    final token = ++_sourceLoadToken;
+    _isPlaying = false;
+    _clockTimer?.cancel();
+    _positionWatchdogTimer?.cancel();
+    _pendingSeekMs = null;
+    if (_seekCompleter != null && !_seekCompleter!.isCompleted) {
+      _seekCompleter!.complete();
+      _seekCompleter = null;
+    }
+
+    final completer = Completer<void>();
+    _sourceOpChain = _sourceOpChain.catchError((Object _) {}).then((_) async {
+      try {
+        await _performSetAudioSource(
+          token: token,
+          url: url,
+          localPath: localPath,
+          fallbackDurationMs: fallbackDurationMs,
+        );
+        if (!completer.isCompleted) completer.complete();
+      } catch (err, st) {
+        if (!completer.isCompleted) completer.completeError(err, st);
+      }
+    });
+    return completer.future;
+  }
+
+  Future<void> _performSetAudioSource({
+    required int token,
+    String? url,
+    String? localPath,
+    int? fallbackDurationMs,
   }) async {
-    await pause();
+    if (_disposed || token != _sourceLoadToken) return;
+
     _beepedAlerts.clear();
     _lastTriggeredBeatIndex = -999999;
     _currentTimeMs = 0;
@@ -205,25 +285,65 @@ class AudioMetronomeService {
             ? fallbackDurationMs
             : 48000;
 
-    try {
-      if (localPath != null && localPath.isNotEmpty) {
-        _hasExternalAudio = true;
-        await _musicPlayer?.setSource(DeviceFileSource(localPath));
-        _durationMs = (fallbackDurationMs != null && fallbackDurationMs > 0)
-            ? fallbackDurationMs
-            : _durationMs;
-      } else if (url != null && url.isNotEmpty) {
-        _hasExternalAudio = true;
-        await _musicPlayer?.setSource(UrlSource(url));
-        _durationMs = (fallbackDurationMs != null && fallbackDurationMs > 0)
-            ? fallbackDurationMs
-            : _durationMs;
-      } else {
-        _hasExternalAudio = false;
-        _durationMs = resolvedFallback;
+    final hasLocal = localPath != null && localPath.isNotEmpty;
+    final hasUrl = !hasLocal && url != null && url.isNotEmpty;
+
+    if (!hasLocal && !hasUrl) {
+      if (_hasPreparedMusicSource && _musicPlayer != null) {
+        _recreateMusicPlayer();
+      } else if (_musicPlayer != null) {
+        try {
+          await _musicPlayer!.stop().timeout(
+            const Duration(milliseconds: 500),
+            onTimeout: () {},
+          );
+        } catch (_) {}
       }
-    } catch (_) {
+      if (_disposed || token != _sourceLoadToken) return;
       _hasExternalAudio = false;
+      _durationMs = resolvedFallback;
+      onDurationChanged?.call(_durationMs);
+      onTimeUpdate(0);
+      return;
+    }
+
+    // Reuse initial untouched AudioPlayer on first external load; recreate on
+    // subsequent source switches so native Windows/Android players never wedge.
+    var player = _musicPlayer;
+    if (enablePlatformAudio) {
+      if (_hasPreparedMusicSource || player == null) {
+        player = _recreateMusicPlayer();
+      } else {
+        try {
+          await player.stop().timeout(
+            const Duration(milliseconds: 500),
+            onTimeout: () {},
+          );
+        } catch (_) {}
+      }
+    }
+    if (_disposed || token != _sourceLoadToken) return;
+
+    try {
+      _hasExternalAudio = true;
+      if (player != null) {
+        final source = hasLocal
+            ? DeviceFileSource(localPath) as Source
+            : UrlSource(url!);
+        await player.setSource(source).timeout(const Duration(seconds: 12));
+        _hasPreparedMusicSource = true;
+      }
+      if (_disposed || token != _sourceLoadToken) return;
+      _durationMs = (fallbackDurationMs != null && fallbackDurationMs > 0)
+          ? fallbackDurationMs
+          : _durationMs;
+    } catch (_) {
+      if (enablePlatformAudio && !_disposed) {
+        _recreateMusicPlayer();
+      }
+      if (_disposed || token != _sourceLoadToken) return;
+      _hasExternalAudio = false;
+      _hasPreparedMusicSource = false;
       _durationMs = resolvedFallback;
       onDurationChanged?.call(_durationMs);
       onTimeUpdate(0);
@@ -234,26 +354,78 @@ class AudioMetronomeService {
     onTimeUpdate(0);
   }
 
+  void _startPositionWatchdog(AudioPlayer music) {
+    _positionWatchdogTimer?.cancel();
+    _lastPositionEventWall = DateTime.now();
+    _positionWatchdogTimer = Timer.periodic(
+      const Duration(milliseconds: 350),
+      (_) async {
+        if (_disposed ||
+            !_isPlaying ||
+            !_hasExternalAudio ||
+            _musicPlayer != music ||
+            _seekInFlight ||
+            _pendingSeekMs != null) {
+          return;
+        }
+        final sinceLastEvent = DateTime.now()
+            .difference(_lastPositionEventWall)
+            .inMilliseconds;
+        if (sinceLastEvent < 320) return;
+        try {
+          final pos = await music.getCurrentPosition();
+          if (_disposed ||
+              !_isPlaying ||
+              !_hasExternalAudio ||
+              _musicPlayer != music ||
+              _seekInFlight ||
+              _pendingSeekMs != null ||
+              pos == null) {
+            return;
+          }
+          _lastPositionEventWall = DateTime.now();
+          final nextMs = pos.inMilliseconds;
+          if (nextMs != _currentTimeMs) {
+            _currentTimeMs = nextMs;
+            onTimeUpdate(_currentTimeMs);
+            _evaluateClocks(_currentTimeMs);
+          }
+        } catch (_) {
+          // Ignore transient platform position query failures.
+        }
+      },
+    );
+  }
+
   Future<bool> play() async {
     if (_disposed) return false;
     if (_isPlaying) return true;
     _isPlaying = true;
 
-    if (_hasExternalAudio && _musicPlayer != null) {
+    final music = _musicPlayer;
+    if (_hasExternalAudio && music != null) {
       try {
-        await _musicPlayer.setPlaybackRate(_playbackRate);
-        await _musicPlayer.resume();
+        if (_durationMs > 0 && _currentTimeMs >= _durationMs - 150) {
+          _currentTimeMs = 0;
+          _lastTriggeredBeatIndex = -999999;
+          _beepedAlerts.clear();
+          onTimeUpdate(0);
+          await music.seek(Duration.zero);
+        }
+        await music.setPlaybackRate(_playbackRate);
+        await music.resume();
       } catch (_) {
         _isPlaying = false;
         _clockTimer?.cancel();
+        _positionWatchdogTimer?.cancel();
         return false;
       }
-      // External audio drives position updates via AudioPlayer's FramePositionUpdater
-      // onPositionChanged listener; no redundant 16ms periodic timer is needed.
       _clockTimer?.cancel();
+      _startPositionWatchdog(music);
       return true;
     }
 
+    _positionWatchdogTimer?.cancel();
     _syntheticAnchorTrackMs = _currentTimeMs;
     _syntheticAnchorWall = DateTime.now();
     _clockTimer?.cancel();
@@ -280,6 +452,7 @@ class AudioMetronomeService {
   }
 
   Future<void> pause() async {
+    _positionWatchdogTimer?.cancel();
     if (!_isPlaying) return;
     _isPlaying = false;
     _clockTimer?.cancel();
@@ -329,7 +502,9 @@ class AudioMetronomeService {
     }
     _seekInFlight = true;
     try {
-      while (!_disposed && _pendingSeekMs != null) {
+      while (!_disposed &&
+          _pendingSeekMs != null &&
+          _musicPlayer == music) {
         final nextTarget = _pendingSeekMs!;
         _pendingSeekMs = null;
         try {
@@ -496,6 +671,7 @@ class AudioMetronomeService {
   Future<void> dispose() async {
     _disposed = true;
     _clockTimer?.cancel();
+    _positionWatchdogTimer?.cancel();
     _pendingSeekMs = null;
     if (_seekCompleter != null && !_seekCompleter!.isCompleted) {
       _seekCompleter!.complete();

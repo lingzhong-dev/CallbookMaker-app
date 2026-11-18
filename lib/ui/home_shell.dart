@@ -28,8 +28,13 @@ class HomeShell extends StatefulWidget {
 }
 
 class _HomeShellState extends State<HomeShell> {
-  final FocusNode _shortcutFocus = FocusNode(debugLabel: 'GlobalShortcuts');
   bool _mobileQuickTrayOpen = true;
+
+  @override
+  void initState() {
+    super.initState();
+    HardwareKeyboard.instance.addHandler(_handleHardwareKeyEvent);
+  }
 
   void _stepTargetLine(CallbookController c, int delta) {
     if (c.activeLineId == null) {
@@ -52,7 +57,7 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   void dispose() {
-    _shortcutFocus.dispose();
+    HardwareKeyboard.instance.removeHandler(_handleHardwareKeyEvent);
     super.dispose();
   }
 
@@ -68,13 +73,33 @@ class _HomeShellState extends State<HomeShell> {
     StudioRoute.theme => '外观主题与 Prism 设计系统',
   };
 
-  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
-    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+  bool _isTextInputFocused() {
+    final ctx = FocusManager.instance.primaryFocus?.context;
+    if (ctx == null) return false;
+    return ctx.widget is EditableText ||
+        ctx.findAncestorWidgetOfExactType<EditableText>() != null ||
+        ctx.findAncestorStateOfType<EditableTextState>() != null;
+  }
 
-    final primaryFocus = FocusManager.instance.primaryFocus;
-    if (primaryFocus != null &&
-        primaryFocus.context?.widget is EditableText) {
-      return KeyEventResult.ignored;
+  bool _handleHardwareKeyEvent(KeyEvent event) {
+    if (!mounted || event is! KeyDownEvent) return false;
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isCurrent) return false;
+    if (_isTextInputFocused()) return false;
+
+    final keyboard = HardwareKeyboard.instance;
+    if (keyboard.isControlPressed ||
+        keyboard.isMetaPressed ||
+        keyboard.isAltPressed) {
+      if ((keyboard.isControlPressed || keyboard.isMetaPressed) &&
+          !keyboard.isAltPressed &&
+          !keyboard.isShiftPressed &&
+          event.logicalKey == LogicalKeyboardKey.keyZ &&
+          widget.controller.canUndo) {
+        widget.controller.undoLastTimelineEdit();
+        return true;
+      }
+      return false;
     }
 
     final c = widget.controller;
@@ -82,35 +107,35 @@ class _HomeShellState extends State<HomeShell> {
 
     if (key == LogicalKeyboardKey.escape && c.isPracticeMode) {
       c.setPracticeMode(false);
-      return KeyEventResult.handled;
+      return true;
     }
     if (key == LogicalKeyboardKey.space) {
-      c.togglePlay();
-      return KeyEventResult.handled;
+      unawaited(c.togglePlay());
+      return true;
     }
     if (key == LogicalKeyboardKey.keyF) {
       c.setPracticeMode(!c.isPracticeMode);
-      return KeyEventResult.handled;
+      return true;
     }
     if (key == LogicalKeyboardKey.keyG) {
       c.insertGtAlert();
-      return KeyEventResult.handled;
+      return true;
     }
     if (key == LogicalKeyboardKey.arrowUp) {
       c.stepActiveLine(-1);
-      return KeyEventResult.handled;
+      return true;
     }
     if (key == LogicalKeyboardKey.arrowDown) {
       c.stepActiveLine(1);
-      return KeyEventResult.handled;
+      return true;
     }
     if (key == LogicalKeyboardKey.arrowLeft) {
       c.seek(c.currentTimeMs - 2000);
-      return KeyEventResult.handled;
+      return true;
     }
     if (key == LogicalKeyboardKey.arrowRight) {
       c.seek(c.currentTimeMs + 2000);
-      return KeyEventResult.handled;
+      return true;
     }
 
     final label = key.keyLabel.toUpperCase();
@@ -125,11 +150,11 @@ class _HomeShellState extends State<HomeShell> {
               lineId: c.activeLineId,
             ),
           );
-          return KeyEventResult.handled;
+          return true;
         }
       }
     }
-    return KeyEventResult.ignored;
+    return false;
   }
 
   @override
@@ -142,11 +167,7 @@ class _HomeShellState extends State<HomeShell> {
         final isDark = scheme.brightness == Brightness.dark;
         final selectedIndex = _routes.indexOf(c.route);
 
-        return Focus(
-          focusNode: _shortcutFocus,
-          autofocus: true,
-          onKeyEvent: _handleKeyEvent,
-          child: LayoutBuilder(
+        return LayoutBuilder(
             builder: (context, constraints) {
               final isMobile = constraints.maxWidth < 820;
 
@@ -824,8 +845,7 @@ class _HomeShellState extends State<HomeShell> {
                 ],
               );
             },
-          ),
-        );
+          );
       },
     );
   }

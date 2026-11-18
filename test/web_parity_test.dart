@@ -1659,4 +1659,259 @@ void main() {
       },
     );
   });
+
+  group('9. Bug-Fix Regressions (Text Input, Spacebar, Archive Switch, Snap Guard, Undo & BPM)', () {
+    testWidgets(
+      'Bug #1, #3 & #7: TextField & BPM input block Space/digit shortcuts, blur commits BPM, and Space works reliably across Switch focus & modals',
+      (tester) async {
+        final controller = await _initController();
+        try {
+          await _pumpWithViewport(
+            tester,
+            LiveCallStudioApp(controller: controller),
+            viewport: const Size(1280, 820),
+          );
+          expect(tester.takeException(), isNull);
+
+          final firstLine = controller.sortedLines.first;
+          controller.selectLine(firstLine.id);
+          final hadFrontBefore = firstLine.calls.any(
+            (c) => c.presetId == 'front-wave',
+          );
+
+          // 1. Focus composer TextField inside DashboardView and press Space / '1' / 'G' -> no playback toggle or Call tagging
+          final composerField = find.byWidgetPredicate(
+            (w) =>
+                w is prism.TextField &&
+                w.decoration?.hintText == '如：SAWTOWNE',
+          ).first;
+          expect(composerField, findsOneWidget);
+          await _scrollToAndTap(tester, composerField);
+          await tester.pump();
+
+          await tester.sendKeyEvent(LogicalKeyboardKey.space);
+          await tester.sendKeyEvent(LogicalKeyboardKey.digit1);
+          await tester.sendKeyEvent(LogicalKeyboardKey.keyG);
+          await tester.pump();
+
+          expect(controller.isPlaying, isFalse);
+          expect(
+            controller.sortedLines
+                .firstWhere((l) => l.id == firstLine.id)
+                .calls
+                .any((c) => c.presetId == 'front-wave'),
+            hadFrontBefore,
+          );
+
+          // 2. Focus BPM TextField, type digits '180' (including '1' shortcut key) -> BPM updates, Call tags untouched
+          final bpmField = find.byWidgetPredicate(
+            (w) =>
+                w is prism.TextField &&
+                w.decoration?.hintText == '120',
+          );
+          expect(bpmField, findsOneWidget);
+          await _scrollToAndTap(tester, bpmField);
+          await tester.pump();
+          await tester.sendKeyEvent(LogicalKeyboardKey.digit1);
+          await tester.pump();
+          expect(
+            controller.sortedLines
+                .firstWhere((l) => l.id == firstLine.id)
+                .calls
+                .any((c) => c.presetId == 'front-wave'),
+            hadFrontBefore,
+          );
+
+          await tester.enterText(bpmField, '182');
+          await tester.pump();
+          expect(controller.project.meta.bpm, 182);
+
+          // Type out-of-range temporary '18', then unfocus -> blur listener commits clamped 30
+          await tester.enterText(bpmField, '18');
+          await tester.pump();
+          FocusManager.instance.primaryFocus?.unfocus();
+          await tester.pump();
+          expect(controller.project.meta.bpm, 30);
+
+          await tester.enterText(bpmField, '190');
+          await tester.pump();
+          FocusManager.instance.primaryFocus?.unfocus();
+          await tester.pump();
+          expect(controller.project.meta.bpm, 190);
+
+          // 3. Bug #3: Focus on Switch ("开启节拍器"), then press Space -> STILL toggles playback reliably!
+          final metroSwitch = find.bySemanticsLabel('开启节拍器');
+          await _scrollToAndTap(tester, metroSwitch);
+          await tester.pump();
+          expect(controller.metronomeEnabled, isFalse);
+
+          await tester.sendKeyEvent(LogicalKeyboardKey.space);
+          await tester.pump();
+          expect(controller.isPlaying, isTrue);
+
+          await tester.sendKeyEvent(LogicalKeyboardKey.space);
+          await tester.pump();
+          expect(controller.isPlaying, isFalse);
+
+          // Re-restore metronome & test modal dialog suppresses HomeShell Space shortcut
+          await tester.tap(metroSwitch);
+          await tester.pump();
+          await tester.tap(find.text('存档 0'));
+          await tester.pump();
+          expect(find.text('Call 本存档快捷切换'), findsOneWidget);
+
+          await tester.sendKeyEvent(LogicalKeyboardKey.space);
+          await tester.pump();
+          expect(controller.isPlaying, isFalse);
+          await tester.tap(find.text('关闭'));
+          await tester.pump();
+        } finally {
+          await _disposeTestTree(
+            tester,
+            controller,
+            controllerOwnedByWidget: true,
+          );
+        }
+      },
+    );
+
+    testWidgets(
+      'Bug #4, #5 & #6: Single-tap archive switch, re-import line highlight, idle-0ms snap guard, and Ctrl+Z / button Undo',
+      (tester) async {
+        final mockClient = MockClient((req) async {
+          if (req.url.path == '/health') {
+            return http.Response('{"status":"ok","providers":["netease"]}', 200);
+          }
+          if (req.url.path == '/api/track/netease/777') {
+            return http.Response(
+              jsonEncode({
+                'track': {
+                  'id': '777',
+                  'title': 'Reimported Track',
+                  'artist': 'Singer',
+                  'platform': 'netease',
+                  'durationMs': 90000,
+                },
+                'audioUrl': '',
+                'rawLrc': '[00:02.00] First\r[00:06.00] Second\r[00:12.00] Third',
+                'translatedLrc': '',
+                'lines': [],
+              }),
+              200,
+            );
+          }
+          return http.Response('offline', 404);
+        });
+        final controller = await _initController(httpClient: mockClient);
+        try {
+          // Save two distinct archives
+          controller.updateMeta(title: 'Archive Alpha');
+          final alpha = controller.saveCurrentToArchive(customName: 'Archive Alpha');
+          controller.updateMeta(title: 'Archive Beta');
+          final beta = controller.saveCurrentToArchive(
+            asNew: true,
+            customName: 'Archive Beta',
+          );
+          expect(controller.activeArchiveId, beta.id);
+          expect(controller.needsSavePromptBeforeSwitch, isFalse);
+
+          await _pumpWithViewport(
+            tester,
+            LiveCallStudioApp(controller: controller),
+            viewport: const Size(1280, 820),
+          );
+
+          // Single tap in ArchiveQuickSwitchDialog switches to Archive Alpha on first click!
+          await tester.tap(find.text('存档 2'));
+          await tester.pump();
+          await tester.tap(find.text('Archive Alpha').last);
+          await tester.pump();
+          expect(controller.activeArchiveId, alpha.id);
+          expect(controller.project.meta.title, 'Archive Alpha');
+
+          // Bug #5: Idle at 00:00.00 -> clicking 校时 on a later line refuses to corrupt timeline!
+          final lines = controller.sortedLines
+              .where((l) => l.kind == LyricLineKind.lyric)
+              .toList();
+          final laterLine = lines[2];
+          final originalStart = laterLine.startTimeMs;
+          expect(controller.currentTimeMs, 0);
+          controller.snapLineToCurrentTime(laterLine.id);
+          expect(
+            controller.sortedLines
+                .firstWhere((l) => l.id == laterLine.id)
+                .startTimeMs,
+            originalStart,
+          );
+          expect(controller.statusMessage, contains('00:00.00'));
+
+          // Seek to 15000ms -> 校时 succeeds and records undo
+          await controller.seek(15000);
+          controller.snapLineToCurrentTime(laterLine.id);
+          expect(
+            controller.sortedLines
+                .firstWhere((l) => l.id == laterLine.id)
+                .startTimeMs,
+            15000,
+          );
+          expect(controller.canUndo, isTrue);
+
+          // Bug #6: Undo via Ctrl+Z restores original startTimeMs
+          await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+          await tester.sendKeyDownEvent(LogicalKeyboardKey.keyZ);
+          await tester.sendKeyUpEvent(LogicalKeyboardKey.keyZ);
+          await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+          await tester.pump();
+          expect(
+            controller.sortedLines
+                .firstWhere((l) => l.id == laterLine.id)
+                .startTimeMs,
+            originalStart,
+          );
+          expect(controller.canUndo, isFalse);
+
+          // Bug #6: Merge with next line -> Undo button restores exact original lines
+          final countBeforeMerge = controller.project.lines.length;
+          expect(controller.mergeWithNextLine(lines[0].id), isTrue);
+          await tester.pump();
+          expect(controller.project.lines.length, countBeforeMerge - 1);
+          expect(find.text('撤销'), findsOneWidget);
+
+          await _scrollToAndTap(tester, find.text('撤销'));
+          await tester.pump();
+          expect(controller.project.lines.length, countBeforeMerge);
+          expect(controller.canUndo, isFalse);
+
+          // Bug #4 re-import follow/highlight check: re-import remote track resets clock & updates playingLineId
+          await controller.seek(18000);
+          await controller.loadRemoteTrack(
+            const TrackSummary(
+              id: '777',
+              title: 'Reimported Track',
+              artist: 'Singer',
+              platform: 'netease',
+              provider: 'netease',
+              durationMs: 90000,
+            ),
+          );
+          await tester.pump();
+          expect(controller.currentTimeMs, 0);
+          expect(controller.sortedLines.any((l) => l.text.original == 'Second'), isTrue);
+
+          await controller.seek(7000);
+          await tester.pump();
+          final playing = controller.sortedLines.firstWhere(
+            (l) => l.id == controller.playingLineId,
+          );
+          expect(playing.text.original, 'Second');
+        } finally {
+          await _disposeTestTree(
+            tester,
+            controller,
+            controllerOwnedByWidget: true,
+          );
+        }
+      },
+    );
+  });
 }

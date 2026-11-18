@@ -62,7 +62,7 @@ List<LyricLine> parseLrcOffline(
   int defaultDurationMs = 3000,
 }) {
   final transMap = <int, String>{};
-  for (final rawLine in translationLrc.split(RegExp(r'\r?\n'))) {
+  for (final rawLine in translationLrc.split(RegExp(r'\r\n|\r|\n'))) {
     final matches = _lrcTimestampPattern.allMatches(rawLine).toList();
     if (matches.isEmpty) continue;
     final cleanText = rawLine.replaceAll(_lrcTimestampPattern, '').trim();
@@ -74,7 +74,7 @@ List<LyricLine> parseLrcOffline(
   }
 
   final entries = <({int ms, String text})>[];
-  final rawLines = lrcText.split(RegExp(r'\r?\n'));
+  final rawLines = lrcText.split(RegExp(r'\r\n|\r|\n'));
   var fallbackCursor = 0;
   for (final rawLine in rawLines) {
     final trimmed = rawLine.trim();

@@ -139,27 +139,39 @@ class _ArchiveQuickSwitchContentState
     return title.isNotEmpty ? title : '未命名 Call 本';
   }
 
+  bool _isSwitching = false;
+
   Future<void> _handleSwitch(
     CallbookController c,
     CallbookArchiveEntry entry,
   ) async {
-    if (entry.id == c.activeArchiveId && !c.needsSavePromptBeforeSwitch) {
-      Navigator.of(widget.dialogContext).pop();
-      c.setStatus('当前已处于存档「${entry.name}」');
-      return;
-    }
+    if (_isSwitching) return;
+    _isSwitching = true;
+    try {
+      if (entry.id == c.activeArchiveId && !c.needsSavePromptBeforeSwitch) {
+        if (widget.dialogContext.mounted) {
+          Navigator.of(widget.dialogContext).pop();
+        }
+        c.setStatus('当前已处于存档「${entry.name}」');
+        return;
+      }
 
-    Navigator.of(widget.dialogContext).pop();
-    if (!widget.parentContext.mounted) return;
+      if (c.needsSavePromptBeforeSwitch && widget.dialogContext.mounted) {
+        final ok = await confirmArchiveSaveIfNeeded(
+          widget.dialogContext,
+          c,
+          actionLabel: '切换存档',
+          targetLabel: entry.name,
+        );
+        if (!ok) return;
+      }
 
-    final ok = await confirmArchiveSaveIfNeeded(
-      widget.parentContext,
-      c,
-      actionLabel: '切换存档',
-      targetLabel: entry.name,
-    );
-    if (ok) {
+      if (widget.dialogContext.mounted) {
+        Navigator.of(widget.dialogContext).pop();
+      }
       await c.switchToArchive(entry.id);
+    } finally {
+      _isSwitching = false;
     }
   }
 
@@ -449,6 +461,7 @@ class _ArchiveQuickSwitchContentState
                                           children: [
                                             Expanded(
                                               child: GestureDetector(
+                                                behavior: HitTestBehavior.opaque,
                                                 onTap: () =>
                                                     _handleSwitch(c, entry),
                                                 child: Column(

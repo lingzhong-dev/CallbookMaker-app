@@ -83,7 +83,14 @@ class _DashboardViewState extends State<DashboardView> {
     _lastSyncedBackendUrl = widget.controller.backendUrl;
     _lastSyncedGatewayUrl = widget.controller.savedGatewayUrl;
     _lastSyncedCookie = widget.controller.savedNeteaseCookie;
+    _bpmFocus.addListener(_onBpmFocusChanged);
     widget.controller.addListener(_syncNetworkControllers);
+  }
+
+  void _onBpmFocusChanged() {
+    if (!_bpmFocus.hasFocus && mounted) {
+      _commitBpmInput(widget.controller, _bpmCtrl.text);
+    }
   }
 
   @override
@@ -123,6 +130,7 @@ class _DashboardViewState extends State<DashboardView> {
 
   @override
   void dispose() {
+    _bpmFocus.removeListener(_onBpmFocusChanged);
     _titleCtrl.dispose();
     _artistCtrl.dispose();
     _bpmCtrl.dispose();
@@ -165,7 +173,10 @@ class _DashboardViewState extends State<DashboardView> {
     if (parsed != null) {
       c.setBpm(parsed);
     }
-    _bpmCtrl.text = '${c.project.meta.bpm}';
+    final nextText = '${c.project.meta.bpm}';
+    if (_bpmCtrl.text != nextText) {
+      _bpmCtrl.text = nextText;
+    }
   }
 
   @override
@@ -1015,6 +1026,9 @@ class _DashboardViewState extends State<DashboardView> {
                           controller: _bpmCtrl,
                           focusNode: _bpmFocus,
                           keyboardType: TextInputType.number,
+                          inputFormatters: [
+                            FilteringTextInputFormatter.digitsOnly,
+                          ],
                           decoration: const InputDecoration.collapsed(
                             hintText: '120',
                           ),
@@ -1027,6 +1041,14 @@ class _DashboardViewState extends State<DashboardView> {
                                 ],
                                 color: scheme.onSurface,
                               ),
+                          onChanged: (v) {
+                            final parsed = int.tryParse(v.trim());
+                            if (parsed != null &&
+                                parsed >= 30 &&
+                                parsed <= 300) {
+                              c.setBpm(parsed);
+                            }
+                          },
                           onSubmitted: (v) => _commitBpmInput(c, v),
                           onEditingComplete: () =>
                               _commitBpmInput(c, _bpmCtrl.text),
