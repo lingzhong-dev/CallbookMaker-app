@@ -96,13 +96,13 @@ jobs:
 
       - name: Build universal APK
         run: |
-          flutter build apk --release --build-name="${{ needs.prepare-version.outputs.version }}" --build-number="${{ needs.prepare-version.outputs.build_number }}"
+          flutter build apk --release --build-name="${{ needs.prepare-version.outputs.version }}" --build-number="${{ needs.prepare-version.outputs.build_number }}" --dart-define=APP_VERSION="${{ needs.prepare-version.outputs.version }}"
           mkdir -p dist/android
           cp build/app/outputs/flutter-apk/app-release.apk "dist/android/CallbookMaker-v${{ needs.prepare-version.outputs.version }}-android-universal.apk"
 
       - name: Build arm64-v8a split APK
         run: |
-          flutter build apk --release --split-per-abi --build-name="${{ needs.prepare-version.outputs.version }}" --build-number="${{ needs.prepare-version.outputs.build_number }}"
+          flutter build apk --release --split-per-abi --build-name="${{ needs.prepare-version.outputs.version }}" --build-number="${{ needs.prepare-version.outputs.build_number }}" --dart-define=APP_VERSION="${{ needs.prepare-version.outputs.version }}"
           cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk "dist/android/CallbookMaker-v${{ needs.prepare-version.outputs.version }}-android-arm64-v8a.apk"
 
       - uses: actions/upload-artifact@v4
@@ -141,7 +141,7 @@ jobs:
           }
 
       - run: flutter pub get
-      - run: flutter build windows --release --build-name="${{ needs.prepare-version.outputs.version }}" --build-number="${{ needs.prepare-version.outputs.build_number }}"
+      - run: flutter build windows --release --build-name="${{ needs.prepare-version.outputs.version }}" --build-number="${{ needs.prepare-version.outputs.build_number }}" --dart-define=APP_VERSION="${{ needs.prepare-version.outputs.version }}"
 
       - name: Package Portable ZIP and Setup EXE
         shell: pwsh

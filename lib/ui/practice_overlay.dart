@@ -109,73 +109,7 @@ class _PracticeOverlayState extends State<PracticeOverlay> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Top High-Contrast GT Alert Banner (scoped to playback ticks)
-              ListenableBuilder(
-                listenable: c.playbackListenable,
-                builder: (context, _) {
-                  final activeAlert = c.activeGtAlertStatus;
-                  if (activeAlert == null) {
-                    return SizedBox(height: pad.top);
-                  }
-                  final activeAlertCue =
-                      (activeAlert.alert.callTimingCue ?? '').trim();
-                  return Container(
-                    padding: EdgeInsets.fromLTRB(20, pad.top + 12, 20, 12),
-                    decoration: BoxDecoration(
-                      color: activeAlert.isTriggered
-                          ? const Color(0xFF991B1B)
-                          : const Color(0xFFF59E0B),
-                      border: const Border(
-                        bottom: BorderSide(color: Color(0x33FFFFFF)),
-                      ),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Wrap(
-                          alignment: WrapAlignment.center,
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          spacing: 10,
-                          runSpacing: 6,
-                          children: [
-                            Text(
-                              activeAlert.isTriggered
-                                  ? 'GT 警报触发！NOW!'
-                                  : '即将进场 · 倒数 ${activeAlert.remainingBeats} 拍',
-                              style: TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.w900,
-                                color: activeAlert.isTriggered
-                                    ? const Color(0xFFFFFFFF)
-                                    : const Color(0xFF000000),
-                              ),
-                            ),
-                            if (activeAlertCue.isNotEmpty)
-                              TonalChip(
-                                label: activeAlertCue,
-                                color: const Color(0x4D000000),
-                                foregroundColor: const Color(0xFFFFFFFF),
-                              ),
-                            if (activeAlert.alert.note.trim().isNotEmpty)
-                              Text(
-                                activeAlert.alert.note.trim(),
-                                style: TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w800,
-                                  color: activeAlert.isTriggered
-                                      ? const Color(0xFFFFFFFF)
-                                      : const Color(0xFF000000),
-                                ),
-                              ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        LinearProgressIndicator(value: activeAlert.progress),
-                      ],
-                    ),
-                  );
-                },
-              ),
+              SizedBox(height: pad.top),
 
               // Header Bar
               Container(
@@ -576,18 +510,12 @@ class _ReactivePracticeLineCard extends StatefulWidget {
 
 class _ReactivePracticeLineCardState extends State<_ReactivePracticeLineCard> {
   late bool _isPlaying;
-  late bool _isGtCountdown;
 
   @override
   void initState() {
     super.initState();
     _isPlaying = widget.controller.playingLineId == widget.line.id;
-    _isGtCountdown =
-        widget.controller.activeGtTargetLineIdListenable.value ==
-        widget.line.id;
     widget.controller.playingLineIdListenable.addListener(_onPlaybackChanged);
-    widget.controller.activeGtTargetLineIdListenable
-        .addListener(_onPlaybackChanged);
   }
 
   @override
@@ -596,27 +524,16 @@ class _ReactivePracticeLineCardState extends State<_ReactivePracticeLineCard> {
     if (oldWidget.controller != widget.controller) {
       oldWidget.controller.playingLineIdListenable
           .removeListener(_onPlaybackChanged);
-      oldWidget.controller.activeGtTargetLineIdListenable
-          .removeListener(_onPlaybackChanged);
       widget.controller.playingLineIdListenable.addListener(_onPlaybackChanged);
-      widget.controller.activeGtTargetLineIdListenable
-          .addListener(_onPlaybackChanged);
     }
     _isPlaying = widget.controller.playingLineId == widget.line.id;
-    _isGtCountdown =
-        widget.controller.activeGtTargetLineIdListenable.value ==
-        widget.line.id;
   }
 
   void _onPlaybackChanged() {
     final nextPlaying = widget.controller.playingLineId == widget.line.id;
-    final nextCountdown =
-        widget.controller.activeGtTargetLineIdListenable.value ==
-        widget.line.id;
-    if (nextPlaying != _isPlaying || nextCountdown != _isGtCountdown) {
+    if (nextPlaying != _isPlaying) {
       setState(() {
         _isPlaying = nextPlaying;
-        _isGtCountdown = nextCountdown;
       });
     }
   }
@@ -624,8 +541,6 @@ class _ReactivePracticeLineCardState extends State<_ReactivePracticeLineCard> {
   @override
   void dispose() {
     widget.controller.playingLineIdListenable
-        .removeListener(_onPlaybackChanged);
-    widget.controller.activeGtTargetLineIdListenable
         .removeListener(_onPlaybackChanged);
     super.dispose();
   }
@@ -640,7 +555,6 @@ class _ReactivePracticeLineCardState extends State<_ReactivePracticeLineCard> {
       textScale: widget.textScale,
       primaryColor: widget.primaryColor,
       isPlaying: _isPlaying,
-      isGtCountdown: _isGtCountdown,
       onTap: widget.onTap,
     );
   }
@@ -655,7 +569,6 @@ class _PracticeLineCard extends StatelessWidget {
     required this.textScale,
     required this.primaryColor,
     required this.isPlaying,
-    required this.isGtCountdown,
     required this.onTap,
   });
 
@@ -666,12 +579,10 @@ class _PracticeLineCard extends StatelessWidget {
   final double textScale;
   final Color primaryColor;
   final bool isPlaying;
-  final bool isGtCountdown;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final cue = (lineAlert?.callTimingCue ?? '').trim();
     final gtNote = (lineAlert?.note ?? '').trim();
     final isSec = line.kind.isSection;
     final shout = isSec ? line.customShout.trim() : getUnalignedCustomShout(line);
@@ -681,17 +592,7 @@ class _PracticeLineCard extends StatelessWidget {
     late final double opacity;
     List<BoxShadow> shadows = const [];
 
-    if (isGtCountdown) {
-      borderColor = const Color(0xFFF59E0B);
-      bgColor = const Color(0xFF261805);
-      opacity = 1.0;
-      shadows = const [
-        BoxShadow(
-          color: Color(0x59F59E0B),
-          blurRadius: 28,
-        ),
-      ];
-    } else if (isPlaying && lineAlert != null) {
+    if (isPlaying && lineAlert != null) {
       borderColor = const Color(0xFFF59E0B);
       bgColor = const Color(0xFF1F1608);
       opacity = 1.0;
@@ -734,7 +635,7 @@ class _PracticeLineCard extends StatelessWidget {
             borderRadius: BorderRadius.circular(24),
             border: Border.all(
               color: borderColor,
-              width: (isPlaying || isGtCountdown) ? 1.8 : 1.0,
+              width: isPlaying ? 1.8 : 1.0,
             ),
             boxShadow: shadows,
           ),
@@ -763,10 +664,10 @@ class _PracticeLineCard extends StatelessWidget {
                       foregroundColor: const Color(0xFFFFFFFF),
                     ),
                   if (lineAlert != null)
-                    TonalChip(
-                      label: cue.isNotEmpty ? 'GT 警报 · $cue' : 'GT 警报',
-                      color: const Color(0xFFF59E0B),
-                      foregroundColor: const Color(0xFF000000),
+                    const TonalChip(
+                      label: 'GT 警报',
+                      color: Color(0xFFF59E0B),
+                      foregroundColor: Color(0xFF000000),
                     ),
                   if (lineAlert != null && gtNote.isNotEmpty)
                     Text(

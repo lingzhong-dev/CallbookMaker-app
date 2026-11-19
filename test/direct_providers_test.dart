@@ -578,7 +578,7 @@ void main() {
     });
 
     testWidgets(
-      'Dashboard UI shows pure-Dart direct labels and hides legacy Node-required errors',
+      'MoreView gateway config shows pure-Dart direct labels and Dashboard hides gateway & GT beep cards',
       timeout: const Timeout(Duration(seconds: 20)),
       (tester) async {
         final controller = CallbookController(
@@ -605,16 +605,27 @@ void main() {
           await tester.pump();
           await tester.pump(const Duration(milliseconds: 50));
 
-          final gatewayHeader = find.text('网易云直连 & 可选后端服务');
-          await tester.ensureVisible(gatewayHeader);
-          await tester.tap(gatewayHeader);
+          // Dashboard keeps AudioSourcePanel ('网易云直连'), while GatewayConfigPanel & GT beep live elsewhere
+          expect(find.text('网易云直连'), findsOneWidget);
+          expect(find.text('网易云直连 & 可选后端服务'), findsNothing);
+          expect(find.text('GT 前置警报音'), findsNothing);
+
+          // Navigate 更多 -> 网关配置
+          await tester.tap(find.text('更多'));
+          await tester.pump();
+          await tester.tap(find.text('网关配置'));
           await tester.pump();
           await tester.pump(const Duration(milliseconds: 50));
 
+          final gatewayHeader = find.text('网易云直连 & 可选后端服务');
+          await tester.ensureVisible(gatewayHeader);
+          await tester.pump();
+
           expect(captured, isEmpty);
           expect(tester.takeException(), isNull);
+          expect(gatewayHeader, findsOneWidget);
           expect(find.text('纯 Dart 直连'), findsAtLeastNWidgets(1));
-          expect(find.text('网易云直连'), findsOneWidget);
+          expect(find.text('后端未连 (可选)'), findsOneWidget);
           expect(find.text('验证并保存 Cookie（纯 Dart 直连）'), findsOneWidget);
           expect(find.textContaining('未检测到 Node.js'), findsNothing);
         } finally {
@@ -629,7 +640,7 @@ void main() {
     );
 
     testWidgets(
-      'Mobile 390x844 DashboardView direct Netease card renders with ZERO overflows even when Cookie & Chips are present',
+      'Mobile 390x844 MoreView gateway config renders with ZERO overflows even when Cookie & Chips are present',
       timeout: const Timeout(Duration(seconds: 20)),
       (tester) async {
         final controller = CallbookController(
@@ -668,17 +679,13 @@ void main() {
           await tester.pump();
           await tester.pump(const Duration(milliseconds: 50));
 
-          final gatewayHeader = find.text('网易云直连 & 可选后端服务');
-          await tester.scrollUntilVisible(
-            gatewayHeader,
-            240,
-            scrollable: find.byType(Scrollable).first,
-          );
+          await tester.tap(find.text('更多'));
           await tester.pump();
-          await tester.tap(gatewayHeader);
+          await tester.tap(find.text('网关配置'));
           await tester.pump();
           await tester.pump(const Duration(milliseconds: 50));
 
+          final gatewayHeader = find.text('网易云直连 & 可选后端服务');
           final target = find.text('验证并保存 Cookie（纯 Dart 直连）');
           await tester.scrollUntilVisible(
             target,

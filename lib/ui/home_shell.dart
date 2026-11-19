@@ -8,12 +8,12 @@ import 'package:prism_ui/prism_ui.dart';
 import '../models/callbook_models.dart';
 import '../state/callbook_controller.dart';
 import '../utils/lrc_ruby_parser.dart';
+import 'archive_view.dart';
 import 'dashboard_view.dart';
 import 'export_view.dart';
+import 'more_view.dart';
 import 'onboarding_overlay.dart';
 import 'practice_overlay.dart';
-import 'theme_view.dart';
-import 'widgets/archive_switcher_dialog.dart';
 import 'widgets/audio_source_panel.dart';
 import 'widgets/call_badge_pill.dart';
 import 'widgets/call_preset_dialogs.dart';
@@ -65,13 +65,15 @@ class _HomeShellState extends State<HomeShell> {
   static const _routes = [
     StudioRoute.dashboard,
     StudioRoute.export,
-    StudioRoute.theme,
+    StudioRoute.archive,
+    StudioRoute.more,
   ];
 
   String _pageTitle(StudioRoute r) => switch (r) {
     StudioRoute.dashboard => 'Callbook Maker',
     StudioRoute.export => '导出',
-    StudioRoute.theme => '外观主题与 Prism 设计系统',
+    StudioRoute.archive => '存档',
+    StudioRoute.more => '更多',
   };
 
   bool _isTextInputFocused() {
@@ -176,7 +178,11 @@ class _HomeShellState extends State<HomeShell> {
               final pageContent = switch (c.route) {
                 StudioRoute.dashboard => DashboardView(controller: c),
                 StudioRoute.export => ExportView(controller: c),
-                StudioRoute.theme => ThemeView(controller: c),
+                StudioRoute.archive => ArchiveView(controller: c),
+                StudioRoute.more => MoreView(
+                  controller: c,
+                  rootResetNonce: c.moreRootResetNonce,
+                ),
               };
 
               final appBar = Container(
@@ -226,50 +232,8 @@ class _HomeShellState extends State<HomeShell> {
                         ],
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    GestureDetector(
-                      onTap: () => showArchiveQuickSwitchDialog(context, c),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 8,
-                        ),
-                        decoration: ShapeDecoration(
-                          color: scheme.surfaceContainerHigh,
-                          shape: AppShape.full,
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            GlyphIcon(
-                              CallbookGlyphs.archive,
-                              size: 15,
-                              color: scheme.primary,
-                            ),
-                            const SizedBox(width: 5),
-                            Text(
-                              '存档 ${c.archives.length}',
-                              style: AppTextStyle.caption1
-                                  .of(context, emphasized: true)
-                                  .copyWith(color: scheme.onSurface),
-                            ),
-                            if (c.needsSavePromptBeforeSwitch) ...[
-                              const SizedBox(width: 5),
-                              Container(
-                                width: 7,
-                                height: 7,
-                                decoration: ShapeDecoration(
-                                  color: scheme.warning,
-                                  shape: AppShape.circle,
-                                ),
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                    ),
                     if (isMobile) ...[
-                      const SizedBox(width: 6),
+                      const SizedBox(width: 8),
                       Semantics(
                         label: '导入音源或LRC',
                         button: true,
@@ -389,8 +353,12 @@ class _HomeShellState extends State<HomeShell> {
                               label: c.siteText('导出'),
                             ),
                             SidebarDestination(
-                              glyph: CallbookGlyphs.theme,
-                              label: c.siteText('外观主题'),
+                              glyph: CallbookGlyphs.archive,
+                              label: c.siteText('存档'),
+                            ),
+                            SidebarDestination(
+                              glyph: CallbookGlyphs.more,
+                              label: c.siteText('更多'),
                             ),
                           ],
                           selectedIndex: selectedIndex < 0 ? 0 : selectedIndex,
@@ -813,8 +781,12 @@ class _HomeShellState extends State<HomeShell> {
                                   label: c.siteText('导出'),
                                 ),
                                 NavigationDockDestination(
-                                  glyph: CallbookGlyphs.theme,
-                                  label: c.siteText('主题'),
+                                  glyph: CallbookGlyphs.archive,
+                                  label: c.siteText('存档'),
+                                ),
+                                NavigationDockDestination(
+                                  glyph: CallbookGlyphs.more,
+                                  label: c.siteText('更多'),
                                 ),
                               ],
                               selectedIndex: selectedIndex < 0 ? 0 : selectedIndex,
@@ -832,8 +804,12 @@ class _HomeShellState extends State<HomeShell> {
                                   label: c.siteText('导出'),
                                 ),
                                 (
-                                  glyph: CallbookGlyphs.theme,
-                                  label: c.siteText('主题'),
+                                  glyph: CallbookGlyphs.archive,
+                                  label: c.siteText('存档'),
+                                ),
+                                (
+                                  glyph: CallbookGlyphs.more,
+                                  label: c.siteText('更多'),
                                 ),
                               ],
                               selectedIndex: selectedIndex < 0 ? 0 : selectedIndex,
@@ -873,14 +849,6 @@ class _HomeShellState extends State<HomeShell> {
           ),
           const SizedBox(height: 6),
           _SidebarCompactIconBtn(
-            tooltip: 'Call 本存档 · ${c.archives.length}',
-            glyph: CallbookGlyphs.archive,
-            fill: scheme.surfaceContainerHigh,
-            iconColor: scheme.primary,
-            onTap: () => showArchiveQuickSwitchDialog(context, c),
-          ),
-          const SizedBox(height: 6),
-          _SidebarCompactIconBtn(
             tooltip: '${c.siteText('演练模式')} F',
             glyph: CallbookGlyphs.fullscreen,
             fill: scheme.primary,
@@ -916,15 +884,6 @@ class _HomeShellState extends State<HomeShell> {
           foreground: scheme.onSurface,
           iconColor: scheme.primary,
           onTap: () => showAudioSourceModal(context, c),
-        ),
-        const SizedBox(height: 6),
-        _SidebarFooterAction(
-          glyph: CallbookGlyphs.archive,
-          label: 'Call 本存档 · ${c.archives.length}',
-          background: scheme.surfaceContainerHigh,
-          foreground: scheme.onSurface,
-          iconColor: scheme.primary,
-          onTap: () => showArchiveQuickSwitchDialog(context, c),
         ),
         const SizedBox(height: 6),
         _SidebarFooterAction(

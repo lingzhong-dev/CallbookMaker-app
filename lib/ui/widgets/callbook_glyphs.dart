@@ -122,4 +122,46 @@ abstract final class CallbookGlyphs {
       prism.GlyphVertex(14.5, 13.0),
     ], role: prism.GlyphRole.detail),
   ]);
+
+  static const more = prism.Glyph([
+    prism.GlyphBox(3.8, 3.8, 10.6, 10.6, 2.2),
+    prism.GlyphBox(13.4, 3.8, 20.2, 10.6, 2.2),
+    prism.GlyphBox(3.8, 13.4, 10.6, 20.2, 2.2),
+    prism.GlyphCircle(16.8, 16.8, 3.4, role: prism.GlyphRole.detail),
+  ]);
+
+  static const split = prism.Glyph([
+    prism.GlyphPolyline([
+      prism.GlyphVertex(12.0, 3.8),
+      prism.GlyphVertex(12.0, 20.2),
+    ], role: prism.GlyphRole.detail),
+    prism.GlyphPolyline([
+      prism.GlyphVertex(8.5, 7.5),
+      prism.GlyphVertex(4.2, 12.0),
+      prism.GlyphVertex(8.5, 16.5),
+    ], role: prism.GlyphRole.line),
+    prism.GlyphPolyline([
+      prism.GlyphVertex(15.5, 7.5),
+      prism.GlyphVertex(19.8, 12.0),
+      prism.GlyphVertex(15.5, 16.5),
+    ], role: prism.GlyphRole.line),
+  ]);
+
+  static const gateway = prism.Glyph([
+    prism.GlyphCircle(12.0, 12.0, 8.6),
+    prism.GlyphPolyline([
+      prism.GlyphVertex(3.8, 12.0),
+      prism.GlyphVertex(20.2, 12.0),
+    ], role: prism.GlyphRole.detail),
+    prism.GlyphCircle(12.0, 12.0, 4.2, role: prism.GlyphRole.detail),
+  ]);
+
+  static const info = prism.Glyph([
+    prism.GlyphCircle(12.0, 12.0, 8.8),
+    prism.GlyphCircle(12.0, 8.0, 1.1, role: prism.GlyphRole.detail, solid: true),
+    prism.GlyphPolyline([
+      prism.GlyphVertex(12.0, 11.0),
+      prism.GlyphVertex(12.0, 16.6),
+    ], role: prism.GlyphRole.detail),
+  ]);
 }

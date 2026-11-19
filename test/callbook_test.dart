@@ -9,7 +9,11 @@ import 'package:live_call_studio/utils/lrc_ruby_parser.dart';
 import 'package:live_call_studio/utils/section_detector.dart';
 import 'package:live_call_studio/utils/xlsx_export.dart';
 
+import 'support/mock_audioplayers_harness.dart';
+
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   group('LRC & Furigana Parser', () {
     test('parseRubySegments extracts kanji and rt annotations accurately', () {
       const rubyHtml =
@@ -122,14 +126,29 @@ void main() {
       const alert = GtAlert(
         id: 'gt-1',
         triggerTimeMs: 12000,
-        leadBeats: 4,
         note: '吉他推进',
         targetLineId: 'line-2',
-        callTimingCue: 'はいせーの！',
       );
-      final decodedAlert = GtAlert.fromJson(alert.toJson());
+      final encodedAlert = alert.toJson();
+      expect(encodedAlert.containsKey('leadBeats'), isFalse);
+      expect(encodedAlert.containsKey('callTimingCue'), isFalse);
+      final decodedAlert = GtAlert.fromJson(encodedAlert);
       expect(decodedAlert.targetLineId, 'line-2');
-      expect(decodedAlert.callTimingCue, 'はいせーの！');
+      expect(decodedAlert.note, '吉他推进');
+
+      // Legacy projects with deprecated leadBeats / callTimingCue still parse cleanly.
+      final legacyDecoded = GtAlert.fromJson({
+        'id': 'gt-legacy',
+        'triggerTimeMs': 18000,
+        'leadBeats': 4,
+        'callTimingCue': 'はいせーの！',
+        'note': '旧版备注',
+        'targetLineId': 'line-3',
+      });
+      expect(legacyDecoded.id, 'gt-legacy');
+      expect(legacyDecoded.triggerTimeMs, 18000);
+      expect(legacyDecoded.note, '旧版备注');
+      expect(legacyDecoded.targetLineId, 'line-3');
     });
 
     test('resolveGtAlertTargetLineId handles explicit target and legacy fallback', () {
@@ -229,7 +248,7 @@ void main() {
             id: 'gt-xlsx-1',
             triggerTimeMs: base.lines[2].startTimeMs,
             targetLineId: base.lines[2].id,
-            callTimingCue: 'se-no',
+            note: '吉他进场',
           ),
         ],
       );
@@ -488,6 +507,151 @@ void main() {
         defaultCallPresets,
       );
       expect(xlsxBytes.length, greaterThan(400));
+    });
+  });
+
+  group('Word-Accurate Lyric Splitting', () {
+    test('computeDefaultSplitTimes distributes timestamps monotonically by rune count', () {
+      expect(computeDefaultSplitTimes(1000, 7000, [1, 2, 3]), [2000, 4000]);
+      // Tiny interval enforces minimum 1ms monotonic spacing
+      expect(computeDefaultSplitTimes(1000, 1003, [1, 1, 1]), [1001, 1002]);
+      expect(computeDefaultSplitTimes(1000, 7000, [5]), isEmpty);
+    });
+
+    test('sliceLyricLineForSplit accurately maps runes/UTF-16 emoji, alignedCalls, ruby, metadata, and tailUpdraft', () {
+      const source = LyricLine(
+        id: 'sp-base',
+        startTimeMs: 10000,
+        endTimeMs: 18000,
+        calls: [LineCallTag(presetId: 'fuwa', suffix: '×2')],
+        customShout: 'ハイ！',
+        tailUpdraft: true,
+        alignedCalls: [
+          AlignedCallCue(id: 'c-inside', start: 0, end: 2, text: 'Hi!'),
+          AlignedCallCue(id: 'c-cross1', start: 2, end: 4, text: '春夏'),
+          AlignedCallCue(id: 'c-cross2', start: 4, end: 7, text: '星秋冬'),
+        ],
+        text: LyricText(
+          original: '🎵春夏✨秋冬', // UTF-16 lengths: 🎵(2) 春(1) 夏(1) ✨(1) 秋(1) 冬(1) = 7 UTF-16 units, 6 runes
+          ruby: '🎵<ruby>春夏<rt>しゅんか</rt></ruby>✨<ruby>秋冬<rt>しゅうとう</rt></ruby>',
+          romaji: 'haru natsu aki fuyu',
+          translation: '春夏秋冬',
+        ),
+      );
+
+      // Cut at runes 2 & 4 -> ['🎵春', '夏✨', '秋冬'] (UTF-16 starts: 0, 3, 5, 7)
+      final chunks = sliceLyricLineForSplit(
+        source,
+        const [4, 2],
+        boundaryTimesMs: const [12500, 15000],
+        idFactory: (idx) => 'chunk-$idx',
+      );
+
+      expect(chunks, hasLength(3));
+
+      expect(chunks[0].id, 'sp-base');
+      expect(chunks[0].startTimeMs, 10000);
+      expect(chunks[0].endTimeMs, 12500);
+      expect(chunks[0].text.original, '🎵春');
+      // '春夏' was sliced in the middle -> ruby rt on split kanji drops safely
+      expect(chunks[0].text.ruby, isNull);
+      expect(chunks[0].text.translation, '春夏秋冬');
+      expect(chunks[0].text.romaji, 'haru natsu aki fuyu');
+      expect(chunks[0].customShout, 'ハイ！');
+      expect(chunks[0].tailUpdraft, isFalse);
+      expect(chunks[0].calls.single.suffix, '×2');
+      expect(chunks[0].alignedCalls, hasLength(2));
+      expect(chunks[0].alignedCalls[0].id, 'c-inside');
+      expect(chunks[0].alignedCalls[0].start, 0);
+      expect(chunks[0].alignedCalls[0].end, 2);
+      expect(chunks[0].alignedCalls[1].id, 'c-cross1-s0');
+      expect(chunks[0].alignedCalls[1].start, 2);
+      expect(chunks[0].alignedCalls[1].end, 3);
+
+      expect(chunks[1].id, 'chunk-1');
+      expect(chunks[1].startTimeMs, 12500);
+      expect(chunks[1].endTimeMs, 15000);
+      expect(chunks[1].text.original, '夏✨');
+      expect(chunks[1].text.translation, isNull);
+      expect(chunks[1].text.romaji, isNull);
+      expect(chunks[1].customShout, '');
+      expect(chunks[1].tailUpdraft, isFalse);
+      expect(chunks[1].alignedCalls, hasLength(2));
+      expect(chunks[1].alignedCalls[0].id, 'c-cross1-s1');
+      expect(chunks[1].alignedCalls[0].start, 0);
+      expect(chunks[1].alignedCalls[0].end, 1);
+      expect(chunks[1].alignedCalls[1].id, 'c-cross2-s1');
+      expect(chunks[1].alignedCalls[1].start, 1);
+      expect(chunks[1].alignedCalls[1].end, 2);
+
+      expect(chunks[2].id, 'chunk-2');
+      expect(chunks[2].startTimeMs, 15000);
+      expect(chunks[2].endTimeMs, 18000);
+      expect(chunks[2].text.original, '秋冬');
+      // '<ruby>秋冬<rt>しゅうとう</rt></ruby>' stayed intact inside chunk 2 -> ruby preserved!
+      expect(chunks[2].text.ruby, '<ruby>秋冬<rt>しゅうとう</rt></ruby>');
+      expect(chunks[2].tailUpdraft, isTrue);
+      expect(chunks[2].alignedCalls.single.id, 'c-cross2-s2');
+      expect(chunks[2].alignedCalls.single.start, 0);
+      expect(chunks[2].alignedCalls.single.end, 2);
+    });
+
+    test('CallbookController.splitLineAtRunes retargets GT alert, validates constraints, and supports Undo', () async {
+      MockAudioplayersHarness().install();
+      final controller = await createTestCallbookController(enableAudioOutput: false);
+      try {
+        await controller.importLrcText(
+          lrc: '''
+[00:00.00]
+[00:12.00] 夢の中で輝く星
+[00:19.00] 次の空へ
+''',
+        );
+        final section = controller.sortedLines.firstWhere((l) => l.kind.isSection);
+        expect(controller.splitLineAtRunes(section.id, const [1]), isFalse);
+
+        final lyric = controller.sortedLines.firstWhere(
+          (l) => l.text.original == '夢の中で輝く星',
+        );
+        controller.toggleLineGtAlert(lineId: lyric.id);
+        controller.updateLineGtAlert(lyric.id, note: '分段前提示');
+        final countBefore = controller.sortedLines.length;
+
+        final ok = controller.splitLineAtRunes(
+          lyric.id,
+          const [4],
+          boundaryTimesMs: const [15500],
+        );
+        expect(ok, isTrue);
+        expect(controller.sortedLines.length, countBefore + 1);
+        expect(controller.canUndo, isTrue);
+
+        final firstChunk = controller.sortedLines.firstWhere((l) => l.id == lyric.id);
+        expect(firstChunk.text.original, '夢の中で');
+        expect(firstChunk.startTimeMs, 12000);
+        expect(firstChunk.endTimeMs, 15500);
+
+        final secondChunk = controller.sortedLines.firstWhere(
+          (l) => l.text.original == '輝く星',
+        );
+        expect(secondChunk.startTimeMs, 15500);
+        expect(secondChunk.endTimeMs, 19000);
+
+        final alert = controller.getAlertForLine(firstChunk.id);
+        expect(alert, isNotNull);
+        expect(alert!.note, '分段前提示');
+        expect(alert.triggerTimeMs, firstChunk.startTimeMs);
+
+        expect(controller.undoLastTimelineEdit(), isTrue);
+        expect(controller.sortedLines.length, countBefore);
+        expect(
+          controller.sortedLines.any((l) => l.text.original == '夢の中で輝く星'),
+          isTrue,
+        );
+        expect(controller.getAlertForLine(lyric.id)?.note, '分段前提示');
+      } finally {
+        controller.dispose();
+      }
     });
   });
 }

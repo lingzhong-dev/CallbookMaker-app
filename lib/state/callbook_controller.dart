@@ -18,7 +18,7 @@ import '../utils/aligned_calls.dart';
 import '../utils/lrc_ruby_parser.dart';
 import '../utils/section_detector.dart';
 
-enum StudioRoute { dashboard, export, theme }
+enum StudioRoute { dashboard, export, archive, more }
 
 class CuratedThemePreset {
   const CuratedThemePreset({
@@ -93,24 +93,6 @@ const List<Color> savedSwatchSeeds = [
   Color(0xFF06B6D4),
 ];
 
-class ActiveGtAlertStatus {
-  const ActiveGtAlertStatus({
-    required this.alert,
-    required this.remainingBeats,
-    required this.remainingMs,
-    required this.isTriggered,
-    required this.progress,
-    this.targetLineId,
-  });
-
-  final GtAlert alert;
-  final int remainingBeats;
-  final int remainingMs;
-  final bool isTriggered;
-  final double progress;
-  final String? targetLineId;
-}
-
 sealed class TimelineItem {
   const TimelineItem(this.sortMs);
   final int sortMs;
@@ -152,9 +134,7 @@ class CallbookController extends ChangeNotifier {
       enablePlatformAudio: enableAudioOutput,
       onTimeUpdate: _handleTimeUpdate,
       onBeatTrigger: _handleBeatTrigger,
-      onGtAlertBeep: (alertId) => _setStatusInternal(
-        'GT 警报提前提示 (${alertId.substring(0, math.min(6, alertId.length))})',
-      ),
+      onGtAlertBeep: (_) {},
       onDurationChanged: (durMs) {
         if (_disposed) return;
         if (durMs > 1000 && durMs != _durationMs) {
@@ -188,8 +168,6 @@ class CallbookController extends ChangeNotifier {
   final ChangeNotifier _playbackNotifier = ChangeNotifier();
   final ChangeNotifier _beatNotifier = ChangeNotifier();
   final ValueNotifier<String?> _playingLineIdNotifier = ValueNotifier<String?>(null);
-  final ValueNotifier<String?> _activeGtTargetLineIdNotifier =
-      ValueNotifier<String?>(null);
   final ValueNotifier<String> _statusNotifier =
       ValueNotifier<String>('已就绪 · CallbookMaker');
 
@@ -199,15 +177,14 @@ class CallbookController extends ChangeNotifier {
   List<LyricLine> _sortedLinesCache = const [];
   List<GtAlert> _sortedAlertsCache = const [];
   Map<String, GtAlert> _alertByLineIdCache = const {};
-  Map<String, String> _alertTargetByIdCache = const {};
   List<TimelineLineItem> _timelineItemsCache = const [];
   String? _playingLineIdCache;
-  ActiveGtAlertStatus? _activeGtAlertStatusCache;
 
   List<CallPreset> _customPresets = const [];
   DisplayLayers _displayLayers = const DisplayLayers();
   String? _activeLineId;
   StudioRoute _route = StudioRoute.dashboard;
+  int _moreRootResetNonce = 0;
   bool _sidebarExpanded = true;
   bool _showOnboarding = false;
   bool _onboardingReopened = false;
@@ -232,7 +209,6 @@ class CallbookController extends ChangeNotifier {
   bool _followPlayback = true;
   bool _autoAdvanceOnTag = false;
   bool _metronomeEnabled = true;
-  bool _gtBeepEnabled = true;
   double _metronomeVolume = 0.95;
   double _playbackRate = 1.0;
   int _currentTimeMs = 0;
@@ -271,8 +247,6 @@ class CallbookController extends ChangeNotifier {
   Listenable get playbackListenable => _playbackNotifier;
   Listenable get beatListenable => _beatNotifier;
   ValueListenable<String?> get playingLineIdListenable => _playingLineIdNotifier;
-  ValueListenable<String?> get activeGtTargetLineIdListenable =>
-      _activeGtTargetLineIdNotifier;
   ValueListenable<String> get statusListenable => _statusNotifier;
 
   // Getters
@@ -306,6 +280,7 @@ class CallbookController extends ChangeNotifier {
   DisplayLayers get displayLayers => _displayLayers;
   String? get activeLineId => _activeLineId;
   StudioRoute get route => _route;
+  int get moreRootResetNonce => _moreRootResetNonce;
   bool get sidebarExpanded => _sidebarExpanded;
   bool get showOnboarding => _showOnboarding;
   bool get onboardingReopened => _onboardingReopened;
@@ -324,7 +299,6 @@ class CallbookController extends ChangeNotifier {
   bool get followPlayback => _followPlayback;
   bool get autoAdvanceOnTag => _autoAdvanceOnTag;
   bool get metronomeEnabled => _metronomeEnabled;
-  bool get gtBeepEnabled => _gtBeepEnabled;
   double get metronomeVolume => _metronomeVolume;
   double get playbackRate => _playbackRate;
   int get currentTimeMs => _currentTimeMs;
@@ -387,8 +361,6 @@ class CallbookController extends ChangeNotifier {
 
   GtAlert? getAlertForLine(String lineId) => _alertByLineIdCache[lineId];
 
-  ActiveGtAlertStatus? get activeGtAlertStatus => _activeGtAlertStatusCache;
-
   void _setProject(CallProject next) {
     final linesOrAlertsChanged =
         !identical(next.lines, _project.lines) ||
@@ -408,18 +380,15 @@ class CallbookController extends ChangeNotifier {
     final alerts = [..._project.alerts]
       ..sort((a, b) => a.triggerTimeMs.compareTo(b.triggerTimeMs));
     final alertByLine = <String, GtAlert>{};
-    final targetByAlertId = <String, String>{};
     for (final alert in alerts) {
       final targetId = resolveGtAlertTargetLineId(alert, lines);
       if (targetId != null) {
-        targetByAlertId[alert.id] = targetId;
         alertByLine.putIfAbsent(targetId, () => alert);
       }
     }
     _sortedLinesCache = List.unmodifiable(lines);
     _sortedAlertsCache = List.unmodifiable(alerts);
     _alertByLineIdCache = Map.unmodifiable(alertByLine);
-    _alertTargetByIdCache = Map.unmodifiable(targetByAlertId);
     _timelineItemsCache = List.unmodifiable([
       for (final l in lines) TimelineLineItem(l),
     ]);
@@ -438,37 +407,6 @@ class CallbookController extends ChangeNotifier {
     _playingLineIdCache = nextPlayingId;
     if (!_disposed && _playingLineIdNotifier.value != nextPlayingId) {
       _playingLineIdNotifier.value = nextPlayingId;
-    }
-
-    ActiveGtAlertStatus? nextActiveAlert;
-    if (_sortedAlertsCache.isNotEmpty) {
-      final beatMs = 60000.0 / math.max(30, _project.meta.bpm);
-      const holdAfterMs = 1800;
-      for (final alert in _sortedAlertsCache) {
-        final leadMs = (alert.leadBeats * beatMs).round();
-        final warnStart = alert.triggerTimeMs - leadMs;
-        if (t >= warnStart && t <= alert.triggerTimeMs + holdAfterMs) {
-          final remainingMs = math.max(0, alert.triggerTimeMs - t);
-          final remainingBeats =
-              remainingMs == 0 ? 0 : (remainingMs / beatMs).ceil();
-          final progress =
-              ((t - warnStart) / math.max(1, leadMs)).clamp(0.0, 1.0);
-          nextActiveAlert = ActiveGtAlertStatus(
-            alert: alert,
-            remainingBeats: remainingBeats,
-            remainingMs: remainingMs,
-            isTriggered: remainingMs == 0,
-            progress: progress,
-            targetLineId: _alertTargetByIdCache[alert.id],
-          );
-          break;
-        }
-      }
-    }
-    _activeGtAlertStatusCache = nextActiveAlert;
-    final nextGtTarget = nextActiveAlert?.targetLineId;
-    if (!_disposed && _activeGtTargetLineIdNotifier.value != nextGtTarget) {
-      _activeGtTargetLineIdNotifier.value = nextGtTarget;
     }
   }
 
@@ -1012,8 +950,11 @@ class CallbookController extends ChangeNotifier {
   }
 
   void setRoute(StudioRoute next) {
-    if (_route == next) return;
+    if (_route == next && next != StudioRoute.more) return;
     _route = next;
+    if (next == StudioRoute.more) {
+      _moreRootResetNonce++;
+    }
     notifyListeners();
   }
 
@@ -1209,12 +1150,6 @@ class CallbookController extends ChangeNotifier {
 
   void setMetronomeVolume(double volume) {
     _metronomeVolume = volume.clamp(0.2, 1.5);
-    _syncEngine();
-    notifyListeners();
-  }
-
-  void setGtBeepEnabled(bool enabled) {
-    _gtBeepEnabled = enabled;
     _syncEngine();
     notifyListeners();
   }
@@ -1562,6 +1497,83 @@ class CallbookController extends ChangeNotifier {
     return true;
   }
 
+  bool splitLineAtRunes(
+    String lineId,
+    List<int> splitRuneIndices, {
+    List<int>? boundaryTimesMs,
+  }) {
+    final ordered = sortedLines;
+    final idx = ordered.indexWhere((l) => l.id == lineId);
+    if (idx < 0) return false;
+    final target = ordered[idx];
+    if (target.kind.isSection) {
+      setStatus('段落标题行不能按字拆分');
+      return false;
+    }
+    final runeCount = target.text.original.runes.length;
+    if (runeCount < 2) {
+      setStatus('至少需要 2 个字符才能拆分');
+      return false;
+    }
+    final cleanSplits = splitRuneIndices
+        .where((i) => i > 0 && i < runeCount)
+        .toSet()
+        .toList()
+      ..sort();
+    if (cleanSplits.isEmpty) return false;
+
+    _pushUndo('拆分歌词');
+    final existingIds = {for (final l in _project.lines) l.id};
+    final stamp = DateTime.now().millisecondsSinceEpoch;
+    final chunks = sliceLyricLineForSplit(
+      target,
+      cleanSplits,
+      boundaryTimesMs: boundaryTimesMs,
+      idFactory: (chunkIdx) {
+        var candidate = '${target.id}-sp$chunkIdx-$stamp';
+        var seq = 0;
+        while (existingIds.contains(candidate)) {
+          seq++;
+          candidate = '${target.id}-sp$chunkIdx-$stamp-$seq';
+        }
+        existingIds.add(candidate);
+        return candidate;
+      },
+    );
+    if (chunks.length < 2) return false;
+
+    final nextLines = <LyricLine>[
+      for (final l in _project.lines)
+        if (l.id == target.id) ...chunks else l,
+    ];
+
+    final targetAlert = getAlertForLine(target.id);
+    final nextAlerts = targetAlert == null
+        ? _project.alerts
+        : [
+            for (final a in _project.alerts)
+              if (a.id == targetAlert.id)
+                a.copyWith(
+                  targetLineId: chunks.first.id,
+                  triggerTimeMs: chunks.first.startTimeMs,
+                )
+              else
+                a,
+          ];
+
+    _activeLineId = chunks.first.id;
+    _setProject(_project.copyWith(lines: nextLines, alerts: nextAlerts));
+    _refreshCallDensitySeries();
+    _syncEngine();
+    schedulePersist();
+    _setStatusInternal(
+      '已将歌词拆分为 ${chunks.length} 句（可点击「撤销」恢复）',
+    );
+    _playbackNotifier.notifyListeners();
+    notifyListeners();
+    return true;
+  }
+
   void upsertAlignedCall(
     String lineId, {
     String? id,
@@ -1846,7 +1858,7 @@ class CallbookController extends ChangeNotifier {
     return best.id;
   }
 
-  void toggleLineGtAlert({String? lineId, String? callTimingCue}) {
+  void toggleLineGtAlert({String? lineId}) {
     final ordered = sortedLines;
     final targetId = lineId ?? _pickTargetLineForGt();
     if (targetId == null) {
@@ -1880,15 +1892,11 @@ class CallbookController extends ChangeNotifier {
       return;
     }
 
-    final trimmedCue = callTimingCue?.trim();
     final alert = GtAlert(
       id: 'gt-${DateTime.now().millisecondsSinceEpoch}',
       triggerTimeMs: targetLine.startTimeMs,
-      leadBeats: 4,
       note: '吉他进场，准备衔接 Call',
       targetLineId: targetId,
-      callTimingCue:
-          (trimmedCue != null && trimmedCue.isNotEmpty) ? trimmedCue : 'se-no',
     );
     _setProject(_project.copyWith(alerts: [..._project.alerts, alert]));
     _syncEngine();
@@ -1900,8 +1908,6 @@ class CallbookController extends ChangeNotifier {
 
   void updateLineGtAlert(
     String lineId, {
-    String? callTimingCue,
-    int? leadBeats,
     String? note,
     int? triggerTimeMs,
   }) {
@@ -1916,8 +1922,6 @@ class CallbookController extends ChangeNotifier {
                 resolveGtAlertTargetLineId(a, ordered) == lineId)
               a.copyWith(
                 targetLineId: lineId,
-                callTimingCue: callTimingCue ?? a.callTimingCue,
-                leadBeats: leadBeats ?? a.leadBeats,
                 note: note ?? a.note,
                 triggerTimeMs: triggerTimeMs ?? a.triggerTimeMs,
               )
@@ -1932,8 +1936,8 @@ class CallbookController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void insertGtAlert({String? lineId, String? callTimingCue}) {
-    toggleLineGtAlert(lineId: lineId, callTimingCue: callTimingCue);
+  void insertGtAlert({String? lineId}) {
+    toggleLineGtAlert(lineId: lineId);
   }
 
   void addCustomPreset({
@@ -2822,13 +2826,10 @@ class CallbookController extends ChangeNotifier {
       offsetMs: _project.meta.offsetMs,
       metronomeEnabled: _metronomeEnabled,
       metronomeVolume: _metronomeVolume,
-      gtBeepEnabled: _gtBeepEnabled,
+      gtBeepEnabled: false,
       playbackRate: _playbackRate,
     );
-    _audio.setAlerts([
-      for (final a in sortedAlerts)
-        (id: a.id, triggerTimeMs: a.triggerTimeMs, leadBeats: a.leadBeats),
-    ]);
+    _audio.setAlerts(const []);
   }
 
   void _handleTimeUpdate(int timeMs) {
@@ -2884,7 +2885,6 @@ class CallbookController extends ChangeNotifier {
     _playbackNotifier.dispose();
     _beatNotifier.dispose();
     _playingLineIdNotifier.dispose();
-    _activeGtTargetLineIdNotifier.dispose();
     _statusNotifier.dispose();
     super.dispose();
   }

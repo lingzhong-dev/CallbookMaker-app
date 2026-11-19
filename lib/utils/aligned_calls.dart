@@ -375,3 +375,191 @@ LyricLine mergeAdjacentLyricLines(LyricLine first, LyricLine second) {
     ),
   );
 }
+
+/// Computes internal split boundary timestamps by proportional rune count
+/// across `[startMs, endMs]`. Returned list has `chunkRuneCounts.length - 1`
+/// monotonically non-decreasing values inside `[startMs, endMs]`.
+List<int> computeDefaultSplitTimes(
+  int startMs,
+  int endMs,
+  List<int> chunkRuneCounts,
+) {
+  if (chunkRuneCounts.length <= 1) return const [];
+  final safeStart = math.max(0, startMs);
+  final safeEnd = math.max(safeStart, endMs);
+  final span = safeEnd - safeStart;
+  final totalRunes = chunkRuneCounts.fold<int>(
+    0,
+    (sum, count) => sum + math.max(1, count),
+  );
+  final chunkCount = chunkRuneCounts.length;
+  final enforceMinGap = span >= chunkCount;
+
+  final boundaries = <int>[];
+  var cumulative = 0;
+  var prev = safeStart;
+  for (var i = 0; i < chunkCount - 1; i++) {
+    cumulative += math.max(1, chunkRuneCounts[i]);
+    var target = safeStart + (span * cumulative / totalRunes).round();
+    final minAllowed = enforceMinGap ? prev + 1 : prev;
+    final remainingChunks = chunkCount - 1 - i;
+    final maxAllowed = enforceMinGap ? safeEnd - remainingChunks : safeEnd;
+    if (target < minAllowed) target = minAllowed;
+    if (target > maxAllowed) target = maxAllowed;
+    boundaries.add(target);
+    prev = target;
+  }
+  return boundaries;
+}
+
+String? _serializeRubySegments(List<RubySegment> segments) {
+  if (segments.isEmpty) return null;
+  final hasAnyRt = segments.any((s) => (s.rt ?? '').trim().isNotEmpty);
+  if (!hasAnyRt) return null;
+  final buf = StringBuffer();
+  for (final seg in segments) {
+    final rt = seg.rt?.trim();
+    if (rt != null && rt.isNotEmpty) {
+      buf.write('<ruby>${_escapeHtml(seg.base)}<rt>${_escapeHtml(rt)}</rt></ruby>');
+    } else {
+      buf.write(_escapeHtml(seg.base));
+    }
+  }
+  return buf.toString();
+}
+
+/// Splits a single [LyricLine] at one or more rune boundaries (strictly inside
+/// `1 .. original.runes.length - 1`), accurately translating rune offsets to
+/// UTF-16 code units, clipping/shifting `alignedCalls` and `<ruby>` spans, and
+/// allocating timestamps across the resulting chunks.
+List<LyricLine> sliceLyricLineForSplit(
+  LyricLine line,
+  List<int> splitRuneIndices, {
+  List<int>? boundaryTimesMs,
+  required String Function(int chunkIndex) idFactory,
+}) {
+  final original = line.text.original;
+  final runes = original.runes.toList(growable: false);
+  final runeCount = runes.length;
+  if (runeCount < 2) return [line];
+
+  final cleanSplits = splitRuneIndices
+      .where((i) => i > 0 && i < runeCount)
+      .toSet()
+      .toList()
+    ..sort();
+  if (cleanSplits.isEmpty) return [line];
+
+  final runeToUtf16 = List<int>.filled(runeCount + 1, 0);
+  var utf16Cursor = 0;
+  for (var i = 0; i < runeCount; i++) {
+    runeToUtf16[i] = utf16Cursor;
+    utf16Cursor += String.fromCharCode(runes[i]).length;
+  }
+  runeToUtf16[runeCount] = utf16Cursor;
+
+  final runeCutPoints = <int>[0, ...cleanSplits, runeCount];
+  final chunkCount = runeCutPoints.length - 1;
+  final chunkRuneCounts = <int>[
+    for (var i = 0; i < chunkCount; i++) runeCutPoints[i + 1] - runeCutPoints[i],
+  ];
+
+  final safeStart = math.max(0, line.startTimeMs);
+  final safeEnd = math.max(safeStart, line.endTimeMs);
+  final List<int> boundaries;
+  if (boundaryTimesMs != null && boundaryTimesMs.length == chunkCount - 1) {
+    final normalized = <int>[];
+    var prev = safeStart;
+    final span = safeEnd - safeStart;
+    final enforceMinGap = span >= chunkCount;
+    for (var i = 0; i < chunkCount - 1; i++) {
+      var val = boundaryTimesMs[i].clamp(safeStart, safeEnd);
+      final minAllowed = enforceMinGap ? prev + 1 : prev;
+      final remainingChunks = chunkCount - 1 - i;
+      final maxAllowed = enforceMinGap ? safeEnd - remainingChunks : safeEnd;
+      if (val < minAllowed) val = minAllowed;
+      if (val > maxAllowed) val = maxAllowed;
+      normalized.add(val);
+      prev = val;
+    }
+    boundaries = normalized;
+  } else {
+    boundaries = computeDefaultSplitTimes(safeStart, safeEnd, chunkRuneCounts);
+  }
+
+  final rawRuby = line.text.ruby;
+  List<_RubySpan>? rubySpans;
+  if (rawRuby != null && rawRuby.contains('<ruby')) {
+    final parsed = parseRubySegments(rawRuby, original);
+    if (parsed.map((s) => s.base).join() == original) {
+      final built = <_RubySpan>[];
+      var pos = 0;
+      for (final seg in parsed) {
+        built.add(
+          _RubySpan(
+            start: pos,
+            end: pos + seg.base.length,
+            base: seg.base,
+            rt: seg.rt,
+          ),
+        );
+        pos += seg.base.length;
+      }
+      rubySpans = built;
+    }
+  }
+
+  final normalizedAligned = normalizeAlignedCalls(line.alignedCalls, original.length);
+  final timePoints = <int>[safeStart, ...boundaries, safeEnd];
+  final out = <LyricLine>[];
+
+  for (var k = 0; k < chunkCount; k++) {
+    final uStart = runeToUtf16[runeCutPoints[k]];
+    final uEnd = runeToUtf16[runeCutPoints[k + 1]];
+    final chunkOriginal = original.substring(uStart, uEnd);
+
+    final chunkAlignedRaw = <AlignedCallCue>[];
+    for (final cue in normalizedAligned) {
+      if (cue.end <= uStart || cue.start >= uEnd) continue;
+      final subStart = math.max(cue.start, uStart) - uStart;
+      final subEnd = math.min(cue.end, uEnd) - uStart;
+      if (subEnd <= subStart) continue;
+      final fullyInside = cue.start >= uStart && cue.end <= uEnd;
+      chunkAlignedRaw.add(
+        cue.copyWith(
+          id: fullyInside ? cue.id : '${cue.id}-s$k',
+          start: subStart,
+          end: subEnd,
+        ),
+      );
+    }
+    final chunkAligned = normalizeAlignedCalls(chunkAlignedRaw, chunkOriginal.length);
+
+    String? chunkRuby;
+    if (rubySpans != null) {
+      final slicedSegments = _sliceRubySegmentsRange(rubySpans, uStart, uEnd);
+      chunkRuby = _serializeRubySegments(slicedSegments);
+    }
+
+    out.add(
+      LyricLine(
+        id: k == 0 ? line.id : idFactory(k),
+        startTimeMs: timePoints[k],
+        endTimeMs: timePoints[k + 1],
+        kind: line.kind,
+        autoGenerated: line.autoGenerated,
+        calls: [for (final tag in line.calls) tag.copyWith()],
+        customShout: k == 0 ? line.customShout : '',
+        tailUpdraft: k == chunkCount - 1 ? line.tailUpdraft : false,
+        alignedCalls: chunkAligned,
+        text: LyricText(
+          original: chunkOriginal,
+          ruby: chunkRuby,
+          romaji: k == 0 ? line.text.romaji : null,
+          translation: k == 0 ? line.text.translation : null,
+        ),
+      ),
+    );
+  }
+  return out;
+}

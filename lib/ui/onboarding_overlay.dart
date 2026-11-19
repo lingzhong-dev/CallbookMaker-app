@@ -717,7 +717,7 @@ class _OnboardingOverlayState extends State<OnboardingOverlay> {
       (
         glyph: CallbookGlyphs.fullscreen,
         title: '大屏跟拍演练（快捷键 F）',
-        desc: '纯黑高对比全屏提词，实时节拍器点阵 + GT 警报倒数提醒',
+        desc: '纯黑高对比全屏提词，实时节拍器点阵 + GT 警报高亮与备注',
       ),
       (
         glyph: CallbookGlyphs.exportCard,
@@ -727,7 +727,7 @@ class _OnboardingOverlayState extends State<OnboardingOverlay> {
       (
         glyph: CallbookGlyphs.archive,
         title: 'Markdown / JSON 工程备份',
-        desc: '一键复制到剪贴板或保存至本地存档，与同好无缝接力共创',
+        desc: '导出 JSON 工程文件或复制 Markdown，与同好无缝接力共创',
       ),
     ];
 

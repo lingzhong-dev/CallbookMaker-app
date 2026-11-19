@@ -24,9 +24,15 @@ import 'widgets/callbook_glyphs.dart';
 import 'widgets/ruby_lyric_text.dart';
 
 class ExportView extends StatefulWidget {
-  const ExportView({super.key, required this.controller});
+  const ExportView({
+    super.key,
+    required this.controller,
+    this.jsonFileExporter,
+  });
 
   final CallbookController controller;
+  final Future<String?> Function(String fileName, Uint8List bytes)?
+      jsonFileExporter;
 
   @override
   State<ExportView> createState() => _ExportViewState();
@@ -40,179 +46,35 @@ class _ExportViewState extends State<ExportView> {
   Future<bool> _promptEditorInfoBeforeExport({String? formatBadge}) async {
     final c = widget.controller;
     final meta = c.project.meta;
-    final editorNameCtrl = TextEditingController(text: meta.editorName);
-    final editorNoteCtrl = TextEditingController(text: meta.editorNote);
-    final composerCtrl = TextEditingController(text: meta.composer);
-    final lyricistCtrl = TextEditingController(text: meta.lyricist);
-    final vocalistCtrl = TextEditingController(
-      text: meta.vocalist.trim().isNotEmpty ? meta.vocalist : meta.artist,
+    final res = await showFloatingDialog<
+        ({
+          String editorName,
+          String editorNote,
+          String composer,
+          String lyricist,
+          String vocalist,
+          bool showTuner,
+          String tuner,
+        })>(
+      context: context,
+      child: _ExportEditorInfoDialog(
+        initialMeta: meta,
+        formatBadge: formatBadge,
+      ),
     );
-    final tunerCtrl = TextEditingController(text: meta.tuner);
-    var showTuner = meta.showTuner;
-
-    try {
-      final ok = await showFloatingDialog<bool>(
-        context: context,
-        child: Builder(
-          builder: (dialogCtx) {
-            final scheme = dialogCtx.colorScheme;
-            return StatefulBuilder(
-              builder: (dialogCtx, setModalState) => AlertDialog(
-                title: '导出前确认编者与曲目署名',
-                hasFields: true,
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.of(dialogCtx).pop(false),
-                    child: const Text('取消'),
-                  ),
-                  TextButton(
-                    onPressed: () => Navigator.of(dialogCtx).pop(true),
-                    child: const Text('确认并导出'),
-                  ),
-                ],
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    if (formatBadge != null && formatBadge.isNotEmpty) ...[
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: TonalChip(
-                          label: formatBadge,
-                          color: scheme.primaryContainer,
-                          foregroundColor: scheme.onPrimaryContainer,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                    ],
-                    Text(
-                      '确认后将立即同步至 Callbook 与导出文件',
-                      style: AppTextStyle.caption1.of(dialogCtx).copyWith(
-                        color: scheme.onSurfaceVariant,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    TextField(
-                      controller: editorNameCtrl,
-                      decoration: const InputDecoration(
-                        hintText: '编者（你的圈名/cn）',
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    TextField(
-                      controller: editorNoteCtrl,
-                      maxLines: 3,
-                      minLines: 2,
-                      decoration: const InputDecoration(
-                        hintText: '写给现场打 Call 同好的备注、切拍提示或寄语...',
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: scheme.surfaceContainerLow,
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: scheme.outlineVariant),
-                      ),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  '曲目署名确认',
-                                  style: AppTextStyle.caption1
-                                      .of(dialogCtx, emphasized: true)
-                                      .copyWith(color: scheme.onSurface),
-                                ),
-                              ),
-                              Text(
-                                '添加调教',
-                                style: AppTextStyle.caption2
-                                    .of(dialogCtx)
-                                    .copyWith(color: scheme.onSurfaceVariant),
-                              ),
-                              const SizedBox(width: 6),
-                              Switch(
-                                value: showTuner,
-                                onChanged: (v) =>
-                                    setModalState(() => showTuner = v),
-                                semanticLabel: '添加调教',
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: TextField(
-                                  controller: composerCtrl,
-                                  decoration: const InputDecoration(
-                                    hintText: '作曲',
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: TextField(
-                                  controller: lyricistCtrl,
-                                  decoration: const InputDecoration(
-                                    hintText: '作词',
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
-                          TextField(
-                            controller: vocalistCtrl,
-                            decoration: const InputDecoration(
-                              hintText: '演唱',
-                            ),
-                          ),
-                          if (showTuner) ...[
-                            const SizedBox(height: 8),
-                            TextField(
-                              controller: tunerCtrl,
-                              decoration: const InputDecoration(
-                                hintText: '请输入调教作者',
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          },
-        ),
-      );
-      if (ok != true || !mounted) return false;
-      c.updateMeta(
-        editorName: editorNameCtrl.text.trim(),
-        editorNote: editorNoteCtrl.text.trim(),
-        composer: composerCtrl.text.trim(),
-        lyricist: lyricistCtrl.text.trim(),
-        vocalist: vocalistCtrl.text.trim(),
-        showTuner: showTuner,
-        tuner: tunerCtrl.text.trim(),
-      );
-      setState(() {});
-      await WidgetsBinding.instance.endOfFrame;
-      return mounted;
-    } finally {
-      editorNameCtrl.dispose();
-      editorNoteCtrl.dispose();
-      composerCtrl.dispose();
-      lyricistCtrl.dispose();
-      vocalistCtrl.dispose();
-      tunerCtrl.dispose();
-    }
+    if (res == null || !mounted) return false;
+    c.updateMeta(
+      editorName: res.editorName,
+      editorNote: res.editorNote,
+      composer: res.composer,
+      lyricist: res.lyricist,
+      vocalist: res.vocalist,
+      showTuner: res.showTuner,
+      tuner: res.tuner,
+    );
+    setState(() {});
+    await WidgetsBinding.instance.endOfFrame;
+    return mounted;
   }
 
   String _safeFileStem(String rawTitle) {
@@ -407,11 +269,110 @@ class _ExportViewState extends State<ExportView> {
     }
   }
 
-  Future<void> _copyJson() async {
+  Future<void> _exportJsonFile() async {
     if (!await _promptEditorInfoBeforeExport(formatBadge: 'JSON 工程')) return;
+    if (!mounted) return;
     final c = widget.controller;
-    await Clipboard.setData(ClipboardData(text: c.exportProjectJsonString()));
-    c.setStatus('已复制完整 CallBook JSON 工程到剪贴板');
+    final fileName = '${_safeFileStem(c.project.meta.title)}_callbook.json';
+    final jsonStr = c.exportProjectJsonString();
+    final bytes = Uint8List.fromList(utf8.encode(jsonStr));
+
+    if (widget.jsonFileExporter != null) {
+      try {
+        final savedPath = await widget.jsonFileExporter!(fileName, bytes);
+        if (savedPath == null || savedPath.trim().isEmpty) {
+          c.setStatus('已取消导出 JSON');
+        } else {
+          c.setStatus('JSON 工程已导出：$savedPath');
+        }
+      } catch (err) {
+        c.setStatus('导出 JSON 失败：$err');
+      }
+      return;
+    }
+
+    final isWidgetTest =
+        !kIsWeb && Platform.environment.containsKey('FLUTTER_TEST');
+
+    if (kIsWeb) {
+      try {
+        await FilePicker.platform.saveFile(
+          dialogTitle: '保存 CallBook JSON 工程',
+          fileName: fileName,
+          type: FileType.custom,
+          allowedExtensions: const ['json'],
+          bytes: bytes,
+        );
+        c.setStatus('JSON 工程已导出：$fileName');
+      } catch (err) {
+        c.setStatus('导出 JSON 失败：$err');
+      }
+      return;
+    }
+
+    if (!isWidgetTest && (Platform.isAndroid || Platform.isIOS)) {
+      try {
+        final saved = await FilePicker.platform.saveFile(
+          dialogTitle: '保存 CallBook JSON 工程',
+          fileName: fileName,
+          type: FileType.custom,
+          allowedExtensions: const ['json'],
+          bytes: bytes,
+        );
+        if (saved == null) {
+          c.setStatus('已取消导出 JSON');
+          return;
+        }
+        c.setStatus('JSON 工程已导出：$fileName');
+        return;
+      } catch (_) {
+        // Fall through to temp directory + share sheet fallback.
+      }
+    } else if (!isWidgetTest &&
+        (Platform.isWindows || Platform.isMacOS || Platform.isLinux)) {
+      try {
+        final pickedPath = await FilePicker.platform.saveFile(
+          dialogTitle: '保存 CallBook JSON 工程',
+          fileName: fileName,
+          type: FileType.custom,
+          allowedExtensions: const ['json'],
+          lockParentWindow: true,
+        );
+        if (pickedPath == null) {
+          c.setStatus('已取消导出 JSON');
+          return;
+        }
+        if (pickedPath.trim().isNotEmpty) {
+          final trimmed = pickedPath.trim();
+          final targetPath = trimmed.toLowerCase().endsWith('.json')
+              ? trimmed
+              : '$trimmed.json';
+          await File(targetPath).writeAsBytes(bytes, flush: true);
+          c.setStatus('JSON 工程已导出：$targetPath');
+          return;
+        }
+      } catch (_) {
+        // Fall through to temp directory fallback if zenity/kdialog unavailable.
+      }
+    }
+
+    try {
+      final dir = await getTemporaryDirectory();
+      final outPath = '${dir.path}${Platform.pathSeparator}$fileName';
+      final file = File(outPath);
+      await file.writeAsBytes(bytes, flush: true);
+      try {
+        await Share.shareXFiles(
+          [XFile(file.path)],
+          text: '${c.project.meta.title} · CallBook JSON 工程',
+        );
+      } catch (_) {
+        // Headless / desktop environments without share sheet keep written file.
+      }
+      c.setStatus('JSON 工程已导出：$outPath');
+    } catch (err) {
+      c.setStatus('导出 JSON 失败：$err');
+    }
   }
 
   String _buildMarkdown() {
@@ -449,15 +410,10 @@ class _ExportViewState extends State<ExportView> {
       ];
       final callColumn = tags.isEmpty ? '`—`' : tags.join(' ');
       final gtAlert = c.getAlertForLine(line.id);
-      final cue = (gtAlert?.callTimingCue ?? '').trim();
-      final gtParts = <String>[
-        if (cue.isNotEmpty) '时机：$cue',
-        if (gtAlert != null && gtAlert.note.trim().isNotEmpty)
-          gtAlert.note.trim(),
-      ];
+      final gtNote = gtAlert?.note.trim() ?? '';
       final gtSegment = gtAlert == null
           ? ''
-          : ' 【GT 警报${gtParts.isNotEmpty ? " · ${gtParts.join(' · ')}" : ""}】';
+          : ' 【GT 警报${gtNote.isNotEmpty ? " · $gtNote" : ""}】';
       final shoutSegment = line.customShout.trim().isEmpty
           ? ''
           : ' 【${line.customShout.trim()}】';
@@ -538,7 +494,7 @@ class _ExportViewState extends State<ExportView> {
                         ValueListenableBuilder<String>(
                           valueListenable: c.statusListenable,
                           builder: (context, statusMessage, _) => Text(
-                            '$statusMessage · 支持高清 PNG 长图、结构化 Excel 表、JSON 工程备份与 Markdown',
+                            '$statusMessage · 支持高清 PNG 长图、结构化 Excel 表、JSON 工程文件与 Markdown',
                             style: AppTextStyle.caption1.of(context).copyWith(
                               color: scheme.onSurfaceVariant,
                             ),
@@ -554,7 +510,7 @@ class _ExportViewState extends State<ExportView> {
                           label: '导出 JSON',
                           color: scheme.surfaceContainerHigh,
                           foregroundColor: scheme.onSurface,
-                          onPressed: _copyJson,
+                          onPressed: _exportJsonFile,
                         ),
                         TonalChip(
                           label: '导入工程',
@@ -1059,7 +1015,6 @@ class _CallbookLineRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isSec = line.kind.isSection;
-    final cue = (gtAlert?.callTimingCue ?? '').trim();
     final gtNote = (gtAlert?.note ?? '').trim();
     final shout = isSec ? line.customShout.trim() : getUnalignedCustomShout(line);
 
@@ -1094,12 +1049,10 @@ class _CallbookLineRow extends StatelessWidget {
         ? '【${line.kind.zhLabel}】'
         : line.text.original.trim();
 
-    final gtBadgeLabel = cue.isNotEmpty ? 'GT 警报 · 时机：$cue' : 'GT 警报';
-
     final topAlertStripWidgets = <Widget>[
       if (gtAlert != null)
         _ExportPill(
-          label: gtBadgeLabel,
+          label: 'GT 警报',
           background: const Color(0xFFF59E0B),
           foreground: const Color(0xFF000000),
           fontFamily: fontFamily,
@@ -1578,15 +1531,13 @@ double _measureUnconstrainedExportWidth({
   for (final line in lines) {
     final isSec = line.kind.isSection;
     final gtAlert = controller.getAlertForLine(line.id);
-    final cue = (gtAlert?.callTimingCue ?? '').trim();
     final gtNote = (gtAlert?.note ?? '').trim();
     final shout = isSec ? line.customShout.trim() : getUnalignedCustomShout(line);
 
     var topStripWidth = 0.0;
     var stripCount = 0;
     if (gtAlert != null) {
-      final gtLabel = cue.isNotEmpty ? 'GT 警报 · 时机：$cue' : 'GT 警报';
-      topStripWidth += 16.0 + _measureTextWidth(gtLabel, pillStyle) + 2.0;
+      topStripWidth += 16.0 + _measureTextWidth('GT 警报', pillStyle) + 2.0;
       stripCount++;
       if (gtNote.isNotEmpty) {
         topStripWidth += 6.0 + _measureTextWidth(gtNote, noteStyle);
@@ -1651,3 +1602,197 @@ double _measureUnconstrainedExportWidth({
       .max(760.0, 44.0 + 24.0 + callColWidth + 12.0 + maxRightContentWidth + 40.0)
       .ceilToDouble();
 }
+
+class _ExportEditorInfoDialog extends StatefulWidget {
+  const _ExportEditorInfoDialog({
+    required this.initialMeta,
+    this.formatBadge,
+  });
+
+  final CallProjectMeta initialMeta;
+  final String? formatBadge;
+
+  @override
+  State<_ExportEditorInfoDialog> createState() =>
+      _ExportEditorInfoDialogState();
+}
+
+class _ExportEditorInfoDialogState extends State<_ExportEditorInfoDialog> {
+  late final TextEditingController _editorNameCtrl = TextEditingController(
+    text: widget.initialMeta.editorName,
+  );
+  late final TextEditingController _editorNoteCtrl = TextEditingController(
+    text: widget.initialMeta.editorNote,
+  );
+  late final TextEditingController _composerCtrl = TextEditingController(
+    text: widget.initialMeta.composer,
+  );
+  late final TextEditingController _lyricistCtrl = TextEditingController(
+    text: widget.initialMeta.lyricist,
+  );
+  late final TextEditingController _vocalistCtrl = TextEditingController(
+    text: widget.initialMeta.vocalist.trim().isNotEmpty
+        ? widget.initialMeta.vocalist
+        : widget.initialMeta.artist,
+  );
+  late final TextEditingController _tunerCtrl = TextEditingController(
+    text: widget.initialMeta.tuner,
+  );
+  late bool _showTuner = widget.initialMeta.showTuner;
+
+  @override
+  void dispose() {
+    _editorNameCtrl.dispose();
+    _editorNoteCtrl.dispose();
+    _composerCtrl.dispose();
+    _lyricistCtrl.dispose();
+    _vocalistCtrl.dispose();
+    _tunerCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = context.colorScheme;
+    final formatBadge = widget.formatBadge;
+    return AlertDialog(
+      title: '导出前确认编者与曲目署名',
+      hasFields: true,
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(null),
+          child: const Text('取消'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop((
+            editorName: _editorNameCtrl.text.trim(),
+            editorNote: _editorNoteCtrl.text.trim(),
+            composer: _composerCtrl.text.trim(),
+            lyricist: _lyricistCtrl.text.trim(),
+            vocalist: _vocalistCtrl.text.trim(),
+            showTuner: _showTuner,
+            tuner: _tunerCtrl.text.trim(),
+          )),
+          child: const Text('确认并导出'),
+        ),
+      ],
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (formatBadge != null && formatBadge.isNotEmpty) ...[
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TonalChip(
+                label: formatBadge,
+                color: scheme.primaryContainer,
+                foregroundColor: scheme.onPrimaryContainer,
+              ),
+            ),
+            const SizedBox(height: 6),
+          ],
+          Text(
+            '确认后将立即同步至 Callbook 与导出文件',
+            style: AppTextStyle.caption1.of(context).copyWith(
+              color: scheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _editorNameCtrl,
+            decoration: const InputDecoration(
+              hintText: '编者（你的圈名/cn）',
+            ),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _editorNoteCtrl,
+            maxLines: 3,
+            minLines: 2,
+            decoration: const InputDecoration(
+              hintText: '写给现场打 Call 同好的备注、切拍提示或寄语...',
+            ),
+          ),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: scheme.surfaceContainerLow,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: scheme.outlineVariant),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '曲目署名确认',
+                        style: AppTextStyle.caption1
+                            .of(context, emphasized: true)
+                            .copyWith(color: scheme.onSurface),
+                      ),
+                    ),
+                    Text(
+                      '添加调教',
+                      style: AppTextStyle.caption2
+                          .of(context)
+                          .copyWith(color: scheme.onSurfaceVariant),
+                    ),
+                    const SizedBox(width: 6),
+                    Switch(
+                      value: _showTuner,
+                      onChanged: (v) => setState(() => _showTuner = v),
+                      semanticLabel: '添加调教',
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _composerCtrl,
+                        decoration: const InputDecoration(
+                          hintText: '作曲',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextField(
+                        controller: _lyricistCtrl,
+                        decoration: const InputDecoration(
+                          hintText: '作词',
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _vocalistCtrl,
+                  decoration: const InputDecoration(
+                    hintText: '演唱',
+                  ),
+                ),
+                if (_showTuner) ...[
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _tunerCtrl,
+                    decoration: const InputDecoration(
+                      hintText: '请输入调教作者',
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+

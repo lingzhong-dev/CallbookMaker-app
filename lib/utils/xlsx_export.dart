@@ -54,14 +54,9 @@ Uint8List buildCallBookXlsxBytes(
 
     final sheet2FlagsList = <String>[];
     if (gtAlert != null) {
-      final cue = (gtAlert.callTimingCue ?? '').trim();
       final note = gtAlert.note.trim();
-      final details = <String>[
-        if (cue.isNotEmpty) '时机: $cue',
-        if (note.isNotEmpty) note,
-      ];
       sheet2FlagsList.add(
-        details.isEmpty ? '（GT警报）' : '（GT警报） ${details.join(' | ')}',
+        note.isEmpty ? '（GT警报）' : '（GT警报） $note',
       );
     }
     if (line.tailUpdraft) {

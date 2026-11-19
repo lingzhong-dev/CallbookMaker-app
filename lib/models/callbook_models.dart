@@ -242,60 +242,43 @@ class GtAlert {
   const GtAlert({
     required this.id,
     required this.triggerTimeMs,
-    this.leadBeats = 4,
     this.note = '',
     this.targetLineId,
-    this.callTimingCue,
   });
 
   final String id;
   final int triggerTimeMs;
-  final int leadBeats;
   final String note;
   final String? targetLineId;
-  final String? callTimingCue;
 
   GtAlert copyWith({
     String? id,
     int? triggerTimeMs,
-    int? leadBeats,
     String? note,
     String? targetLineId,
     bool clearTargetLineId = false,
-    String? callTimingCue,
-    bool clearCallTimingCue = false,
   }) => GtAlert(
     id: id ?? this.id,
     triggerTimeMs: triggerTimeMs ?? this.triggerTimeMs,
-    leadBeats: leadBeats ?? this.leadBeats,
     note: note ?? this.note,
     targetLineId: clearTargetLineId ? null : (targetLineId ?? this.targetLineId),
-    callTimingCue: clearCallTimingCue
-        ? null
-        : (callTimingCue ?? this.callTimingCue),
   );
 
   Map<String, dynamic> toJson() => {
     'id': id,
     'triggerTimeMs': triggerTimeMs,
-    'leadBeats': leadBeats,
     'note': note,
     if (targetLineId != null && targetLineId!.trim().isNotEmpty)
       'targetLineId': targetLineId,
-    if (callTimingCue != null && callTimingCue!.trim().isNotEmpty)
-      'callTimingCue': callTimingCue,
   };
 
   factory GtAlert.fromJson(Map<String, dynamic> json) {
     final rawTarget = json['targetLineId']?.toString().trim();
-    final rawCue = json['callTimingCue']?.toString();
     return GtAlert(
       id: json['id']?.toString() ?? 'gt-${DateTime.now().millisecondsSinceEpoch}',
       triggerTimeMs: (json['triggerTimeMs'] as num?)?.round() ?? 0,
-      leadBeats: (json['leadBeats'] as num?)?.round() ?? 4,
       note: json['note']?.toString() ?? '',
       targetLineId: (rawTarget == null || rawTarget.isEmpty) ? null : rawTarget,
-      callTimingCue: rawCue,
     );
   }
 }

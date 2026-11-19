@@ -9,6 +9,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:live_call_studio/constants/app_info.dart';
 import 'package:live_call_studio/main.dart';
 import 'package:live_call_studio/models/callbook_models.dart';
 import 'package:live_call_studio/services/api_client.dart';
@@ -16,11 +17,14 @@ import 'package:live_call_studio/services/desktop_service_launcher.dart';
 import 'package:live_call_studio/services/lrclib_direct_client.dart';
 import 'package:live_call_studio/services/netease_direct_client.dart';
 import 'package:live_call_studio/state/callbook_controller.dart';
+import 'package:live_call_studio/ui/archive_view.dart';
 import 'package:live_call_studio/ui/export_view.dart';
 import 'package:live_call_studio/ui/home_shell.dart';
+import 'package:live_call_studio/ui/more_view.dart';
 import 'package:live_call_studio/ui/practice_overlay.dart';
 import 'package:live_call_studio/ui/theme_view.dart';
 import 'package:live_call_studio/ui/widgets/archive_switcher_dialog.dart';
+import 'package:live_call_studio/ui/widgets/gateway_config_panel.dart';
 import 'package:live_call_studio/ui/widgets/timeline_editor_widget.dart';
 import 'package:live_call_studio/utils/xlsx_export.dart';
 import 'package:prism_ui/prism_ui.dart' as prism;
@@ -401,13 +405,13 @@ void main() {
     );
   });
 
-  group('2. HomeShell Navigation & ThemeView Parity (Isolated from Dashboard Bug)', () {
+  group('2. HomeShell 4-Tab Navigation, ArchiveView, MoreView & ThemeView Parity', () {
     testWidgets(
-      'Desktop HomeShell + ThemeView render with ZERO exceptions; ThemeMode, ColorStyle, OLED, Glass, GoogleSans & Reset work',
+      'Desktop HomeShell renders 4-item nav (主页/导出/存档/更多), MoreView subpages & About layout with ZERO exceptions',
       timeout: const Timeout(Duration(seconds: 20)),
       (tester) async {
         final controller = await _initController();
-        controller.setRoute(StudioRoute.theme);
+        controller.setRoute(StudioRoute.more);
         try {
           await _pumpWithViewport(
             tester,
@@ -419,26 +423,68 @@ void main() {
           );
           expect(tester.takeException(), isNull);
 
-          expect(find.byType(prism.NavigationSidebar), findsOneWidget);
-          expect(find.text('主页'), findsOneWidget);
-          expect(find.text('导出'), findsOneWidget);
-          expect(find.text('外观主题'), findsOneWidget);
-          expect(find.text('存档 0'), findsOneWidget);
-          expect(find.text('演练模式 F'), findsOneWidget);
-          expect(find.byType(ThemeView), findsOneWidget);
+          final sidebar = find.byType(prism.NavigationSidebar);
+          expect(sidebar, findsOneWidget);
+          expect(find.descendant(of: sidebar, matching: find.text('主页')), findsOneWidget);
+          expect(find.descendant(of: sidebar, matching: find.text('导出')), findsOneWidget);
+          expect(find.descendant(of: sidebar, matching: find.text('存档')), findsOneWidget);
+          expect(find.descendant(of: sidebar, matching: find.text('更多')), findsOneWidget);
 
-          // Switch route -> Export -> Theme cleanly
-          await tester.tap(find.text('导出'));
+          // Removed header archive chip & old Theme destination
+          expect(find.text('外观主题'), findsNothing);
+          expect(find.text('存档 0'), findsNothing);
+          expect(find.text('Call 本存档'), findsNothing);
+          expect(find.text('演练模式 F'), findsOneWidget);
+
+          // MoreView root menu shows 3 options
+          expect(find.byType(MoreView), findsOneWidget);
+          expect(find.descendant(of: find.byType(MoreView), matching: find.text('网关配置')), findsOneWidget);
+          expect(find.descendant(of: find.byType(MoreView), matching: find.text('主题')), findsOneWidget);
+          expect(find.descendant(of: find.byType(MoreView), matching: find.text('关于')), findsOneWidget);
+
+          // Switch route -> ArchiveView -> ExportView -> Dashboard -> MoreView cleanly
+          await tester.tap(find.descendant(of: sidebar, matching: find.text('存档')));
+          await tester.pump();
+          expect(controller.route, StudioRoute.archive);
+          expect(find.byType(ArchiveView), findsOneWidget);
+
+          await tester.tap(find.descendant(of: sidebar, matching: find.text('导出')));
           await tester.pump();
           expect(controller.route, StudioRoute.export);
           expect(find.byType(ExportView), findsOneWidget);
 
-          await tester.tap(find.text('外观主题'));
+          await tester.tap(find.descendant(of: sidebar, matching: find.text('更多')));
           await tester.pump();
-          expect(controller.route, StudioRoute.theme);
+          expect(controller.route, StudioRoute.more);
+          expect(find.byType(MoreView), findsOneWidget);
 
-          await tester.tap(find.text('深色 Dark'));
+          // 1) Enter Gateway Config subpage, verify GatewayConfigPanel & back chevron
+          await tester.tap(find.descendant(of: find.byType(MoreView), matching: find.text('网关配置')));
           await tester.pump();
+          expect(find.byType(GatewayConfigPanel), findsOneWidget);
+          expect(find.text('网易云直连 & 可选后端服务'), findsOneWidget);
+          expect(find.bySemanticsLabel('返回更多'), findsOneWidget);
+          await tester.tap(find.bySemanticsLabel('返回更多'));
+          await tester.pump();
+          expect(find.byType(GatewayConfigPanel), findsNothing);
+          expect(find.descendant(of: find.byType(MoreView), matching: find.text('主题')), findsOneWidget);
+
+          // 2) Enter Theme subpage, then verify re-tapping '更多' nav resets subpage back to root
+          await tester.tap(find.descendant(of: find.byType(MoreView), matching: find.text('主题')));
+          await tester.pump();
+          expect(find.byType(ThemeView), findsOneWidget);
+
+          await tester.tap(find.descendant(of: sidebar, matching: find.text('更多')));
+          await tester.pump();
+          expect(find.byType(ThemeView), findsNothing);
+          expect(find.descendant(of: find.byType(MoreView), matching: find.text('网关配置')), findsOneWidget);
+
+          // 3) Re-enter ThemeView & exercise ThemeMode, ColorStyle, OLED, Glass, GoogleSans & Reset
+          await tester.tap(find.descendant(of: find.byType(MoreView), matching: find.text('主题')));
+          await tester.pump();
+          expect(find.byType(ThemeView), findsOneWidget);
+
+          await _scrollToAndTap(tester, find.text('深色 Dark'));
           expect(controller.themeMode, prism.ThemeMode.dark);
 
           await _scrollToAndTap(tester, find.text('柔和 Soft'));
@@ -476,9 +522,37 @@ void main() {
           expect(controller.floatingNavDock, isTrue);
           expect(controller.useGoogleSans, isTrue);
           expect(controller.textScale, 1.0);
-
-          // Gap vs Web: no HCT Hue/Chroma/Tone slider toggle or custom saved swatches UI
           expect(find.text('HCT 色相与明度滑块'), findsNothing);
+
+          await tester.tap(find.bySemanticsLabel('返回更多'));
+          await tester.pump();
+
+          // 4) Enter About subpage & verify layout, version, developer GitHub & GPL license dialog
+          await tester.tap(find.descendant(of: find.byType(MoreView), matching: find.text('关于')));
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 50));
+          expect(find.bySemanticsLabel('返回更多'), findsOneWidget);
+          expect(find.text(kAppDisplayName), findsOneWidget);
+          expect(find.text('Version $kAppVersion'), findsOneWidget);
+          expect(find.text('开发者'), findsOneWidget);
+          expect(find.text(kDeveloperGithubId), findsOneWidget);
+          expect(find.text(kDeveloperGithubUrl), findsOneWidget);
+          expect(
+            find.text('当前版本 Version $kAppVersion · 遵循 $kAppLicenseName 开源协议'),
+            findsOneWidget,
+          );
+
+          await tester.tap(find.text(kDeveloperGithubUrl));
+          await tester.pump();
+          expect(clipboardText, kDeveloperGithubUrl);
+
+          await _scrollToAndTap(tester, find.text('《$kAppLicenseName 开源协议》'));
+          expect(find.text('$kAppLicenseName 开源协议'), findsOneWidget);
+          expect(find.textContaining('GNU GENERAL PUBLIC LICENSE'), findsOneWidget);
+          await tester.tap(find.text('关闭'));
+          await tester.pump();
+          expect(find.text('$kAppLicenseName 开源协议'), findsNothing);
+
           expect(tester.takeException(), isNull);
         } finally {
           await _disposeTestTree(tester, controller);
@@ -487,11 +561,12 @@ void main() {
     );
 
     testWidgets(
-      'Mobile HomeShell toggles between floating NavigationDock and anchored bottom bar via floatingNavDock',
+      'Mobile HomeShell renders 4-tab NavigationDock / anchored bar & MoreView About page cleanly without overflow',
       timeout: const Timeout(Duration(seconds: 20)),
       (tester) async {
         final controller = await _initController();
-        controller.setRoute(StudioRoute.theme);
+        controller.setRoute(StudioRoute.more);
+        final launchedUrls = <String>[];
         try {
           await _pumpWithViewport(
             tester,
@@ -502,12 +577,44 @@ void main() {
             viewport: const Size(390, 844),
           );
           expect(tester.takeException(), isNull);
-          expect(find.byType(prism.NavigationDock), findsOneWidget);
+          final dock = find.byType(prism.NavigationDock);
+          expect(dock, findsOneWidget);
+          expect(find.descendant(of: dock, matching: find.text('主页')), findsOneWidget);
+          expect(find.descendant(of: dock, matching: find.text('导出')), findsOneWidget);
+          expect(find.descendant(of: dock, matching: find.text('存档')), findsOneWidget);
+          expect(find.descendant(of: dock, matching: find.text('更多')), findsOneWidget);
 
           controller.setFloatingNavDock(false);
           await tester.pump();
           expect(find.byType(prism.NavigationDock), findsNothing);
+          expect(find.text('主页'), findsOneWidget);
           expect(find.text('导出'), findsOneWidget);
+          expect(find.text('存档'), findsOneWidget);
+          expect(find.text('更多'), findsWidgets);
+
+          // Standalone MoreView at mobile width verifies external URL launcher callback & zero overflow in About
+          await _pumpWithViewport(
+            tester,
+            _wrapWithPrism(
+              controller: controller,
+              child: prism.BottomInsetScope(
+                inset: 84,
+                child: MoreView(
+                  controller: controller,
+                  onLaunchExternalUrl: (url) async => launchedUrls.add(url),
+                ),
+              ),
+            ),
+            viewport: const Size(390, 844),
+          );
+          await tester.tap(find.text('关于'));
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 50));
+          expect(find.text(kAppDisplayName), findsOneWidget);
+          expect(find.text(kDeveloperGithubId), findsOneWidget);
+          await tester.tap(find.text(kDeveloperGithubUrl));
+          await tester.pump();
+          expect(launchedUrls, [kDeveloperGithubUrl]);
           expect(tester.takeException(), isNull);
         } finally {
           await _disposeTestTree(tester, controller);
@@ -695,22 +802,18 @@ void main() {
             isTrue,
           );
 
-          // GT alert creation, update & active countdown computation
+          // GT alert creation, note update & PracticeOverlay rendering (flagging + highlight + note; no timing/countdown)
           controller.toggleLineGtAlert(lineId: lineC);
           controller.updateLineGtAlert(
             lineC,
-            callTimingCue: 'hi hi',
-            leadBeats: 4,
             note: '加速推进',
           );
           final lineCAlert = controller.getAlertForLine(lineC)!;
-          await controller.seek(lineCAlert.triggerTimeMs - 500);
+          expect(lineCAlert.targetLineId, lineC);
+          expect(lineCAlert.note, '加速推进');
+          await controller.seek(lineCAlert.triggerTimeMs);
           await tester.pump();
-          final countdown = controller.activeGtAlertStatus;
-          expect(countdown, isNotNull);
-          expect(countdown!.targetLineId, lineC);
-          expect(countdown.isTriggered, isFalse);
-          expect(countdown.remainingBeats, greaterThan(0));
+          expect(controller.playingLineId, lineC);
 
           // Keyboard shortcut 'G' toggles GT alert, '1' toggles front-wave, 'F' & 'Escape' toggle PracticeOverlay
           controller.selectLine(lineB);
@@ -734,12 +837,19 @@ void main() {
               .any((t) => t.presetId == 'front-wave');
           expect(nowHasFront, !hadFront);
 
+          // Keep playhead on lineC (which has active GT alert & note) and verify PracticeOverlay shows GT badge + note
+          await controller.seek(lineCAlert.triggerTimeMs);
+          await tester.pump();
           await tester.sendKeyEvent(LogicalKeyboardKey.keyF);
           await tester.pump();
           expect(controller.isPracticeMode, isTrue);
           expect(find.byType(PracticeOverlay), findsOneWidget);
           expect(find.textContaining('LIVE PRACTICE MODE'), findsOneWidget);
           expect(find.text('退出演练'), findsOneWidget);
+          expect(find.text('GT 警报'), findsWidgets);
+          expect(find.text('加速推进'), findsWidgets);
+          expect(find.textContaining('倒数'), findsNothing);
+          expect(find.textContaining('喊声时机'), findsNothing);
 
           await tester.tap(find.text('罗马音'));
           await tester.pump();
@@ -755,12 +865,15 @@ void main() {
             tester,
             _wrapWithPrism(
               controller: controller,
-              child: prism.BottomInsetScope(
-                inset: 0,
-                child: SingleChildScrollView(
-                  child: TimelineEditorWidget(
-                    controller: controller,
-                    compact: true,
+              child: ListenableBuilder(
+                listenable: controller,
+                builder: (context, _) => prism.BottomInsetScope(
+                  inset: 0,
+                  child: SingleChildScrollView(
+                    child: TimelineEditorWidget(
+                      controller: controller,
+                      compact: true,
+                    ),
                   ),
                 ),
               ),
@@ -774,6 +887,10 @@ void main() {
           expect(find.text('+ 自定义标签'), findsOneWidget);
           expect(find.text('跟随滚动'), findsOneWidget);
           expect(find.bySemanticsLabel('跟随播放滚动'), findsOneWidget);
+          expect(find.text('GT 警报备注'), findsOneWidget);
+          expect(find.text('加速推进'), findsOneWidget);
+          expect(find.text('GT 前置警报音'), findsNothing);
+          expect(find.textContaining('喊声时机'), findsNothing);
 
           // Toggle followPlayback via UI Switch and controller cleanly
           await _scrollToAndTap(tester, find.bySemanticsLabel('跟随播放滚动'));
@@ -953,15 +1070,130 @@ void main() {
         }
       },
     );
-  });
 
-  group('5. Archive Save Guard & Quick Switcher Dialog', () {
     testWidgets(
-      'Archive save guard prompts on switching/demo after external LRC import; ArchiveQuickSwitcher creates, renames, switches & deletes',
+      'Double-tapping timeline card opens edit dialog; word-accurate split dialog cuts runes & adopts current time with Undo',
       timeout: const Timeout(Duration(seconds: 20)),
       (tester) async {
         final controller = await _initController();
-        controller.setRoute(StudioRoute.export);
+        await controller.importLrcText(
+          lrc: '[00:05.00] 梦想的星光\n[00:12.00] 下一句歌词\n[00:18.00] 第三句歌词',
+        );
+        final firstLyric = controller.sortedLines.firstWhere(
+          (l) => l.kind == LyricLineKind.lyric,
+        );
+        // Ensure a second line isn't initially focused onto firstLyric so double-tap selects AND edits it
+        controller.selectLine(controller.sortedLines.last.id);
+        try {
+          await _pumpWithViewport(
+            tester,
+            _wrapWithPrism(
+              controller: controller,
+              child: ListenableBuilder(
+                listenable: controller,
+                builder: (context, _) => prism.BottomInsetScope(
+                  inset: 0,
+                  child: SingleChildScrollView(
+                    child: TimelineEditorWidget(
+                      controller: controller,
+                      compact: true,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            viewport: const Size(1280, 820),
+          );
+          expect(tester.takeException(), isNull);
+
+          // 1. Double-tap timeline lyric card -> selects line & opens '编辑歌词与段落'
+          await _scrollToAndTap(tester, find.text('梦想的星光'));
+          await tester.pump(const Duration(milliseconds: 50));
+          await tester.tap(find.text('梦想的星光'));
+          await tester.pumpAndSettle();
+          expect(find.text('编辑歌词与段落'), findsOneWidget);
+          expect(find.text('按字拆分此句'), findsOneWidget);
+
+          await tester.enterText(
+            find.widgetWithText(prism.TextField, '歌词原文 / 段落标题'),
+            '闪烁的星光',
+          );
+          await tester.tap(find.text('保存'));
+          await tester.pumpAndSettle();
+
+          final editedLine = controller.sortedLines.firstWhere(
+            (l) => l.id == firstLyric.id,
+          );
+          expect(editedLine.text.original, '闪烁的星光');
+          expect(controller.activeLineId, firstLyric.id);
+
+          // 2. Selected splittable lyric card shows '拆分' chip; seek strictly inside line for '采用当前时刻'
+          expect(find.text('拆分'), findsOneWidget);
+          await controller.seek(7000);
+          await tester.pump();
+
+          await tester.tap(find.text('拆分'));
+          await tester.pumpAndSettle();
+          expect(find.text('按字拆分歌词'), findsOneWidget);
+          expect(find.text('采用当前时刻 00:07.00'), findsOneWidget);
+
+          // Clear default midpoint cut, then pick cuts after char 2 ('闪烁') and char 4 ('的星') -> 3 chunks
+          await tester.tap(find.text('清空切分'));
+          await tester.pump();
+          expect(find.text('拆分预览（2 句）'), findsNothing);
+
+          await tester.tap(find.bySemanticsLabel('在第 2 字后拆分'));
+          await tester.pump();
+          // Adopt current playback timestamp 00:07.00 on boundary 1
+          await _scrollToAndTap(tester, find.text('采用当前时刻 00:07.00'));
+          await tester.pump();
+          await tester.tap(find.bySemanticsLabel('在第 4 字后拆分'));
+          await tester.pump();
+          expect(find.text('拆分预览（3 句）'), findsOneWidget);
+
+          await _scrollToAndTap(tester, find.text('确认拆分'));
+          await tester.pumpAndSettle();
+
+          final splitTexts = [
+            for (final l in controller.sortedLines)
+              if (l.kind == LyricLineKind.lyric) l.text.original,
+          ];
+          expect(
+            splitTexts,
+            containsAllInOrder(['闪烁', '的星', '光', '下一句歌词', '第三句歌词']),
+          );
+          final chunk1 = controller.sortedLines.firstWhere(
+            (l) => l.text.original == '闪烁',
+          );
+          final chunk2 = controller.sortedLines.firstWhere(
+            (l) => l.text.original == '的星',
+          );
+          expect(chunk1.endTimeMs, 7000);
+          expect(chunk2.startTimeMs, 7000);
+
+          // Undo restores the unsplit '闪烁的星光' line cleanly
+          expect(find.text('撤销'), findsOneWidget);
+          await _scrollToAndTap(tester, find.text('撤销'));
+          await tester.pump();
+          expect(
+            controller.sortedLines.any((l) => l.text.original == '闪烁的星光'),
+            isTrue,
+          );
+          expect(tester.takeException(), isNull);
+        } finally {
+          await _disposeTestTree(tester, controller);
+        }
+      },
+    );
+  });
+
+  group('5. Archive Save Guard & Standalone ArchiveView', () {
+    testWidgets(
+      'Archive save guard prompts after external LRC import; ArchiveView lists, saves, renames, switches & deletes archives',
+      timeout: const Timeout(Duration(seconds: 20)),
+      (tester) async {
+        final controller = await _initController();
+        controller.setRoute(StudioRoute.archive);
         try {
           await _pumpWithViewport(
             tester,
@@ -972,6 +1204,9 @@ void main() {
             viewport: const Size(1280, 820),
           );
           expect(tester.takeException(), isNull);
+          expect(find.byType(ArchiveView), findsOneWidget);
+          expect(find.text('存档 0'), findsNothing);
+          expect(find.text('暂无已保存的 Call 本存档'), findsOneWidget);
           expect(controller.archives, isEmpty);
           expect(controller.needsSavePromptBeforeSwitch, isFalse);
 
@@ -1000,32 +1235,44 @@ void main() {
           expect(controller.archives.length, 1);
           expect(controller.archives.first.name, 'First Saved Song');
           expect(controller.needsSavePromptBeforeSwitch, isFalse);
-          expect(find.text('存档 1'), findsOneWidget);
-
-          // Open ArchiveQuickSwitcher from HomeShell header chip
-          await tester.tap(find.text('存档 1'));
-          await tester.pump();
-          expect(find.text('Call 本存档快捷切换'), findsOneWidget);
+          expect(find.text('存档 1'), findsNothing);
           expect(find.text('First Saved Song'), findsOneWidget);
 
+          // Rename inline inside ArchiveView UI
           final archiveId = controller.archives.first.id;
-          expect(controller.renameArchive(archiveId, 'Renamed Song #1'), isTrue);
+          await _scrollToAndTap(tester, find.text('重命名'));
+          await tester.enterText(
+            find.widgetWithText(prism.TextField, '输入存档新名称...'),
+            'Renamed Song #1',
+          );
+          await tester.tap(find.text('保存'));
           await tester.pump();
           expect(find.text('Renamed Song #1'), findsOneWidget);
+          expect(controller.archives.first.name, 'Renamed Song #1');
 
-          await tester.tap(find.text('关闭'));
+          // Switch back to saved archive via UI button
+          await _scrollToAndTap(tester, find.text('切换到此存档'));
           await tester.pump();
-
-          expect(await controller.switchToArchive(archiveId), isTrue);
           expect(controller.project.meta.title, 'First Saved Song');
           expect(controller.activeArchiveId, archiveId);
+          expect(find.text('已加载'), findsOneWidget);
 
-          final dup = controller.saveCurrentToArchive(
-            asNew: true,
-            customName: 'Duplicate Song',
+          // Save-as duplicate via UI & delete via controller + UI state verification
+          await _scrollToAndTap(tester, find.text('另存副本'));
+          await tester.enterText(
+            find.widgetWithText(prism.TextField, '输入新存档名称...'),
+            'Duplicate Song',
           );
+          await tester.tap(find.text('确定保存'));
+          await tester.pump();
           expect(controller.archives.length, 2);
-          expect(controller.deleteArchive(dup.id), isTrue);
+          expect(find.text('Duplicate Song'), findsWidgets);
+
+          final dupId = controller.archives
+              .firstWhere((a) => a.name == 'Duplicate Song')
+              .id;
+          expect(controller.deleteArchive(dupId), isTrue);
+          await tester.pump();
           expect(controller.archives.length, 1);
           expect(tester.takeException(), isNull);
         } finally {
@@ -1035,9 +1282,9 @@ void main() {
     );
   });
 
-  group('6. ExportView, QuickRefSheet, Clipboard JSON/Markdown & XLSX', () {
+  group('6. ExportView, QuickRefSheet, File JSON, Markdown & XLSX', () {
     testWidgets(
-      'ExportView renders QuickRefSheet, prompts editor info on export, copies JSON/Markdown & builds valid 2-sheet XLSX',
+      'ExportView renders QuickRefSheet, exports actual JSON project file without touching clipboard, copies Markdown & builds valid 2-sheet XLSX',
       timeout: const Timeout(Duration(seconds: 20)),
       (tester) async {
         final controller = await _initController();
@@ -1051,7 +1298,11 @@ void main() {
         );
         controller.toggleTailUpdraft(controller.sortedLines.first.id);
         controller.toggleLineGtAlert(lineId: controller.sortedLines[1].id);
+        controller.updateLineGtAlert(controller.sortedLines[1].id, note: '吉他前准备');
         try {
+          String? exportedFileName;
+          Uint8List? exportedJsonBytes;
+
           await _pumpWithViewport(
             tester,
             _wrapWithPrism(
@@ -1076,36 +1327,57 @@ void main() {
           // Gap check: Print / PDF absent vs Web ExportPanel
           expect(find.textContaining('PDF'), findsNothing);
 
-          // Export JSON flow with pre-export editor modal + customPresets preservation
+          // Mount ExportView with jsonFileExporter hook to verify actual JSON file export (no clipboard copy)
           controller.addCustomPreset(
             label: '专属高光',
             colorHex: '#14B8A6',
             shortcut: 'Q',
           );
-          await tester.pump();
+          await _pumpWithViewport(
+            tester,
+            _wrapWithPrism(
+              controller: controller,
+              child: ExportView(
+                controller: controller,
+                jsonFileExporter: (fileName, bytes) async {
+                  exportedFileName = fileName;
+                  exportedJsonBytes = bytes;
+                  return '/tmp/$fileName';
+                },
+              ),
+            ),
+            viewport: const Size(1280, 820),
+          );
+
           await tester.tap(find.text('导出 JSON'));
-          await tester.pump();
+          await tester.pumpAndSettle();
           expect(find.text('导出前确认编者与曲目署名'), findsOneWidget);
           await tester.enterText(
             find.widgetWithText(prism.TextField, '编者（你的圈名/cn）'),
             '澪终',
           );
           await tester.tap(find.text('确认并导出'));
-          await tester.pump();
+          await tester.pumpAndSettle();
 
           expect(controller.project.meta.editorName, '澪终');
-          final decodedJson = jsonDecode(clipboardText) as Map<String, dynamic>;
+          expect(exportedFileName, '来自瓦纳海姆_callbook.json');
+          expect(exportedJsonBytes, isNotNull);
+          // JSON export MUST NOT overwrite clipboard with raw JSON text
+          expect(clipboardText, isEmpty);
+
+          final jsonText = utf8.decode(exportedJsonBytes!);
+          final decodedJson = jsonDecode(jsonText) as Map<String, dynamic>;
           final roundtripped = CallProject.fromJson(decodedJson);
           expect(roundtripped.meta.editorName, '澪终');
           expect(roundtripped.lines.length, controller.project.lines.length);
           expect(decodedJson['customPresets'], isA<List<dynamic>>());
 
-          // Delete custom preset then verify importProjectJson restores it from exported JSON
+          // Delete custom preset then verify importProjectJson restores it from exported JSON file contents
           controller.deleteCustomPreset(controller.customPresets.single.id);
           expect(controller.customPresets, isEmpty);
           final imported = await controller.importProjectJson(
-            clipboardText,
-            sourceName: 'backup.json',
+            jsonText,
+            sourceName: exportedFileName!,
           );
           expect(imported, isTrue);
           expect(controller.project.meta.editorName, '澪终');
@@ -1116,16 +1388,18 @@ void main() {
             isTrue,
           );
 
-          // Copy Markdown flow
+          // Copy Markdown flow (note preserved, timing cue text removed)
           await tester.tap(find.text('复制 Markdown'));
-          await tester.pump();
+          await tester.pumpAndSettle();
           await tester.tap(find.text('确认并导出'));
-          await tester.pump();
+          await tester.pumpAndSettle();
           expect(clipboardText, contains('# 来自瓦纳海姆'));
           expect(clipboardText, contains('## 歌词与 Call 时间轴'));
           expect(clipboardText, contains('编者：澪终'));
           expect(clipboardText, contains('尾句上升气流'));
           expect(clipboardText, contains('GT 警报'));
+          expect(clipboardText, contains('吉他前准备'));
+          expect(clipboardText, isNot(contains('时机：')));
 
           // Real XLSX export XML verification
           final xlsxBytes = buildCallBookXlsxBytes(
@@ -1141,6 +1415,7 @@ void main() {
           expect(entries['xl/workbook.xml'], contains('详细版'));
           expect(entries['xl/sharedStrings.xml'], contains('（尾句上升气流）'));
           expect(entries['xl/sharedStrings.xml'], contains('（GT警报）'));
+          expect(entries['xl/sharedStrings.xml'], isNot(contains('时机:')));
           expect(tester.takeException(), isNull);
         } finally {
           await _disposeTestTree(tester, controller);
@@ -1774,14 +2049,14 @@ void main() {
           // Re-restore metronome & test modal dialog suppresses HomeShell Space shortcut
           await tester.tap(metroSwitch);
           await tester.pump();
-          await tester.tap(find.text('存档 0'));
+          await _scrollToAndTap(tester, find.text('+ 自定义标签'));
           await tester.pump();
-          expect(find.text('Call 本存档快捷切换'), findsOneWidget);
+          expect(find.text('添加自定义 Call 标签'), findsOneWidget);
 
           await tester.sendKeyEvent(LogicalKeyboardKey.space);
           await tester.pump();
           expect(controller.isPlaying, isFalse);
-          await tester.tap(find.text('关闭'));
+          await tester.tap(find.text('取消'));
           await tester.pump();
         } finally {
           await _disposeTestTree(
@@ -1839,13 +2114,19 @@ void main() {
             viewport: const Size(1280, 820),
           );
 
-          // Single tap in ArchiveQuickSwitchDialog switches to Archive Alpha on first click!
-          await tester.tap(find.text('存档 2'));
+          // Single tap in standalone ArchiveView switches to Archive Alpha on first click!
+          final sidebar = find.byType(prism.NavigationSidebar);
+          await tester.tap(find.descendant(of: sidebar, matching: find.text('存档')));
           await tester.pump();
-          await tester.tap(find.text('Archive Alpha').last);
+          expect(find.byType(ArchiveView), findsOneWidget);
+          await _scrollToAndTap(tester, find.text('Archive Alpha').last);
           await tester.pump();
           expect(controller.activeArchiveId, alpha.id);
           expect(controller.project.meta.title, 'Archive Alpha');
+
+          // Return to DashboardView for timeline snap & undo assertions
+          await tester.tap(find.descendant(of: sidebar, matching: find.text('主页')));
+          await tester.pump();
 
           // Bug #5: Idle at 00:00.00 -> clicking 校时 on a later line refuses to corrupt timeline!
           final lines = controller.sortedLines

@@ -589,8 +589,10 @@ void main() {
           controller.toggleLineCall(firstLyric.id, 'front-wave');
           expect(controller.needsSavePromptBeforeSwitch, isTrue);
 
-          // Navigate to ThemeView via desktop sidebar & reopen onboarding
-          await tester.tap(find.text('外观主题'));
+          // Navigate to ThemeView via MoreView ('更多' -> '主题') & reopen onboarding
+          await tester.tap(find.text('更多'));
+          await tester.pump();
+          await tester.tap(find.text('主题'));
           await tester.pump();
           await _scrollAndTap(tester, find.text('重新查看功能引导'));
           expect(controller.showOnboarding, isTrue);
