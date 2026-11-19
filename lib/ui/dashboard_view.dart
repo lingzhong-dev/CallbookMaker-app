@@ -178,11 +178,7 @@ class _DashboardViewState extends State<DashboardView> {
           }
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              leftColumn,
-              const SizedBox(height: 12),
-              timeline,
-            ],
+            children: [leftColumn, const SizedBox(height: 12), timeline],
           );
         },
       ),
@@ -229,316 +225,301 @@ class _DashboardViewState extends State<DashboardView> {
       inert: true,
       radius: 26,
       padding: const EdgeInsets.all(16),
-      child: Stack(
-        clipBehavior: Clip.none,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Positioned(
-            right: -24,
-            top: -32,
-            child: IgnorePointer(
-              child: ScallopedHeroWatermark(running: c.isPlaying, size: 150),
-            ),
-          ),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              ListenableBuilder(
-                listenable: c.playbackListenable,
-                builder: (context, _) => Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    Expanded(
-                      child: Wrap(
-                        spacing: 6,
-                        runSpacing: 4,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
-                          Text(
-                            c.siteText('播放状态'),
-                            style: AppTextStyle.caption1
-                                .of(context, emphasized: true)
-                                .copyWith(color: scheme.onSurfaceVariant),
-                          ),
-                          TonalChip(
-                            label: c.isPlaying ? 'Running' : 'Standby',
-                            color: c.isPlaying
-                                ? scheme.successContainer
-                                : scheme.surfaceContainerHigh,
-                            foregroundColor: c.isPlaying
-                                ? scheme.onSuccessContainer
-                                : scheme.onSurfaceVariant,
-                          ),
-                          TonalChip(
-                            label: sourceModeLabel,
-                            color: scheme.primaryContainer,
-                            foregroundColor: scheme.onPrimaryContainer,
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        for (var b = 1; b <= beats; b++) ...[
-                          AnimatedContainer(
-                            duration: const Duration(milliseconds: 110),
-                            width: 9,
-                            height: 9,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: c.isPlaying && c.currentBeatInBar == b
-                                  ? (b == 1 ? scheme.error : scheme.primary)
-                                  : scheme.surfaceContainerHighest,
-                            ),
-                          ),
-                          const SizedBox(width: 4),
-                        ],
-                        const SizedBox(width: 2),
-                        Text(
-                          '${c.currentBar}.${c.currentBeatInBar}',
-                          style: AppTextStyle.caption1
-                              .of(context, emphasized: true)
-                              .copyWith(
-                                fontFamily: 'GoogleSans',
-                                fontFeatures: const [
-                                  FontFeature.tabularFigures(),
-                                ],
-                                color: scheme.onSurfaceVariant,
-                              ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        TextField(
-                          controller: _titleCtrl,
-                          style: AppTextStyle.headline
-                              .of(context, emphasized: true)
-                              .copyWith(color: scheme.onSurface),
-                          decoration: const InputDecoration.collapsed(
-                            hintText: '输入当前歌曲名称',
-                          ),
-                          onChanged: (v) {
-                            _lastSyncedTitle = v;
-                            c.updateMeta(title: v);
-                          },
-                        ),
-                        const SizedBox(height: 6),
-                        Wrap(
-                          spacing: 6,
-                          runSpacing: 6,
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          children: [
-                            ConstrainedBox(
-                              constraints: const BoxConstraints(maxWidth: 160),
-                              child: TextField(
-                                controller: _artistCtrl,
-                                style: AppTextStyle.caption1
-                                    .of(context)
-                                    .copyWith(color: scheme.onSurfaceVariant),
-                                decoration: const InputDecoration.collapsed(
-                                  hintText: '歌手 / 企划',
-                                ),
-                                onChanged: (v) {
-                                  _lastSyncedArtist = v;
-                                  c.updateMeta(artist: v);
-                                },
-                              ),
-                            ),
-                            TonalChip(
-                              label: '切换曲库 / 导入',
-                              color: scheme.surfaceContainerHigh,
-                              foregroundColor: scheme.primary,
-                              onPressed: () =>
-                                  showAudioSourceModal(context, c),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  ScallopedOrbButton(
-                    running: c.isPlaying,
-                    size: 58,
-                    onToggle: c.togglePlay,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              ListenableBuilder(
-                listenable: c.playbackListenable,
-                builder: (context, _) {
-                  final safeDuration = math.max(1000, c.durationMs).toDouble();
-                  final clampedPos = c.currentTimeMs.toDouble().clamp(
-                    0.0,
-                    safeDuration,
-                  );
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
+          ListenableBuilder(
+            listenable: c.playbackListenable,
+            builder: (context, _) => Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Expanded(
+                  child: Wrap(
+                    spacing: 6,
+                    runSpacing: 4,
+                    crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      Slider(
-                        value: clampedPos,
-                        min: 0,
-                        max: safeDuration,
-                        onChanged: (v) => c.seek(v.round()),
+                      Text(
+                        c.siteText('播放状态'),
+                        style: AppTextStyle.caption1
+                            .of(context, emphasized: true)
+                            .copyWith(color: scheme.onSurfaceVariant),
                       ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            formatMsToClock(c.currentTimeMs),
-                            style: AppTextStyle.caption1.of(context).copyWith(
-                              fontFamily: 'GoogleSans',
-                              fontFeatures: const [
-                                FontFeature.tabularFigures(),
-                              ],
-                              color: scheme.onSurfaceVariant,
-                            ),
-                          ),
-                          Text(
-                            formatMsToClock(safeDuration.round()),
-                            style: AppTextStyle.caption1.of(context).copyWith(
-                              fontFamily: 'GoogleSans',
-                              fontFeatures: const [
-                                FontFeature.tabularFigures(),
-                              ],
-                              color: scheme.onSurfaceVariant,
-                            ),
-                          ),
-                        ],
+                      TonalChip(
+                        label: c.isPlaying ? 'Running' : 'Standby',
+                        color: c.isPlaying
+                            ? scheme.successContainer
+                            : scheme.surfaceContainerHigh,
+                        foregroundColor: c.isPlaying
+                            ? scheme.onSuccessContainer
+                            : scheme.onSurfaceVariant,
+                      ),
+                      TonalChip(
+                        label: sourceModeLabel,
+                        color: scheme.primaryContainer,
+                        foregroundColor: scheme.onPrimaryContainer,
                       ),
                     ],
-                  );
-                },
-              ),
-              const SizedBox(height: 10),
-              const Divider(height: 1),
-              const SizedBox(height: 10),
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      '播放倍速与校准偏移',
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (var b = 1; b <= beats; b++) ...[
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 110),
+                        width: 9,
+                        height: 9,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: c.isPlaying && c.currentBeatInBar == b
+                              ? (b == 1 ? scheme.error : scheme.primary)
+                              : scheme.surfaceContainerHighest,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                    ],
+                    const SizedBox(width: 2),
+                    Text(
+                      '${c.currentBar}.${c.currentBeatInBar}',
                       style: AppTextStyle.caption1
                           .of(context, emphasized: true)
-                          .copyWith(color: scheme.onSurfaceVariant),
+                          .copyWith(
+                            fontFamily: 'GoogleSans',
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                            color: scheme.onSurfaceVariant,
+                          ),
                     ),
-                  ),
-                  TonalChip(
-                    label:
-                        '首拍 ${offsetMs > 0 ? "+" : ""}${offsetMs}ms ${_showOffsetTools ? "▴" : "▾"}',
-                    color: scheme.surfaceContainerHigh,
-                    foregroundColor: scheme.onSurface,
-                    onPressed: () =>
-                        setState(() => _showOffsetTools = !_showOffsetTools),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              SegmentedControl<double>(
-                segments: const [
-                  (0.5, '0.5×'),
-                  (0.75, '0.75×'),
-                  (1.0, '1.0×'),
-                  (1.1, '1.1×'),
-                  (1.25, '1.25×'),
-                ],
-                value: c.playbackRate,
-                onChanged: c.setPlaybackRate,
-              ),
-              if (_showOffsetTools) ...[
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    for (final delta in const [-100, -20]) ...[
-                      Expanded(
-                        child: _OffsetChipButton(
-                          label: '$delta',
-                          color: scheme.surfaceContainerLow,
-                          foreground: scheme.onSurface,
-                          onTap: () => c.adjustOffset(delta),
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                    ],
-                    Expanded(
-                      child: _OffsetChipButton(
-                        label: '归零',
-                        color: scheme.surfaceContainerLow,
-                        foreground: scheme.onSurfaceVariant,
-                        onTap: () => c.setOffset(0),
-                      ),
-                    ),
-                    for (final delta in const [20, 100]) ...[
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: _OffsetChipButton(
-                          label: '+$delta',
-                          color: scheme.surfaceContainerLow,
-                          foreground: scheme.onSurface,
-                          onTap: () => c.adjustOffset(delta),
-                        ),
-                      ),
-                    ],
                   ],
                 ),
               ],
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 6,
-                runSpacing: 6,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    TextField(
+                      controller: _titleCtrl,
+                      style: AppTextStyle.headline
+                          .of(context, emphasized: true)
+                          .copyWith(color: scheme.onSurface),
+                      decoration: const InputDecoration.collapsed(
+                        hintText: '输入当前歌曲名称',
+                      ),
+                      onChanged: (v) {
+                        _lastSyncedTitle = v;
+                        c.updateMeta(title: v);
+                      },
+                    ),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 160),
+                          child: TextField(
+                            controller: _artistCtrl,
+                            style: AppTextStyle.caption1
+                                .of(context)
+                                .copyWith(color: scheme.onSurfaceVariant),
+                            decoration: const InputDecoration.collapsed(
+                              hintText: '歌手 / 企划',
+                            ),
+                            onChanged: (v) {
+                              _lastSyncedArtist = v;
+                              c.updateMeta(artist: v);
+                            },
+                          ),
+                        ),
+                        TonalChip(
+                          label: '切换曲库 / 导入',
+                          color: scheme.surfaceContainerHigh,
+                          foregroundColor: scheme.primary,
+                          onPressed: () => showAudioSourceModal(context, c),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              ScallopedOrbButton(
+                running: c.isPlaying,
+                size: 58,
+                onToggle: c.togglePlay,
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          ListenableBuilder(
+            listenable: c.playbackListenable,
+            builder: (context, _) {
+              final safeDuration = math.max(1000, c.durationMs).toDouble();
+              final clampedPos = c.currentTimeMs.toDouble().clamp(
+                0.0,
+                safeDuration,
+              );
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  TonalChip(
-                    label:
-                        '${c.displayLayers.showRuby ? "✓ " : ""}日语注音 (Furigana)',
-                    color: c.displayLayers.showRuby
-                        ? scheme.primaryContainer
-                        : scheme.surfaceContainerHigh,
-                    foregroundColor: c.displayLayers.showRuby
-                        ? scheme.onPrimaryContainer
-                        : scheme.onSurfaceVariant,
-                    onPressed: () => c.updateDisplayLayers(
-                      showRuby: !c.displayLayers.showRuby,
+                  Slider(
+                    value: clampedPos,
+                    min: 0,
+                    max: safeDuration,
+                    onChanged: (v) => c.seek(v.round()),
+                  ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        formatMsToClock(c.currentTimeMs),
+                        style: AppTextStyle.caption1
+                            .of(context)
+                            .copyWith(
+                              fontFamily: 'GoogleSans',
+                              fontFeatures: const [
+                                FontFeature.tabularFigures(),
+                              ],
+                              color: scheme.onSurfaceVariant,
+                            ),
+                      ),
+                      Text(
+                        formatMsToClock(safeDuration.round()),
+                        style: AppTextStyle.caption1
+                            .of(context)
+                            .copyWith(
+                              fontFamily: 'GoogleSans',
+                              fontFeatures: const [
+                                FontFeature.tabularFigures(),
+                              ],
+                              color: scheme.onSurfaceVariant,
+                            ),
+                      ),
+                    ],
+                  ),
+                ],
+              );
+            },
+          ),
+          const SizedBox(height: 10),
+          const Divider(height: 1),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '播放倍速与校准偏移',
+                  style: AppTextStyle.caption1
+                      .of(context, emphasized: true)
+                      .copyWith(color: scheme.onSurfaceVariant),
+                ),
+              ),
+              TonalChip(
+                label:
+                    '首拍 ${offsetMs > 0 ? "+" : ""}${offsetMs}ms ${_showOffsetTools ? "▴" : "▾"}',
+                color: scheme.surfaceContainerHigh,
+                foregroundColor: scheme.onSurface,
+                onPressed: () =>
+                    setState(() => _showOffsetTools = !_showOffsetTools),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          SegmentedControl<double>(
+            segments: const [
+              (0.5, '0.5×'),
+              (0.75, '0.75×'),
+              (1.0, '1.0×'),
+              (1.1, '1.1×'),
+              (1.25, '1.25×'),
+            ],
+            value: c.playbackRate,
+            onChanged: c.setPlaybackRate,
+          ),
+          if (_showOffsetTools) ...[
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                for (final delta in const [-100, -20]) ...[
+                  Expanded(
+                    child: _OffsetChipButton(
+                      label: '$delta',
+                      color: scheme.surfaceContainerLow,
+                      foreground: scheme.onSurface,
+                      onTap: () => c.adjustOffset(delta),
                     ),
                   ),
-                  TonalChip(
-                    label:
-                        '${c.displayLayers.showRomaji ? "✓ " : ""}罗马音 (Romaji)',
-                    color: c.displayLayers.showRomaji
-                        ? scheme.primaryContainer
-                        : scheme.surfaceContainerHigh,
-                    foregroundColor: c.displayLayers.showRomaji
-                        ? scheme.onPrimaryContainer
-                        : scheme.onSurfaceVariant,
-                    onPressed: () => c.updateDisplayLayers(
-                      showRomaji: !c.displayLayers.showRomaji,
-                    ),
+                  const SizedBox(width: 6),
+                ],
+                Expanded(
+                  child: _OffsetChipButton(
+                    label: '归零',
+                    color: scheme.surfaceContainerLow,
+                    foreground: scheme.onSurfaceVariant,
+                    onTap: () => c.setOffset(0),
                   ),
-                  TonalChip(
-                    label:
-                        '${c.displayLayers.showTranslation ? "✓ " : ""}中文翻译',
-                    color: c.displayLayers.showTranslation
-                        ? scheme.primaryContainer
-                        : scheme.surfaceContainerHigh,
-                    foregroundColor: c.displayLayers.showTranslation
-                        ? scheme.onPrimaryContainer
-                        : scheme.onSurfaceVariant,
-                    onPressed: () => c.updateDisplayLayers(
-                      showTranslation: !c.displayLayers.showTranslation,
+                ),
+                for (final delta in const [20, 100]) ...[
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: _OffsetChipButton(
+                      label: '+$delta',
+                      color: scheme.surfaceContainerLow,
+                      foreground: scheme.onSurface,
+                      onTap: () => c.adjustOffset(delta),
                     ),
                   ),
                 ],
+              ],
+            ),
+          ],
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              TonalChip(
+                label: '${c.displayLayers.showRuby ? "✓ " : ""}日语注音 (Furigana)',
+                color: c.displayLayers.showRuby
+                    ? scheme.primaryContainer
+                    : scheme.surfaceContainerHigh,
+                foregroundColor: c.displayLayers.showRuby
+                    ? scheme.onPrimaryContainer
+                    : scheme.onSurfaceVariant,
+                onPressed: () =>
+                    c.updateDisplayLayers(showRuby: !c.displayLayers.showRuby),
+              ),
+              TonalChip(
+                label: '${c.displayLayers.showRomaji ? "✓ " : ""}罗马音 (Romaji)',
+                color: c.displayLayers.showRomaji
+                    ? scheme.primaryContainer
+                    : scheme.surfaceContainerHigh,
+                foregroundColor: c.displayLayers.showRomaji
+                    ? scheme.onPrimaryContainer
+                    : scheme.onSurfaceVariant,
+                onPressed: () => c.updateDisplayLayers(
+                  showRomaji: !c.displayLayers.showRomaji,
+                ),
+              ),
+              TonalChip(
+                label: '${c.displayLayers.showTranslation ? "✓ " : ""}中文翻译',
+                color: c.displayLayers.showTranslation
+                    ? scheme.primaryContainer
+                    : scheme.surfaceContainerHigh,
+                foregroundColor: c.displayLayers.showTranslation
+                    ? scheme.onPrimaryContainer
+                    : scheme.onSurfaceVariant,
+                onPressed: () => c.updateDisplayLayers(
+                  showTranslation: !c.displayLayers.showTranslation,
+                ),
               ),
             ],
           ),
@@ -591,10 +572,7 @@ class _DashboardViewState extends State<DashboardView> {
       padding: const EdgeInsets.all(14),
       child: FilledInputTheme(
         borderRadius: AppRadius.md,
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: 10,
-          vertical: 8,
-        ),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         fillColor: scheme.surfaceContainerHigh,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -616,8 +594,7 @@ class _DashboardViewState extends State<DashboardView> {
                     children: [
                       Checkbox(
                         value: showTuner,
-                        onChanged: (v) =>
-                            c.updateMeta(showTuner: v ?? false),
+                        onChanged: (v) => c.updateMeta(showTuner: v ?? false),
                       ),
                       Text(
                         '添加调教',
@@ -770,9 +747,9 @@ class _DashboardViewState extends State<DashboardView> {
                       c.metronomeEnabled
                           ? '音量 ${(c.metronomeVolume * 100).round()}%'
                           : '已静音',
-                      style: AppTextStyle.caption2.of(context).copyWith(
-                        color: scheme.onSurfaceVariant,
-                      ),
+                      style: AppTextStyle.caption2
+                          .of(context)
+                          .copyWith(color: scheme.onSurfaceVariant),
                     ),
                   ],
                 ),
@@ -836,9 +813,9 @@ class _DashboardViewState extends State<DashboardView> {
                     ),
                     Text(
                       c.followPlayback ? '自动居中高亮句' : '手动自由滚动',
-                      style: AppTextStyle.caption2.of(context).copyWith(
-                        color: scheme.onSurfaceVariant,
-                      ),
+                      style: AppTextStyle.caption2
+                          .of(context)
+                          .copyWith(color: scheme.onSurfaceVariant),
                     ),
                   ],
                 ),
@@ -896,9 +873,7 @@ class _DashboardViewState extends State<DashboardView> {
                         color: scheme.surfaceContainerHigh,
                         foregroundColor: scheme.onSurface,
                         onPressed: () => c.setTimeSignature(
-                          c.project.meta.timeSignature == '4/4'
-                              ? '3/4'
-                              : '4/4',
+                          c.project.meta.timeSignature == '4/4' ? '3/4' : '4/4',
                         ),
                       ),
                     ],
@@ -1047,9 +1022,9 @@ class _DashboardViewState extends State<DashboardView> {
                           '/ ${c.sortedLines.length} 句已标 Call · ${c.sortedAlerts.length} GT 警报',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: AppTextStyle.caption1.of(context).copyWith(
-                            color: scheme.onSurfaceVariant,
-                          ),
+                          style: AppTextStyle.caption1
+                              .of(context)
+                              .copyWith(color: scheme.onSurfaceVariant),
                         ),
                       ),
                     ],
@@ -1110,9 +1085,9 @@ class _DashboardViewState extends State<DashboardView> {
                     ),
                     Text(
                       'PNG 长图 · Excel · Markdown · JSON',
-                      style: AppTextStyle.caption2.of(context).copyWith(
-                        color: scheme.onSurfaceVariant,
-                      ),
+                      style: AppTextStyle.caption2
+                          .of(context)
+                          .copyWith(color: scheme.onSurfaceVariant),
                     ),
                   ],
                 ),
@@ -1149,10 +1124,7 @@ class _OffsetChipButton extends StatelessWidget {
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 6),
-        decoration: ShapeDecoration(
-          color: color,
-          shape: AppShape.md,
-        ),
+        decoration: ShapeDecoration(color: color, shape: AppShape.md),
         alignment: Alignment.center,
         child: Text(
           label,

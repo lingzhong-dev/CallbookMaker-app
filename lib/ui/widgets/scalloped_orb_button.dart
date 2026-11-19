@@ -12,8 +12,7 @@ final Morph _startMorph = Morph(
   MaterialShapes.cookie9Sided,
 );
 
-/// FlClash signature M3 Expressive Circle -> Cookie-9Sided Play/Stop Orb button
-/// and optional Cookie-12Sided Hero card watermark.
+/// FlClash signature M3 Expressive Circle -> Cookie-9Sided Play/Stop Orb button.
 class ScallopedOrbButton extends StatefulWidget {
   const ScallopedOrbButton({
     super.key,
@@ -132,10 +131,7 @@ class _OrbMorphPainter extends CustomPainter {
         path,
         Paint()
           ..color = shadow
-          ..maskFilter = MaskFilter.blur(
-            BlurStyle.normal,
-            7 / size.width,
-          ),
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, 7 / size.width),
       );
     canvas.restore();
 
@@ -148,63 +144,4 @@ class _OrbMorphPainter extends CustomPainter {
       oldDelegate.progress != progress ||
       oldDelegate.color != color ||
       oldDelegate.shadow != shadow;
-}
-
-class ScallopedHeroWatermark extends StatelessWidget {
-  const ScallopedHeroWatermark({
-    super.key,
-    required this.running,
-    this.size = 190,
-  });
-
-  final bool running;
-  final double size;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = context.colorScheme;
-    final tint = running
-        ? scheme.primaryContainer.withValues(alpha: 0.72)
-        : scheme.surfaceContainerHigh.withValues(alpha: 0.85);
-
-    return TweenAnimationBuilder<double>(
-      tween: Tween<double>(end: running ? 1.0 : 0.0),
-      duration: const Duration(milliseconds: 450),
-      curve: Curves.easeOutBack,
-      builder: (_, val, _) => Transform.rotate(
-        angle: val * (2 * math.pi / 12),
-        child: Transform.scale(
-          scale: 1.0 + 0.12 * val,
-          child: CustomPaint(
-            size: Size.square(size),
-            painter: _StaticPolygonPainter(
-              polygon: MaterialShapes.cookie12Sided,
-              color: tint,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _StaticPolygonPainter extends CustomPainter {
-  const _StaticPolygonPainter({required this.polygon, required this.color});
-
-  final RoundedPolygon polygon;
-  final Color color;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final path = polygon.toPath();
-    canvas
-      ..save()
-      ..scale(size.width, size.height)
-      ..drawPath(path, Paint()..color = color)
-      ..restore();
-  }
-
-  @override
-  bool shouldRepaint(_StaticPolygonPainter oldDelegate) =>
-      oldDelegate.color != color || oldDelegate.polygon != polygon;
 }
