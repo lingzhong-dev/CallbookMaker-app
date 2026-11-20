@@ -5,6 +5,7 @@ import 'package:prism_ui/icons/icons.dart';
 import 'package:prism_ui/prism_ui.dart';
 import 'package:prism_ui/shapes/shapes.dart';
 
+import '../theme/app_motion.dart';
 import 'callbook_glyphs.dart';
 
 final Morph _startMorph = Morph(
@@ -33,14 +34,26 @@ class _ScallopedOrbButtonState extends State<ScallopedOrbButton>
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 450),
+    duration: AppMotion.spatialDefaultDuration,
     value: widget.running ? 1.0 : 0.0,
   );
   late final CurvedAnimation _progress = CurvedAnimation(
     parent: _controller,
-    curve: Curves.easeOutBack,
-    reverseCurve: Curves.easeInCubic,
+    curve: SpringCurve(
+      AppMotion.spatialDefault,
+      seconds: AppMotion.spatialDefaultDuration.inMilliseconds / 1000.0,
+    ),
+    reverseCurve: AppMotion.curveEffectsReverse,
   );
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _controller.duration = AppMotion.d(
+      context,
+      AppMotion.spatialDefaultDuration,
+    );
+  }
 
   @override
   void didUpdateWidget(covariant ScallopedOrbButton oldWidget) {

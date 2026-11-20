@@ -4,6 +4,8 @@ import 'package:prism_ui/icons/icons.dart';
 import 'package:prism_ui/prism_ui.dart';
 
 import '../state/callbook_controller.dart';
+import 'theme/app_motion.dart';
+import 'theme/app_tokens.dart';
 import 'widgets/callbook_glyphs.dart';
 
 class ThemeView extends StatelessWidget {
@@ -58,8 +60,8 @@ class ThemeView extends StatelessWidget {
           // 2. 11x11 FlClash Palette Matrix + Seed Swatches
           Card(
             inert: true,
-            radius: 22,
-            padding: const EdgeInsets.all(16),
+            radius: AppTokens.radiusCard,
+            padding: const EdgeInsets.all(AppTokens.s16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -133,7 +135,11 @@ class ThemeView extends StatelessWidget {
                       GestureDetector(
                         onTap: () => c.setSeedColor(seed),
                         child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 180),
+                          duration: AppMotion.d(
+                            context,
+                            AppMotion.effectsFast,
+                          ),
+                          curve: AppMotion.curveEffects,
                           width: 32,
                           height: 32,
                           decoration: BoxDecoration(
@@ -163,8 +169,8 @@ class ThemeView extends StatelessWidget {
           // 3. Appearance Mode, Color Style & Material Effects
           Card(
             inert: true,
-            radius: 22,
-            padding: const EdgeInsets.all(16),
+            radius: AppTokens.radiusCard,
+            padding: const EdgeInsets.all(AppTokens.s16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -271,8 +277,8 @@ class ThemeView extends StatelessWidget {
           // 4. Onboarding Guide Re-entry
           Card(
             inert: true,
-            radius: 22,
-            padding: const EdgeInsets.all(16),
+            radius: AppTokens.radiusCard,
+            padding: const EdgeInsets.all(AppTokens.s16),
             child: Row(
               children: [
                 Container(
@@ -331,8 +337,8 @@ class ThemeView extends StatelessWidget {
   ) {
     return Card(
       inert: true,
-      radius: 24,
-      padding: const EdgeInsets.all(16),
+      radius: AppTokens.radiusCard,
+      padding: const EdgeInsets.all(AppTokens.s16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -446,8 +452,8 @@ class ThemeView extends StatelessWidget {
   ) {
     return Card(
       inert: true,
-      radius: 24,
-      padding: const EdgeInsets.all(16),
+      radius: AppTokens.radiusCard,
+      padding: const EdgeInsets.all(AppTokens.s16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

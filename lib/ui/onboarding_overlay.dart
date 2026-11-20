@@ -7,6 +7,7 @@ import 'package:prism_ui/prism_ui.dart';
 import '../data/default_songs.dart';
 import '../state/callbook_controller.dart';
 import '../utils/color_parser.dart';
+import 'theme/app_motion.dart';
 import 'widgets/archive_switcher_dialog.dart';
 import 'widgets/callbook_glyphs.dart';
 
@@ -241,8 +242,11 @@ class _OnboardingOverlayState extends State<OnboardingOverlay> {
                           vertical: 6,
                         ),
                         child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 220),
-                          curve: Curves.easeOutCubic,
+                          duration: AppMotion.d(
+                            context,
+                            AppMotion.effectsDefault,
+                          ),
+                          curve: AppMotion.curveEffects,
                           width: i == _step
                               ? (isMobile ? 18 : 22)
                               : (isMobile ? 6 : 8),

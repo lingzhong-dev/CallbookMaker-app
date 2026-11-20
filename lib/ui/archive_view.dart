@@ -4,6 +4,7 @@ import 'package:prism_ui/prism_ui.dart';
 
 import '../models/callbook_models.dart';
 import '../state/callbook_controller.dart';
+import 'theme/app_tokens.dart';
 import 'widgets/archive_switcher_dialog.dart';
 import 'widgets/callbook_glyphs.dart';
 
@@ -135,8 +136,8 @@ class _ArchiveViewState extends State<ArchiveView> {
             children: [
               Card(
                 inert: true,
-                radius: 22,
-                padding: const EdgeInsets.all(16),
+                radius: AppTokens.radiusCard,
+                padding: const EdgeInsets.all(AppTokens.s16),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
@@ -277,7 +278,7 @@ class _ArchiveViewState extends State<ArchiveView> {
               if (archives.isEmpty)
                 Card(
                   inert: true,
-                  radius: 22,
+                  radius: AppTokens.radiusCard,
                   padding: const EdgeInsets.symmetric(
                     horizontal: 18,
                     vertical: 28,
@@ -340,7 +341,7 @@ class _ArchiveViewState extends State<ArchiveView> {
             ? scheme.primaryContainer.withValues(alpha: 0.35)
             : scheme.surfaceContainerLow,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(20),
+          borderRadius: BorderRadius.circular(AppTokens.radiusSection),
           side: BorderSide(
             color: isCurrent ? scheme.primary : scheme.outlineVariant,
           ),

@@ -5,6 +5,7 @@ import 'package:prism_ui/prism_ui.dart';
 
 import '../../data/default_songs.dart';
 import '../../state/callbook_controller.dart';
+import '../theme/app_tokens.dart';
 import 'archive_switcher_dialog.dart';
 import 'callbook_glyphs.dart';
 
@@ -181,7 +182,7 @@ class _AudioSourcePanelState extends State<AudioSourcePanel> {
 
     return Card(
       inert: true,
-      radius: 22,
+      radius: AppTokens.radiusCard,
       padding: const EdgeInsets.all(14),
       child: body,
     );

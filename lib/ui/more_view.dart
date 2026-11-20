@@ -10,6 +10,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../constants/app_info.dart';
 import '../state/callbook_controller.dart';
+import 'theme/app_tokens.dart';
 import 'theme_view.dart';
 import 'widgets/callbook_glyphs.dart';
 import 'widgets/gateway_config_panel.dart';
@@ -162,7 +163,7 @@ class _MoreViewState extends State<MoreView> {
         children: [
           Card(
             inert: true,
-            radius: 22,
+            radius: AppTokens.radiusCard,
             padding: EdgeInsets.zero,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,

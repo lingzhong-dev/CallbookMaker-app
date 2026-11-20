@@ -10,6 +10,8 @@ import '../../utils/aligned_calls.dart';
 import '../../utils/lrc_ruby_parser.dart';
 import '../../utils/section_detector.dart';
 import '../../utils/shortcut_validator.dart';
+import '../theme/app_motion.dart';
+import '../theme/app_tokens.dart';
 import 'call_badge_pill.dart';
 import 'call_preset_dialogs.dart';
 import 'callbook_glyphs.dart';
@@ -107,8 +109,8 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
         if (ctx != null) {
           Scrollable.ensureVisible(
             ctx,
-            duration: const Duration(milliseconds: 240),
-            curve: Curves.easeOutCubic,
+            duration: AppMotion.d(context, AppMotion.effectsDefault),
+            curve: AppMotion.curveEffects,
             alignment: 0.35,
           );
         }
@@ -347,7 +349,7 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
         Card(
           inert: true,
           padding: const EdgeInsets.all(14),
-          radius: 22,
+          radius: AppTokens.radiusCard,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -1087,14 +1089,15 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard> {
         behavior: HitTestBehavior.deferToChild,
         onTap: _handleCardTap,
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 220),
+          duration: AppMotion.d(context, AppMotion.effectsDefault),
+          curve: AppMotion.curveEffects,
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
             color: Color.alphaBlend(
               scheme.warningContainer.withValues(alpha: highlighted ? 0.46 : 0.34),
               scheme.surfaceContainerLow,
             ),
-            borderRadius: BorderRadius.circular(20),
+            borderRadius: BorderRadius.circular(AppTokens.radiusSection),
             border: Border.all(
               color: scheme.warning,
               width: highlighted ? 1.8 : 1.4,
@@ -1113,10 +1116,10 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard> {
 
     return Card(
       isSelected: highlighted,
-      radius: 20,
+      radius: AppTokens.radiusSection,
       padding: const EdgeInsets.all(14),
       shape: RoundedSuperellipseBorder(
-        borderRadius: AppRadius.xl,
+        borderRadius: AppTokens.radiusSectionBorder,
         side: highlighted
             ? BorderSide(
                 color: isSection ? sectionAccent : scheme.primary,
