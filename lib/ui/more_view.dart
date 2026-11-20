@@ -1,7 +1,5 @@
 import 'dart:async';
-import 'dart:io' show Platform;
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:prism_ui/icons/icons.dart';
@@ -9,6 +7,7 @@ import 'package:prism_ui/prism_ui.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../constants/app_info.dart';
+import '../platform/app_platform.dart';
 import '../state/callbook_controller.dart';
 import 'theme/app_tokens.dart';
 import 'theme_view.dart';
@@ -59,9 +58,7 @@ class _MoreViewState extends State<MoreView> {
     }
 
     // Never spawn OS browser processes inside automated widget tests.
-    final isWidgetTest =
-        !kIsWeb && Platform.environment.containsKey('FLUTTER_TEST');
-    if (kIsWeb || isWidgetTest) return;
+    if (AppPlatform.isWidgetTest) return;
 
     try {
       await launchUrl(

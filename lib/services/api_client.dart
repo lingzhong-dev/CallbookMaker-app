@@ -1,10 +1,9 @@
 import 'dart:convert';
-import 'dart:io' show Platform;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 
 import '../models/callbook_models.dart';
+import '../platform/app_platform.dart';
 
 class ProviderInfo {
   const ProviderInfo({
@@ -124,9 +123,9 @@ class CallbookApiClient {
     _baseUrl = _normalizeBaseUrl(next);
   }
 
-  /// Desktop (Windows/macOS/Linux) hits localhost; Android Emulator maps host loopback to 10.0.2.2.
+  /// Windows hits localhost; Android Emulator maps host loopback to 10.0.2.2.
   static String defaultBaseUrl() {
-    if (!kIsWeb && Platform.isAndroid) {
+    if (AppPlatform.isAndroid) {
       return 'http://10.0.2.2:8000';
     }
     return 'http://127.0.0.1:8000';

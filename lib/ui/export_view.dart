@@ -1,11 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show File, Platform;
+import 'dart:io' show File;
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
@@ -15,6 +14,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../models/callbook_models.dart';
+import '../platform/app_platform.dart';
 import '../state/callbook_controller.dart';
 import '../utils/aligned_calls.dart';
 import '../utils/file_export_helper.dart';
@@ -49,7 +49,7 @@ class _ExportViewState extends State<ExportView> {
 
   Future<void> _openExportedPath(String? path) async {
     if (path == null || path.trim().isEmpty) return;
-    if (kIsWeb || Platform.environment.containsKey('FLUTTER_TEST')) return;
+    if (AppPlatform.isWidgetTest) return;
     try {
       await launchUrl(
         Uri.file(path),
@@ -158,11 +158,6 @@ class _ExportViewState extends State<ExportView> {
     final c = widget.controller;
     OverlayEntry? offscreenEntry;
     try {
-      if (kIsWeb) {
-        c.setStatus('Web 端请直接使用浏览器打印 / 导出功能');
-        return;
-      }
-
       final overlay = Overlay.maybeOf(context, rootOverlay: true);
       if (overlay == null) {
         c.setStatus('当前环境不支持离屏视图挂载');
@@ -287,10 +282,6 @@ class _ExportViewState extends State<ExportView> {
     setState(() => _exportingXlsx = true);
     final c = widget.controller;
     try {
-      if (kIsWeb) {
-        c.setStatus('Web 端请使用网页端 Excel 导出按钮');
-        return;
-      }
       final bytes = buildCallBookXlsxBytes(
         c.project,
         c.allPresets,

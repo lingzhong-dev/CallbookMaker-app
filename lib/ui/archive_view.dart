@@ -36,6 +36,53 @@ class ArchiveView extends StatefulWidget {
 
   final CallbookController controller;
 
+  /// Formats [ms] as `MM-dd HH:mm` when in the same calendar year as [now],
+  /// or `yyyy-MM-dd HH:mm` when crossing into another year.
+  static String formatSavedTime(int ms, {DateTime? now}) {
+    final dt = DateTime.fromMillisecondsSinceEpoch(ms);
+    final refYear = (now ?? DateTime.now()).year;
+    final mm = dt.month.toString().padLeft(2, '0');
+    final dd = dt.day.toString().padLeft(2, '0');
+    final hh = dt.hour.toString().padLeft(2, '0');
+    final mi = dt.minute.toString().padLeft(2, '0');
+    if (dt.year != refYear) {
+      final yyyy = dt.year.toString().padLeft(4, '0');
+      return '$yyyy-$mm-$dd $hh:$mi';
+    }
+    return '$mm-$dd $hh:$mi';
+  }
+
+  /// Resolves the distinct status badge colors for the 4 project archive states.
+  static ({Color background, Color foreground}) statusBadgeColors(
+    ColorScheme scheme, {
+    required bool isSynced,
+    required bool hasActiveArchive,
+    required bool needsSavePromptBeforeSwitch,
+  }) {
+    if (isSynced) {
+      return (
+        background: scheme.successContainer,
+        foreground: scheme.onSuccessContainer,
+      );
+    }
+    if (hasActiveArchive) {
+      return (
+        background: scheme.warningContainer,
+        foreground: scheme.onWarningContainer,
+      );
+    }
+    if (needsSavePromptBeforeSwitch) {
+      return (
+        background: scheme.tertiaryContainer,
+        foreground: scheme.onTertiaryContainer,
+      );
+    }
+    return (
+      background: scheme.surfaceContainerHigh,
+      foreground: scheme.onSurfaceVariant,
+    );
+  }
+
   @override
   State<ArchiveView> createState() => _ArchiveViewState();
 }
@@ -85,14 +132,7 @@ class _ArchiveViewState extends State<ArchiveView> {
     super.dispose();
   }
 
-  String _formatSavedTime(int ms) {
-    final dt = DateTime.fromMillisecondsSinceEpoch(ms);
-    final mm = dt.month.toString().padLeft(2, '0');
-    final dd = dt.day.toString().padLeft(2, '0');
-    final hh = dt.hour.toString().padLeft(2, '0');
-    final mi = dt.minute.toString().padLeft(2, '0');
-    return '$mm-$dd $hh:$mi';
-  }
+  String _formatSavedTime(int ms) => ArchiveView.formatSavedTime(ms);
 
   String _currentLabel(CallbookController c) {
     final active = c.activeArchiveEntry;
@@ -175,11 +215,13 @@ class _ArchiveViewState extends State<ArchiveView> {
         final currentLabel = _currentLabel(c);
         final archives = c.sortedArchives;
         final isSynced = c.activeArchiveId != null && !c.hasUnsavedChanges;
-        final statusText = isSynced
-            ? '已同步存档'
-            : (c.activeArchiveId != null
-                ? '有未保存更改'
-                : (c.needsSavePromptBeforeSwitch ? '待归档' : '示例工程'));
+        final statusText = c.siteText(
+          isSynced
+              ? '已同步存档'
+              : (c.activeArchiveId != null
+                    ? '有未保存更改'
+                    : (c.needsSavePromptBeforeSwitch ? '待归档' : '示例工程')),
+        );
 
         final listItems = <_ArchiveListItem>[
           const _ArchiveHeaderItem(),
@@ -219,6 +261,7 @@ class _ArchiveViewState extends State<ArchiveView> {
             ),
             ScrollToTopButton(
               scrollController: _scrollController,
+              controller: c,
               bottomOffset: 16 + bottomInset,
             ),
           ],
@@ -237,16 +280,14 @@ class _ArchiveViewState extends State<ArchiveView> {
     required String statusText,
   }) {
     final statusDuration = AppMotion.d(ctx, AppMotion.effectsDefault);
-    final statusBg = isSynced
-        ? scheme.successContainer
-        : (c.needsSavePromptBeforeSwitch
-              ? scheme.warningContainer
-              : scheme.surfaceContainerHigh);
-    final statusFg = isSynced
-        ? scheme.onSuccessContainer
-        : (c.needsSavePromptBeforeSwitch
-              ? scheme.onWarningContainer
-              : scheme.onSurfaceVariant);
+    final statusColors = ArchiveView.statusBadgeColors(
+      scheme,
+      isSynced: isSynced,
+      hasActiveArchive: c.activeArchiveId != null,
+      needsSavePromptBeforeSwitch: c.needsSavePromptBeforeSwitch,
+    );
+    final statusBg = statusColors.background;
+    final statusFg = statusColors.foreground;
 
     return Card(
       inert: true,

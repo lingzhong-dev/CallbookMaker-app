@@ -1,12 +1,11 @@
 import 'dart:io';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import '../platform/app_platform.dart';
 
-/// Desktop helper for locating `backend/.env` and launching local FastAPI /
-/// NeteaseCloudMusicApiEnhanced processes when the user runs the desktop app directly.
+/// Windows helper for locating `backend/.env` and launching local FastAPI /
+/// NeteaseCloudMusicApiEnhanced processes when the user runs the Windows app directly.
 class DesktopServiceLauncher {
-  bool get isDesktop =>
-      !kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
+  bool get isDesktop => AppPlatform.isWindows;
 
   static bool isLoopbackUrl(String url) {
     final uri = Uri.tryParse(url.trim());
@@ -93,9 +92,10 @@ class DesktopServiceLauncher {
 
   Directory? locateBackendDir() {
     if (!isDesktop) return null;
+    final execDir = AppPlatform.executableDir;
     final roots = <Directory>[
       Directory.current,
-      File(Platform.resolvedExecutable).parent,
+      if (execDir != null) execDir,
     ];
     final seen = <String>{};
 
@@ -127,25 +127,20 @@ class DesktopServiceLauncher {
   }
 
   String? findPythonBinary(Directory backendDir) {
-    final sep = Platform.pathSeparator;
+    final sep = AppPlatform.pathSeparator;
     final candidates = [
       '${backendDir.path}$sep.venv${sep}Scripts${sep}python.exe',
-      '${backendDir.path}$sep.venv${sep}bin${sep}python',
-      '${backendDir.path}$sep.venv${sep}bin${sep}python3',
     ];
     for (final c in candidates) {
       if (File(c).existsSync()) return c;
     }
-    return Platform.isWindows ? 'python' : 'python3';
+    return 'python';
   }
 
   String? findNodeBinary() {
     final candidates = [
-      if (Platform.isWindows) r'C:\Program Files\nodejs\node.exe',
-      if (Platform.isWindows) r'C:\Program Files (x86)\nodejs\node.exe',
-      '/usr/local/bin/node',
-      '/opt/homebrew/bin/node',
-      '/usr/bin/node',
+      r'C:\Program Files\nodejs\node.exe',
+      r'C:\Program Files (x86)\nodejs\node.exe',
     ];
     for (final c in candidates) {
       if (File(c).existsSync()) return c;
@@ -154,7 +149,7 @@ class DesktopServiceLauncher {
   }
 
   String? findNcmApiEntry({Directory? backendDir}) {
-    final sep = Platform.pathSeparator;
+    final sep = AppPlatform.pathSeparator;
     final relSuffix =
         '@neteasecloudmusicapienhanced${sep}api${sep}app.js';
     final candidates = <String>[
@@ -164,20 +159,17 @@ class DesktopServiceLauncher {
         '${backendDir.path}${sep}node_modules$sep$relSuffix',
     ];
 
-    final appData = Platform.environment['APPDATA'];
+    final env = AppPlatform.environment;
+    final appData = env['APPDATA'];
     if (appData != null && appData.isNotEmpty) {
       candidates.add('$appData${sep}npm${sep}node_modules$sep$relSuffix');
     }
-    final userProfile =
-        Platform.environment['USERPROFILE'] ?? Platform.environment['HOME'];
+    final userProfile = env['USERPROFILE'];
     if (userProfile != null && userProfile.isNotEmpty) {
       candidates.add(
         '$userProfile${sep}AppData${sep}Roaming${sep}npm${sep}node_modules$sep$relSuffix',
       );
-      candidates.add('$userProfile$sep.npm-global${sep}lib${sep}node_modules$sep$relSuffix');
     }
-    candidates.add('/usr/local/lib/node_modules/$relSuffix');
-    candidates.add('/usr/lib/node_modules/$relSuffix');
 
     for (final c in candidates) {
       if (File(c).existsSync()) return c;
@@ -323,7 +315,7 @@ class DesktopServiceLauncher {
         [entry],
         workingDirectory: File(entry).parent.path,
         environment: {
-          ...Platform.environment,
+          ...AppPlatform.environment,
           'PORT': '$port',
           'HOST': '127.0.0.1',
           'CORS_ALLOW_ORIGIN': '*',

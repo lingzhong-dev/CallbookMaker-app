@@ -1,10 +1,12 @@
-import 'dart:io' show File, Platform;
+import 'dart:io' show File;
 import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+
+import '../platform/app_platform.dart';
 
 const int kMaxPngExportWidth = 4096;
 const int kMaxPngExportHeight = 16384;
@@ -124,11 +126,11 @@ Future<SaveBytesResult> saveBytesToUserLocation({
   final tempDirFn = getTempDirPath ?? _defaultTempDirPath;
   final sharer = shareFile ?? _defaultShareFile;
 
-  final isWeb = isWebOverride ?? kIsWeb;
+  final isWeb = isWebOverride ?? AppPlatform.isWeb;
   final isWidgetTest = isWidgetTestOverride ??
       (!isWeb &&
           saveFilePicker == null &&
-          Platform.environment.containsKey('FLUTTER_TEST'));
+          AppPlatform.isWidgetTest);
 
   if (isWeb) {
     await picker(
@@ -141,9 +143,8 @@ Future<SaveBytesResult> saveBytesToUserLocation({
     return SaveBytesResult(cancelled: false, savedPath: fileName);
   }
 
-  final isMobile = isMobileOverride ?? (Platform.isAndroid || Platform.isIOS);
-  final isDesktop = isDesktopOverride ??
-      (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
+  final isMobile = isMobileOverride ?? AppPlatform.isAndroid;
+  final isDesktop = isDesktopOverride ?? AppPlatform.isWindows;
 
   if (!isWidgetTest && isMobile) {
     try {
@@ -186,7 +187,7 @@ Future<SaveBytesResult> saveBytesToUserLocation({
   }
 
   final dirPath = await tempDirFn();
-  final outPath = '$dirPath${Platform.pathSeparator}$fileName';
+  final outPath = '$dirPath${AppPlatform.pathSeparator}$fileName';
   await writer(outPath, bytes);
   try {
     await sharer(outPath, shareText);
