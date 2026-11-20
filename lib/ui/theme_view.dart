@@ -29,42 +29,84 @@ class ThemeView extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // 1. Live FlClash Theme Preview Stage + Curated Presets
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final wide = constraints.maxWidth >= 860;
-              final previewCard = _buildThemePreviewCard(context, scheme, c);
-              final presetCard = _buildPresetsCard(context, scheme, c);
-              if (wide) {
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(flex: 5, child: previewCard),
-                    const SizedBox(width: 12),
-                    Expanded(flex: 7, child: presetCard),
-                  ],
-                );
-              }
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  previewCard,
-                  const SizedBox(height: 12),
-                  presetCard,
-                ],
-              );
-            },
-          ),
-          const SizedBox(height: 12),
-
-          // 2. 11x11 FlClash Palette Matrix + Seed Swatches
+          // 1. 「颜色」卡片
           Card(
             inert: true,
             radius: AppTokens.radiusCard,
             padding: const EdgeInsets.all(AppTokens.s16),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        c.siteText('颜色'),
+                        style: AppTextStyle.headline
+                            .of(context, emphasized: true)
+                            .copyWith(color: scheme.onSurface),
+                      ),
+                    ),
+                    TonalButton(
+                      size: TonalButtonSize.compact,
+                      label: c.siteText('恢复默认'),
+                      onPressed: c.resetTheme,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final wide = constraints.maxWidth >= 860;
+                    final previewSection = _buildThemePreviewSection(
+                      context,
+                      scheme,
+                      c,
+                    );
+                    final presetSection = _buildPresetsSection(
+                      context,
+                      scheme,
+                      c,
+                    );
+                    if (wide) {
+                      return Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(flex: 5, child: previewSection),
+                          const SizedBox(width: 12),
+                          Expanded(flex: 7, child: presetSection),
+                        ],
+                      );
+                    }
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        previewSection,
+                        const SizedBox(height: 12),
+                        presetSection,
+                      ],
+                    );
+                  },
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  c.siteText('配色风格'),
+                  style: AppTextStyle.caption1.of(context).copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                SegmentedControl<ColorStyle>(
+                  segments: const [
+                    (ColorStyle.vivid, '鲜艳 Vivid'),
+                    (ColorStyle.tinted, '淡雅 Tinted'),
+                    (ColorStyle.soft, '柔和 Soft'),
+                    (ColorStyle.monochrome, '单色 Mono'),
+                  ],
+                  value: c.colorStyle,
+                  onChanged: c.setColorStyle,
+                ),
+                const SizedBox(height: 16),
                 Row(
                   children: [
                     Expanded(
@@ -73,7 +115,7 @@ class ThemeView extends StatelessWidget {
                         children: [
                           Text(
                             'HCT 色彩调色盘 · 11 × 11 Palette Matrix',
-                            style: AppTextStyle.headline
+                            style: AppTextStyle.subheadline
                                 .of(context, emphasized: true)
                                 .copyWith(color: scheme.onSurface),
                           ),
@@ -150,7 +192,7 @@ class ThemeView extends StatelessWidget {
           ),
           const SizedBox(height: 12),
 
-          // 3. Appearance Mode, Color Style & Material Effects
+          // 2. 「外观」卡片
           Card(
             inert: true,
             radius: AppTokens.radiusCard,
@@ -159,7 +201,7 @@ class ThemeView extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Text(
-                  '质感风格与表面控制',
+                  c.siteText('外观'),
                   style: AppTextStyle.headline
                       .of(context, emphasized: true)
                       .copyWith(color: scheme.onSurface),
@@ -180,24 +222,6 @@ class ThemeView extends StatelessWidget {
                   ],
                   value: c.themeMode,
                   onChanged: c.setThemeMode,
-                ),
-                const SizedBox(height: 14),
-                Text(
-                  '配色风格',
-                  style: AppTextStyle.caption1.of(context).copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                SegmentedControl<ColorStyle>(
-                  segments: const [
-                    (ColorStyle.vivid, '鲜艳 Vivid'),
-                    (ColorStyle.tinted, '淡雅 Tinted'),
-                    (ColorStyle.soft, '柔和 Soft'),
-                    (ColorStyle.monochrome, '单色 Mono'),
-                  ],
-                  value: c.colorStyle,
-                  onChanged: c.setColorStyle,
                 ),
                 const SizedBox(height: 16),
                 _SwitchTileRow(
@@ -229,7 +253,82 @@ class ThemeView extends StatelessWidget {
                   value: c.floatingNavDock,
                   onChanged: c.setFloatingNavDock,
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.all(AppTokens.s12),
+                  decoration: ShapeDecoration(
+                    color: scheme.surfaceContainerLow,
+                    shape: RoundedSuperellipseBorder(
+                      borderRadius: AppTokens.radiusSectionBorder,
+                      side: BorderSide(color: scheme.outlineVariant),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 38,
+                        height: 38,
+                        decoration: ShapeDecoration(
+                          color: scheme.primaryContainer,
+                          shape: AppShape.md,
+                        ),
+                        alignment: Alignment.center,
+                        child: GlyphIcon(
+                          CallbookGlyphs.musicNote,
+                          size: 18,
+                          color: scheme.primary,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '新手引导与默认曲库向导',
+                              style: AppTextStyle.subheadline
+                                  .of(context, emphasized: true)
+                                  .copyWith(color: scheme.onSurface),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              '随时重新浏览 5 步核心功能介绍、快速切换应援主题色或更换初始曲目',
+                              style: AppTextStyle.caption1.of(context).copyWith(
+                                color: scheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      TonalButton(
+                        size: TonalButtonSize.compact,
+                        label: '重新查看功能引导',
+                        onPressed: c.reopenOnboarding,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // 3. 「文字」卡片
+          Card(
+            inert: true,
+            radius: AppTokens.radiusCard,
+            padding: const EdgeInsets.all(AppTokens.s16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  c.siteText('文字'),
+                  style: AppTextStyle.headline
+                      .of(context, emphasized: true)
+                      .copyWith(color: scheme.onSurface),
+                ),
+                const SizedBox(height: 12),
                 _SwitchTileRow(
                   title: '全局启用 Google Sans 字体',
                   subtitle: '统一 UI 排版与 Callbook 导出字体，数字启用等宽对齐',
@@ -265,73 +364,25 @@ class ThemeView extends StatelessWidget {
               ],
             ),
           ),
-          const SizedBox(height: 12),
-
-          // 4. Onboarding Guide Re-entry
-          Card(
-            inert: true,
-            radius: AppTokens.radiusCard,
-            padding: const EdgeInsets.all(AppTokens.s16),
-            child: Row(
-              children: [
-                Container(
-                  width: 38,
-                  height: 38,
-                  decoration: ShapeDecoration(
-                    color: scheme.primaryContainer,
-                    shape: AppShape.md,
-                  ),
-                  alignment: Alignment.center,
-                  child: GlyphIcon(
-                    CallbookGlyphs.musicNote,
-                    size: 18,
-                    color: scheme.primary,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '新手引导与默认曲库向导',
-                        style: AppTextStyle.subheadline
-                            .of(context, emphasized: true)
-                            .copyWith(color: scheme.onSurface),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        '随时重新浏览 5 步核心功能介绍、快速切换应援主题色或更换初始曲目',
-                        style: AppTextStyle.caption1.of(context).copyWith(
-                          color: scheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 12),
-                TonalButton(
-                  size: TonalButtonSize.compact,
-                  label: '重新查看功能引导',
-                  onPressed: c.reopenOnboarding,
-                ),
-              ],
-            ),
-          ),
         ],
       ),
     );
   }
 
-  Widget _buildThemePreviewCard(
+  Widget _buildThemePreviewSection(
     BuildContext context,
     ColorScheme scheme,
     CallbookController c,
   ) {
-    return Card(
-      inert: true,
-      radius: AppTokens.radiusCard,
-      padding: const EdgeInsets.all(AppTokens.s16),
+    return Container(
+      padding: const EdgeInsets.all(AppTokens.s12),
+      decoration: ShapeDecoration(
+        color: scheme.surfaceContainerLow,
+        shape: RoundedSuperellipseBorder(
+          borderRadius: AppTokens.radiusSectionBorder,
+          side: BorderSide(color: scheme.outlineVariant),
+        ),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -341,7 +392,7 @@ class ThemeView extends StatelessWidget {
               const SizedBox(width: 8),
               Text(
                 '实时主题预览',
-                style: AppTextStyle.headline
+                style: AppTextStyle.subheadline
                     .of(context, emphasized: true)
                     .copyWith(color: scheme.onSurface),
               ),
@@ -353,7 +404,7 @@ class ThemeView extends StatelessWidget {
             decoration: ShapeDecoration(
               color: scheme.surfaceContainerLowest,
               shape: RoundedSuperellipseBorder(
-                borderRadius: AppRadius.xl,
+                borderRadius: AppRadius.lg,
                 side: BorderSide(color: scheme.outlineVariant),
               ),
             ),
@@ -438,34 +489,28 @@ class ThemeView extends StatelessWidget {
     );
   }
 
-  Widget _buildPresetsCard(
+  Widget _buildPresetsSection(
     BuildContext context,
     ColorScheme scheme,
     CallbookController c,
   ) {
-    return Card(
-      inert: true,
-      radius: AppTokens.radiusCard,
-      padding: const EdgeInsets.all(AppTokens.s16),
+    return Container(
+      padding: const EdgeInsets.all(AppTokens.s12),
+      decoration: ShapeDecoration(
+        color: scheme.surfaceContainerLow,
+        shape: RoundedSuperellipseBorder(
+          borderRadius: AppTokens.radiusSectionBorder,
+          side: BorderSide(color: scheme.outlineVariant),
+        ),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  '精选色彩配方',
-                  style: AppTextStyle.headline
-                      .of(context, emphasized: true)
-                      .copyWith(color: scheme.onSurface),
-                ),
-              ),
-              TonalButton(
-                size: TonalButtonSize.compact,
-                label: '恢复默认',
-                onPressed: c.resetTheme,
-              ),
-            ],
+          Text(
+            '精选色彩配方',
+            style: AppTextStyle.subheadline
+                .of(context, emphasized: true)
+                .copyWith(color: scheme.onSurface),
           ),
           const SizedBox(height: 12),
           Wrap(
@@ -481,7 +526,7 @@ class ThemeView extends StatelessWidget {
                   child: PressSurface(
                     fill: preset.seedColor.toARGB32() == c.seedColor.toARGB32()
                         ? scheme.primaryContainer
-                        : scheme.surfaceContainerLow,
+                        : scheme.surfaceContainerLowest,
                     shape: const RoundedSuperellipseBorder(
                       borderRadius: AppRadius.lg,
                     ),

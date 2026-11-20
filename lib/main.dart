@@ -1,10 +1,9 @@
-import 'dart:io' show Platform;
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:prism_ui/prism_ui.dart';
 import 'package:window_manager/window_manager.dart';
 
+import 'platform/app_platform.dart';
 import 'state/callbook_controller.dart';
 import 'ui/home_shell.dart';
 import 'ui/theme/app_motion.dart';
@@ -22,7 +21,7 @@ final RegExp _emojiPattern = RegExp(
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  if (!kIsWeb && (Platform.isWindows || Platform.isMacOS || Platform.isLinux)) {
+  if (AppPlatform.isWindows) {
     await windowManager.ensureInitialized();
     const windowOptions = WindowOptions(
       size: Size(1280, 820),
@@ -81,8 +80,6 @@ class _LiveCallStudioAppState extends State<LiveCallStudioApp> {
         supportedLocales: const [
           Locale('zh', 'CN'),
           Locale('zh'),
-          Locale('en', 'US'),
-          Locale('en'),
         ],
         theme: c.buildPrismTheme(Brightness.light),
         darkTheme: c.buildPrismTheme(Brightness.dark),

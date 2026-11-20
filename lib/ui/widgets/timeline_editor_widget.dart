@@ -543,7 +543,9 @@ class TimelineEditorWidgetState extends State<TimelineEditorWidget>
                             : '插入当前行 GT 警报（G）',
                         child: TonalButton(
                           size: TonalButtonSize.compact,
-                          label: activeLineHasGt ? '取消 GT 警报' : 'GT 警报',
+                          label: activeLineHasGt
+                              ? c.siteText('取消 GT 警报')
+                              : c.siteText('GT 警报'),
                           onPressed:
                               items.isEmpty ? null : () => c.insertGtAlert(),
                         ),
@@ -1018,7 +1020,7 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard>
                   },
                 ),
                 TonalChip(
-                  label: gtAlert != null ? '取消 GT' : 'GT',
+                  label: gtAlert != null ? c.siteText('取消 GT') : 'GT',
                   color: gtAlert != null
                       ? scheme.warning
                       : scheme.warningContainer,

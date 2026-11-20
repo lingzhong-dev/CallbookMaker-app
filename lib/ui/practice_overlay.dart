@@ -333,7 +333,7 @@ class _PracticeOverlayState extends State<PracticeOverlay>
                   ListenableBuilder(
                     listenable: c.playbackListenable,
                     builder: (context, _) => Text(
-                      'LIVE PRACTICE MODE · ${c.project.meta.bpm} BPM · 小节 ${c.currentBar}.${c.currentBeatInBar}',
+                      '${c.siteText('LIVE PRACTICE MODE')} · ${c.project.meta.bpm} BPM · 小节 ${c.currentBar}.${c.currentBeatInBar}',
                       style: AppTextStyle.caption1
                           .of(context, emphasized: true)
                           .copyWith(
@@ -434,7 +434,7 @@ class _PracticeOverlayState extends State<PracticeOverlay>
     final lyricsArea = lines.isEmpty
         ? Center(
             child: Text(
-              '当前曲目暂无歌词行',
+              c.siteText('当前曲目暂无歌词行'),
               style: AppTextStyle.headline.of(context).copyWith(
                 color: scheme.onSurfaceVariant,
               ),

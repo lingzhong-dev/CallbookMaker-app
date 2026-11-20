@@ -1157,7 +1157,7 @@ class _DashboardViewState extends State<DashboardView> {
                         ),
                       ),
                       TonalChip(
-                        label: '+ GT 警报',
+                        label: c.siteText('+ GT 警报'),
                         color: scheme.warningContainer,
                         foregroundColor: scheme.onWarningContainer,
                         onPressed: () => c.insertGtAlert(),

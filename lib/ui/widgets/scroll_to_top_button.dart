@@ -226,8 +226,8 @@ class _ScrollToTopButtonState extends State<ScrollToTopButton>
               ? _FloatingScrollButtonMode.backToCurrentLine
               : _FloatingScrollButtonMode.scrollToTop;
           final label = mode == _FloatingScrollButtonMode.backToCurrentLine
-              ? '回到当前行'
-              : '回到顶部（Ctrl+Home）';
+              ? (c?.siteText('回到当前行') ?? '回到当前行')
+              : '${c?.siteText('回到顶部') ?? '回到顶部'}（Ctrl+Home）';
           final glyph = mode == _FloatingScrollButtonMode.backToCurrentLine
               ? CallbookGlyphs.currentLine
               : CallbookGlyphs.arrowUp;

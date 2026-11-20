@@ -220,7 +220,7 @@ Widget _wrapWithPrism({
         _TestUiLocalizationsDelegate(),
         DefaultWidgetsLocalizations.delegate,
       ],
-      supportedLocales: const [Locale('en', 'US'), Locale('zh', 'CN')],
+      supportedLocales: const [Locale('zh', 'CN'), Locale('zh')],
       liquidGlass: controller.liquidGlass
           ? prism.LiquidGlassQuality.standard
           : null,

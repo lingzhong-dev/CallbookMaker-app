@@ -171,8 +171,12 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
     c.stepActiveLine(delta);
   }
 
-  String _targetLineLabel(LyricLine? line, int index) {
-    if (line == null || index < 0) return '暂无歌词行';
+  String _targetLineLabel(
+    CallbookController c,
+    LyricLine? line,
+    int index,
+  ) {
+    if (line == null || index < 0) return c.siteText('暂无歌词行');
     final raw = line.text.original.trim().isNotEmpty
         ? line.text.original.trim()
         : (line.text.translation?.trim() ?? '空歌词行');
@@ -412,7 +416,7 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
                           const SizedBox(height: 2),
                           Text(
                             c.route == StudioRoute.dashboard
-                                ? '为你的偶像写下Callbook吧！'
+                                ? c.siteText('为你的偶像写下Callbook吧！')
                                 : '${c.project.meta.title} · ${c.project.meta.bpm} BPM (${c.project.meta.timeSignature})',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -638,7 +642,9 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
                                 mainAxisAlignment: MainAxisAlignment.end,
                                 children: [
                                   _FloatingPillButton(
-                                    label: _mobileQuickTrayOpen ? '收起速标' : '速标栏',
+                                    label: _mobileQuickTrayOpen
+                                        ? c.siteText('收起速标')
+                                        : c.siteText('速标栏'),
                                     color: scheme.surfaceContainerHigh,
                                     foreground: scheme.onSurface,
                                     onTap: () {
@@ -660,8 +666,8 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
                                       label: c.activeLineId != null &&
                                               c.getAlertForLine(c.activeLineId!) !=
                                                   null
-                                          ? '取消 GT'
-                                          : '+ GT 警报',
+                                          ? c.siteText('取消 GT')
+                                          : c.siteText('+ GT 警报'),
                                       color: c.activeLineId != null &&
                                               c.getAlertForLine(c.activeLineId!) !=
                                                   null
@@ -747,6 +753,7 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
                                               Expanded(
                                                 child: Text(
                                                   _targetLineLabel(
+                                                    c,
                                                     targetLine,
                                                     targetIdx,
                                                   ),
