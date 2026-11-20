@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 import 'package:prism_ui/icons/icons.dart';
 import 'package:prism_ui/prism_ui.dart';
@@ -13,18 +14,27 @@ import 'widgets/archive_switcher_dialog.dart';
 import 'widgets/callbook_glyphs.dart';
 
 class OnboardingOverlay extends StatefulWidget {
-  const OnboardingOverlay({super.key, required this.controller});
+  const OnboardingOverlay({
+    super.key,
+    required this.controller,
+    this.visible = true,
+    this.onExitComplete,
+  });
 
   final CallbookController controller;
+  final bool visible;
+  final VoidCallback? onExitComplete;
 
   @override
   State<OnboardingOverlay> createState() => _OnboardingOverlayState();
 }
 
-class _OnboardingOverlayState extends State<OnboardingOverlay> {
+class _OnboardingOverlayState extends State<OnboardingOverlay>
+    with SingleTickerProviderStateMixin {
   static const int _totalSteps = 5;
 
   int _step = 0;
+  bool _reverseStep = false;
   late String _selectedSongId;
   bool _userPickedSong = false;
   bool _customColorExpanded = false;
@@ -33,9 +43,26 @@ class _OnboardingOverlayState extends State<OnboardingOverlay> {
   Color? _parsedCustomColor;
   String? _colorError;
 
+  late final AnimationController _overlayCtrl = AnimationController(
+    vsync: this,
+    duration: AppMotion.effectsSlow,
+  );
+  late final CurvedAnimation _overlayCurve = CurvedAnimation(
+    parent: _overlayCtrl,
+    curve: AppMotion.curveEffects,
+    reverseCurve: AppMotion.curveEffectsReverse,
+  );
+  late final Animation<double> _dialogScale = Tween<double>(
+    begin: 0.96,
+    end: 1.0,
+  ).animate(_overlayCurve);
+  bool _overlayInitialized = false;
+  bool _exitNotified = false;
+
   @override
   void initState() {
     super.initState();
+    _overlayCtrl.addStatusListener(_handleOverlayStatus);
     _selectedSongId =
         findDefaultSongByProject(widget.controller.project)?.id ??
         defaultPrimarySong.id;
@@ -43,7 +70,88 @@ class _OnboardingOverlayState extends State<OnboardingOverlay> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _overlayCtrl.duration = AppMotion.d(context, AppMotion.effectsSlow);
+    if (!_overlayInitialized) {
+      _overlayInitialized = true;
+      if (widget.visible) {
+        if (context.disableAnimations) {
+          _overlayCtrl.value = 1.0;
+        } else {
+          _overlayCtrl.forward(from: 0.0);
+        }
+      } else {
+        _overlayCtrl.value = 0.0;
+        _notifyExitCompleteOnce();
+      }
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant OnboardingOverlay oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.visible != widget.visible) {
+      _overlayCtrl.duration = AppMotion.d(context, AppMotion.effectsSlow);
+      if (widget.visible) {
+        _exitNotified = false;
+        _step = 0;
+        _reverseStep = false;
+        _userPickedSong = false;
+        _selectedSongId =
+            findDefaultSongByProject(widget.controller.project)?.id ??
+            defaultPrimarySong.id;
+        if (context.disableAnimations) {
+          _overlayCtrl.value = 1.0;
+        } else {
+          _overlayCtrl.forward();
+        }
+      } else {
+        if (context.disableAnimations) {
+          _overlayCtrl.value = 0.0;
+          _notifyExitCompleteOnce();
+        } else {
+          _overlayCtrl.reverse();
+        }
+      }
+    }
+  }
+
+  void _handleOverlayStatus(AnimationStatus status) {
+    if (status == AnimationStatus.dismissed && !widget.visible) {
+      _notifyExitCompleteOnce();
+    }
+  }
+
+  void _notifyExitCompleteOnce() {
+    if (_exitNotified) return;
+    _exitNotified = true;
+    final phase = SchedulerBinding.instance.schedulerPhase;
+    if (phase == SchedulerPhase.persistentCallbacks) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && !widget.visible) {
+          widget.onExitComplete?.call();
+        }
+      });
+    } else {
+      widget.onExitComplete?.call();
+    }
+  }
+
+  void _goToStep(int nextStep) {
+    final clamped = nextStep.clamp(0, _totalSteps - 1);
+    if (clamped == _step) return;
+    setState(() {
+      _reverseStep = clamped < _step;
+      _step = clamped;
+    });
+  }
+
+  @override
   void dispose() {
+    _overlayCtrl.removeStatusListener(_handleOverlayStatus);
+    _overlayCurve.dispose();
+    _overlayCtrl.dispose();
     _colorDebounceTimer?.cancel();
     _colorCtrl.dispose();
     super.dispose();
@@ -124,72 +232,165 @@ class _OnboardingOverlayState extends State<OnboardingOverlay> {
     final isDark = scheme.brightness == Brightness.dark;
 
     return Positioned.fill(
-      child: Surface(
-        color: isDark ? const Color(0xCC000000) : const Color(0x990F172A),
-        child: SafeArea(
-          child: LayoutBuilder(
-            builder: (context, viewport) {
-              final isMobile = viewport.maxWidth < 720;
-              final maxModalHeight = (viewport.maxHeight - (isMobile ? 24 : 48))
-                  .clamp(280.0, 820.0);
+      child: IgnorePointer(
+        ignoring: !widget.visible,
+        child: FadeTransition(
+          opacity: _overlayCurve,
+          child: Surface(
+            color: scheme.modalScrim,
+            child: SafeArea(
+              child: LayoutBuilder(
+                builder: (context, viewport) {
+                  final isMobile = viewport.maxWidth < 720;
+                  final maxModalHeight =
+                      (viewport.maxHeight - (isMobile ? 24 : 48)).clamp(
+                        280.0,
+                        820.0,
+                      );
 
-              return Center(
-                child: Padding(
-                  padding: EdgeInsets.symmetric(
-                    horizontal: isMobile ? 12 : 24,
-                    vertical: isMobile ? 12 : 24,
-                  ),
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      maxWidth: isMobile ? 540 : 760,
-                      maxHeight: maxModalHeight,
-                    ),
-                    child: DecoratedBox(
-                      decoration: ShapeDecoration(
-                        color: scheme.surfaceContainerLowest,
-                        shape: RoundedSuperellipseBorder(
-                          borderRadius: AppRadius.xl,
-                          side: BorderSide(color: scheme.outlineVariant),
-                        ),
-                        shadows: [
-                          BoxShadow(
-                            color: scheme.shadow.withValues(
-                              alpha: isDark ? 0.48 : 0.18,
-                            ),
-                            blurRadius: 32,
-                            offset: const Offset(0, 12),
-                          ),
-                        ],
+                  return Center(
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: isMobile ? 12 : 24,
+                        vertical: isMobile ? 12 : 24,
                       ),
-                      child: SurfaceScope(
-                        level: SurfaceLevel.card,
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            _buildHeader(context, c, scheme, isMobile),
-                            Container(height: 1, color: scheme.outlineVariant),
-                            Flexible(
-                              child: SingleChildScrollView(
-                                padding: EdgeInsets.all(isMobile ? 16 : 24),
-                                child: _buildStepBody(
-                                  context,
-                                  c,
-                                  scheme,
-                                  isMobile,
+                      child: ScaleTransition(
+                        scale: _dialogScale,
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxWidth: isMobile ? 540 : 760,
+                            maxHeight: maxModalHeight,
+                          ),
+                          child: DecoratedBox(
+                            decoration: ShapeDecoration(
+                              color: scheme.surfaceContainerLowest,
+                              shape: RoundedSuperellipseBorder(
+                                borderRadius: AppRadius.xl,
+                                side: BorderSide(color: scheme.outlineVariant),
+                              ),
+                              shadows: [
+                                BoxShadow(
+                                  color: scheme.shadow.withValues(
+                                    alpha: isDark ? 0.48 : 0.18,
+                                  ),
+                                  blurRadius: 32,
+                                  offset: const Offset(0, 12),
                                 ),
+                              ],
+                            ),
+                            child: SurfaceScope(
+                              level: SurfaceLevel.card,
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  _buildHeader(context, c, scheme, isMobile),
+                                  Container(
+                                    height: 1,
+                                    color: scheme.outlineVariant,
+                                  ),
+                                  Flexible(
+                                    child: SingleChildScrollView(
+                                      padding: EdgeInsets.all(
+                                        isMobile ? 16 : 24,
+                                      ),
+                                      child: PageTransitionSwitcher(
+                                        duration: AppMotion.d(
+                                          context,
+                                          AppMotion.onboardingSlideDuration,
+                                        ),
+                                        reverse: _reverseStep,
+                                        layoutBuilder: (entries) => Stack(
+                                          alignment: Alignment.topLeft,
+                                          children: entries,
+                                        ),
+                                        transitionBuilder:
+                                            (
+                                              child,
+                                              primaryAnimation,
+                                              secondaryAnimation,
+                                            ) {
+                                              final noSlide =
+                                                  context.disableAnimations;
+                                              final enterCurve =
+                                                  primaryAnimation.drive(
+                                                    CurveTween(
+                                                      curve:
+                                                          AppMotion.curveEffects,
+                                                    ),
+                                                  );
+                                              final exitCurve =
+                                                  secondaryAnimation.drive(
+                                                    CurveTween(
+                                                      curve: AppMotion
+                                                          .curveEffectsReverse,
+                                                    ),
+                                                  );
+                                              final fade = FadeTransition(
+                                                opacity: enterCurve,
+                                                child: FadeTransition(
+                                                  opacity: ReverseAnimation(
+                                                    exitCurve,
+                                                  ),
+                                                  child: child,
+                                                ),
+                                              );
+                                              if (noSlide) return fade;
+                                              return AnimatedBuilder(
+                                                animation: Listenable.merge([
+                                                  primaryAnimation,
+                                                  secondaryAnimation,
+                                                ]),
+                                                builder: (_, inner) {
+                                                  final enterDx =
+                                                      (_reverseStep
+                                                          ? -30.0
+                                                          : 30.0) *
+                                                      (1.0 - enterCurve.value);
+                                                  final exitDx =
+                                                      (_reverseStep
+                                                          ? 30.0
+                                                          : -30.0) *
+                                                      exitCurve.value;
+                                                  return Transform.translate(
+                                                    offset: Offset(
+                                                      enterDx + exitDx,
+                                                      0,
+                                                    ),
+                                                    child: inner,
+                                                  );
+                                                },
+                                                child: fade,
+                                              );
+                                            },
+                                        child: KeyedSubtree(
+                                          key: ValueKey<int>(_step),
+                                          child: _buildStepBody(
+                                            context,
+                                            c,
+                                            scheme,
+                                            isMobile,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  Container(
+                                    height: 1,
+                                    color: scheme.outlineVariant,
+                                  ),
+                                  _buildFooter(context, c, scheme, isMobile),
+                                ],
                               ),
                             ),
-                            Container(height: 1, color: scheme.outlineVariant),
-                            _buildFooter(context, c, scheme, isMobile),
-                          ],
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                ),
-              );
-            },
+                  );
+                },
+              ),
+            ),
           ),
         ),
       ),
@@ -247,7 +448,7 @@ class _OnboardingOverlayState extends State<OnboardingOverlay> {
                           horizontal: isMobile ? 2 : 3,
                           vertical: 6,
                         ),
-                        onPressed: () => setState(() => _step = i),
+                        onPressed: () => _goToStep(i),
                         child: AnimatedContainer(
                           duration: AppMotion.d(
                             context,
@@ -301,7 +502,7 @@ class _OnboardingOverlayState extends State<OnboardingOverlay> {
         children: [
           if (_step > 0)
             OutlinedButton.icon(
-              onPressed: () => setState(() => _step--),
+              onPressed: () => _goToStep(_step - 1),
               icon: const GlyphIcon(Glyphs.chevronBack, size: 16),
               label: const Text('上一步'),
             )
@@ -310,7 +511,7 @@ class _OnboardingOverlayState extends State<OnboardingOverlay> {
           const Spacer(),
           if (!isLast)
             FilledButton.icon(
-              onPressed: () => setState(() => _step++),
+              onPressed: () => _goToStep(_step + 1),
               icon: const GlyphIcon(Glyphs.chevronForward, size: 16),
               label: const Text('下一步'),
             )

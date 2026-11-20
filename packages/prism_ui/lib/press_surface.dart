@@ -233,7 +233,9 @@ class _PressSurfaceState extends State<PressSurface>
     _fadeInInk();
   }
 
-  bool get _sparkling => Theme.of(context).platform == TargetPlatform.android;
+  bool get _sparkling =>
+      Theme.of(context).platform == TargetPlatform.android &&
+      !context.disableAnimations;
 
   void _fadeInInk() {
     if (_inkHeld) {

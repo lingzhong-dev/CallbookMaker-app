@@ -6,11 +6,30 @@ import 'package:prism_ui/prism_ui.dart';
 
 import '../models/callbook_models.dart';
 import '../state/callbook_controller.dart';
+import 'theme/app_motion.dart';
 import 'theme/app_tokens.dart';
 import 'widgets/app_dialog.dart';
 import 'widgets/archive_switcher_dialog.dart';
 import 'widgets/callbook_glyphs.dart';
 import 'widgets/scroll_to_top_button.dart';
+
+sealed class _ArchiveListItem {
+  const _ArchiveListItem(this.key);
+  final Object key;
+}
+
+final class _ArchiveHeaderItem extends _ArchiveListItem {
+  const _ArchiveHeaderItem() : super('__archive_header__');
+}
+
+final class _ArchiveEmptyItem extends _ArchiveListItem {
+  const _ArchiveEmptyItem() : super('__archive_empty__');
+}
+
+final class _ArchiveEntryItem extends _ArchiveListItem {
+  _ArchiveEntryItem(this.entry) : super(entry.id);
+  final CallbookArchiveEntry entry;
+}
 
 class ArchiveView extends StatefulWidget {
   const ArchiveView({super.key, required this.controller});
@@ -162,92 +181,164 @@ class _ArchiveViewState extends State<ArchiveView> {
                 ? '有未保存更改'
                 : (c.needsSavePromptBeforeSwitch ? '待归档' : '示例工程'));
 
+        final listItems = <_ArchiveListItem>[
+          const _ArchiveHeaderItem(),
+          if (archives.isEmpty)
+            const _ArchiveEmptyItem()
+          else
+            for (final entry in archives) _ArchiveEntryItem(entry),
+        ];
+
         return Stack(
           children: [
-            SingleChildScrollView(
+            KeyedAnimatedList<_ArchiveListItem>(
               controller: _scrollController,
+              items: listItems,
+              keyOf: (item) => item.key,
+              duration: AppMotion.d(ctx, AppMotion.effectsSlow),
               padding: EdgeInsets.fromLTRB(16, 4, 16, 20 + bottomInset),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-              Card(
-                inert: true,
-                radius: AppTokens.radiusCard,
-                padding: const EdgeInsets.all(AppTokens.s16),
+              itemBuilder: (itemCtx, item) => switch (item) {
+                _ArchiveHeaderItem() => Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: _buildHeaderCard(
+                    itemCtx,
+                    scheme,
+                    c,
+                    currentLabel: currentLabel,
+                    archivesCount: archives.length,
+                    isSynced: isSynced,
+                    statusText: statusText,
+                  ),
+                ),
+                _ArchiveEmptyItem() => _buildEmptyCard(itemCtx, scheme),
+                _ArchiveEntryItem(:final entry) => Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: _buildArchiveCard(itemCtx, scheme, c, entry),
+                ),
+              },
+            ),
+            ScrollToTopButton(
+              scrollController: _scrollController,
+              bottomOffset: 16 + bottomInset,
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildHeaderCard(
+    BuildContext ctx,
+    ColorScheme scheme,
+    CallbookController c, {
+    required String currentLabel,
+    required int archivesCount,
+    required bool isSynced,
+    required String statusText,
+  }) {
+    final statusDuration = AppMotion.d(ctx, AppMotion.effectsDefault);
+    final statusBg = isSynced
+        ? scheme.successContainer
+        : (c.needsSavePromptBeforeSwitch
+              ? scheme.warningContainer
+              : scheme.surfaceContainerHigh);
+    final statusFg = isSynced
+        ? scheme.onSuccessContainer
+        : (c.needsSavePromptBeforeSwitch
+              ? scheme.onWarningContainer
+              : scheme.onSurfaceVariant);
+
+    return Card(
+      inert: true,
+      radius: AppTokens.radiusCard,
+      padding: const EdgeInsets.all(AppTokens.s16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: ShapeDecoration(
+                  color: scheme.primaryContainer,
+                  shape: AppShape.all(10),
+                ),
+                alignment: Alignment.center,
+                child: GlyphIcon(
+                  CallbookGlyphs.archive,
+                  size: 18,
+                  color: scheme.onPrimaryContainer,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      children: [
-                        Container(
-                          width: 34,
-                          height: 34,
-                          decoration: ShapeDecoration(
-                            color: scheme.primaryContainer,
-                            shape: AppShape.all(10),
-                          ),
-                          alignment: Alignment.center,
-                          child: GlyphIcon(
-                            CallbookGlyphs.archive,
-                            size: 18,
-                            color: scheme.onPrimaryContainer,
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                currentLabel,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: AppTextStyle.headline
-                                    .of(ctx, emphasized: true)
-                                    .copyWith(color: scheme.onSurface),
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                '${c.project.lines.length} 行歌词 · ${c.project.alerts.length} 条 GT 警报 · 共 ${archives.length} 个已存工程',
-                                style: AppTextStyle.caption1.of(ctx).copyWith(
-                                  color: scheme.onSurfaceVariant,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 4,
-                          ),
-                          decoration: ShapeDecoration(
-                            color: isSynced
-                                ? scheme.successContainer
-                                : (c.needsSavePromptBeforeSwitch
-                                    ? scheme.warningContainer
-                                    : scheme.surfaceContainerHigh),
-                            shape: AppShape.full,
-                          ),
-                          child: Text(
-                            statusText,
-                            style: AppTextStyle.caption2
-                                .of(ctx, emphasized: true)
-                                .copyWith(
-                                  color: isSynced
-                                      ? scheme.onSuccessContainer
-                                      : (c.needsSavePromptBeforeSwitch
-                                          ? scheme.onWarningContainer
-                                          : scheme.onSurfaceVariant),
-                                ),
-                          ),
-                        ),
-                      ],
+                    Text(
+                      currentLabel,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTextStyle.headline
+                          .of(ctx, emphasized: true)
+                          .copyWith(color: scheme.onSurface),
                     ),
-                    const SizedBox(height: 12),
-                    if (!_saveAsMode)
-                      Wrap(
+                    const SizedBox(height: 2),
+                    Text(
+                      '${c.project.lines.length} 行歌词 · ${c.project.alerts.length} 条 GT 警报 · 共 $archivesCount 个已存工程',
+                      style: AppTextStyle.caption1.of(ctx).copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              AnimatedContainer(
+                duration: statusDuration,
+                curve: AppMotion.curveEffects,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
+                decoration: ShapeDecoration(
+                  color: statusBg,
+                  shape: AppShape.full,
+                ),
+                child: AnimatedSwitcher(
+                  duration: statusDuration,
+                  switchInCurve: AppMotion.curveEffects,
+                  switchOutCurve: AppMotion.curveEffectsReverse,
+                  child: Text(
+                    statusText,
+                    key: ValueKey<String>(statusText),
+                    style: AppTextStyle.caption2
+                        .of(ctx, emphasized: true)
+                        .copyWith(color: statusFg),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          AnimatedSize(
+            duration: statusDuration,
+            curve: AppMotion.curveEffects,
+            alignment: Alignment.topCenter,
+            child: AnimatedSwitcher(
+              duration: statusDuration,
+              switchInCurve: AppMotion.curveEffects,
+              switchOutCurve: AppMotion.curveEffectsReverse,
+              transitionBuilder: (child, animation) => FadeTransition(
+                opacity: animation,
+                child: child,
+              ),
+              child: !_saveAsMode
+                  ? Align(
+                      key: const ValueKey<bool>(false),
+                      alignment: Alignment.centerLeft,
+                      child: Wrap(
                         spacing: 8,
                         runSpacing: 8,
                         children: [
@@ -265,105 +356,88 @@ class _ArchiveViewState extends State<ArchiveView> {
                             },
                           ),
                         ],
-                      )
-                    else
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          TextField(
-                            controller: _saveAsCtrl,
-                            decoration: const InputDecoration(
-                              hintText: '输入新存档名称...',
-                            ),
+                      ),
+                    )
+                  : Column(
+                      key: const ValueKey<bool>(true),
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        TextField(
+                          controller: _saveAsCtrl,
+                          decoration: const InputDecoration(
+                            hintText: '输入新存档名称...',
                           ),
-                          const SizedBox(height: 8),
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: [
-                              FilledButton(
-                                onPressed: () {
-                                  final targetName =
-                                      _saveAsCtrl.text.trim().isEmpty
-                                          ? '$currentLabel (副本)'
-                                          : _saveAsCtrl.text.trim();
-                                  FocusManager.instance.primaryFocus?.unfocus();
-                                  c.saveCurrentToArchive(
-                                    asNew: true,
-                                    customName: targetName,
-                                  );
-                                  setState(() => _saveAsMode = false);
-                                },
-                                child: const Text('确定保存'),
-                              ),
-                              TonalButton(
-                                label: '取消',
-                                onPressed: () {
-                                  FocusManager.instance.primaryFocus?.unfocus();
-                                  setState(() => _saveAsMode = false);
-                                },
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-              if (archives.isEmpty)
-                Card(
-                  inert: true,
-                  radius: AppTokens.radiusCard,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 18,
-                    vertical: 28,
-                  ),
-                  child: Column(
-                    children: [
-                      GlyphIcon(
-                        CallbookGlyphs.archive,
-                        size: 32,
-                        color: scheme.onSurfaceVariant,
-                      ),
-                      const SizedBox(height: 10),
-                      Text(
-                        '暂无已保存的 Call 本存档',
-                        style: AppTextStyle.subheadline
-                            .of(ctx, emphasized: true)
-                            .copyWith(color: scheme.onSurface),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '点击上方「保存到存档」，或在拉取新曲目歌词触发提示时选择保存，即可在这里管理与切换。',
-                        textAlign: TextAlign.center,
-                        style: AppTextStyle.caption1.of(ctx).copyWith(
-                          color: scheme.onSurfaceVariant,
                         ),
-                      ),
-                    ],
-                  ),
-                )
-              else
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      for (var i = 0; i < archives.length; i++) ...[
-                        if (i > 0) const SizedBox(height: 10),
-                        _buildArchiveCard(ctx, scheme, c, archives[i]),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            FilledButton(
+                              onPressed: () {
+                                final targetName =
+                                    _saveAsCtrl.text.trim().isEmpty
+                                    ? '$currentLabel (副本)'
+                                    : _saveAsCtrl.text.trim();
+                                FocusManager.instance.primaryFocus?.unfocus();
+                                c.saveCurrentToArchive(
+                                  asNew: true,
+                                  customName: targetName,
+                                );
+                                setState(() => _saveAsMode = false);
+                              },
+                              child: const Text('确定保存'),
+                            ),
+                            TonalButton(
+                              label: '取消',
+                              onPressed: () {
+                                FocusManager.instance.primaryFocus?.unfocus();
+                                setState(() => _saveAsMode = false);
+                              },
+                            ),
+                          ],
+                        ),
                       ],
-                    ],
-                  ),
-                ],
-              ),
+                    ),
             ),
-            ScrollToTopButton(
-              scrollController: _scrollController,
-              bottomOffset: 16 + bottomInset,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmptyCard(BuildContext ctx, ColorScheme scheme) {
+    return Card(
+      inert: true,
+      radius: AppTokens.radiusCard,
+      padding: const EdgeInsets.symmetric(
+        horizontal: 18,
+        vertical: 28,
+      ),
+      child: Column(
+        children: [
+          GlyphIcon(
+            CallbookGlyphs.archive,
+            size: 32,
+            color: scheme.onSurfaceVariant,
+          ),
+          const SizedBox(height: 10),
+          Text(
+            '暂无已保存的 Call 本存档',
+            style: AppTextStyle.subheadline
+                .of(ctx, emphasized: true)
+                .copyWith(color: scheme.onSurface),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '点击上方「保存到存档」，或在拉取新曲目歌词触发提示时选择保存，即可在这里管理与切换。',
+            textAlign: TextAlign.center,
+            style: AppTextStyle.caption1.of(ctx).copyWith(
+              color: scheme.onSurfaceVariant,
             ),
-          ],
-        );
-      },
+          ),
+        ],
+      ),
     );
   }
 
@@ -376,7 +450,23 @@ class _ArchiveViewState extends State<ArchiveView> {
     final isCurrent = entry.id == c.activeArchiveId;
     final isEditing = _editingId == entry.id;
 
-    return Container(
+    final menuItems = <PopupMenuItem>[
+      PopupMenuItem(
+        label: c.siteText('重命名'),
+        onPressed: () {
+          _renameCtrl.text = entry.name;
+          setState(() => _editingId = entry.id);
+        },
+      ),
+      PopupMenuItem(
+        label: c.siteText('删除'),
+        glyph: CallbookGlyphs.trash,
+        danger: true,
+        onPressed: () => unawaited(_confirmDelete(c, entry)),
+      ),
+    ];
+
+    final cardContent = Container(
       padding: const EdgeInsets.all(14),
       decoration: ShapeDecoration(
         color: isCurrent
@@ -442,56 +532,54 @@ class _ArchiveViewState extends State<ArchiveView> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                      Row(
-                        children: [
-                          Flexible(
-                            child: Text(
-                              entry.name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: AppTextStyle.subheadline
-                                  .of(context, emphasized: true)
-                                  .copyWith(color: scheme.onSurface),
-                            ),
-                          ),
-                          if (isCurrent) ...[
-                            const SizedBox(width: 6),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 7,
-                                vertical: 2,
-                              ),
-                              decoration: ShapeDecoration(
-                                color: scheme.primary,
-                                shape: AppShape.full,
-                              ),
+                        Row(
+                          children: [
+                            Flexible(
                               child: Text(
-                                '当前',
-                                style: AppTextStyle.caption2
+                                entry.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: AppTextStyle.subheadline
                                     .of(context, emphasized: true)
-                                    .copyWith(color: scheme.onPrimary),
+                                    .copyWith(color: scheme.onSurface),
                               ),
                             ),
+                            if (isCurrent) ...[
+                              const SizedBox(width: 6),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 7,
+                                  vertical: 2,
+                                ),
+                                decoration: ShapeDecoration(
+                                  color: scheme.primary,
+                                  shape: AppShape.full,
+                                ),
+                                child: Text(
+                                  '当前',
+                                  style: AppTextStyle.caption2
+                                      .of(context, emphasized: true)
+                                      .copyWith(color: scheme.onPrimary),
+                                ),
+                              ),
+                            ],
                           ],
-                        ],
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '${entry.project.meta.artist.isEmpty ? '未知歌手' : entry.project.meta.artist} · ${entry.lineCount} 句 · ${entry.taggedCount} 打标 · ${entry.alertCount} GT · ${_formatSavedTime(entry.savedAt)}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: AppTextStyle.caption1.of(context).copyWith(
-                          color: scheme.onSurfaceVariant,
                         ),
-                      ),
-                    ],
+                        const SizedBox(height: 4),
+                        Text(
+                          '${entry.project.meta.artist.isEmpty ? '未知歌手' : entry.project.meta.artist} · ${entry.lineCount} 句 · ${entry.taggedCount} 打标 · ${entry.alertCount} GT · ${_formatSavedTime(entry.savedAt)}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppTextStyle.caption1.of(context).copyWith(
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-              ),
                 const SizedBox(height: 10),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
+                Row(
                   children: [
                     TonalChip(
                       label: isCurrent ? '已加载' : '切换到此存档',
@@ -503,25 +591,22 @@ class _ArchiveViewState extends State<ArchiveView> {
                           : scheme.onPrimaryContainer,
                       onPressed: () => _handleSwitch(c, entry),
                     ),
-                    TonalChip(
-                      label: '重命名',
-                      color: scheme.surfaceContainerHigh,
-                      foregroundColor: scheme.onSurface,
-                      onPressed: () {
-                        _renameCtrl.text = entry.name;
-                        setState(() => _editingId = entry.id);
-                      },
-                    ),
-                    TonalChip(
-                      label: '删除',
-                      color: scheme.errorContainer,
-                      foregroundColor: scheme.onErrorContainer,
-                      onPressed: () => _confirmDelete(c, entry),
+                    const Spacer(),
+                    Text(
+                      c.siteText('长按或右键可重命名 / 删除'),
+                      style: AppTextStyle.caption2.of(context).copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
                     ),
                   ],
                 ),
               ],
             ),
+    );
+
+    return ContextMenuRegion(
+      menuItems: isEditing ? null : menuItems,
+      child: cardContent,
     );
   }
 }

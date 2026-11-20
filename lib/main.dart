@@ -7,6 +7,7 @@ import 'package:window_manager/window_manager.dart';
 
 import 'state/callbook_controller.dart';
 import 'ui/home_shell.dart';
+import 'ui/theme/app_motion.dart';
 
 final RegExp _emojiPattern = RegExp(
   // ignore: valid_regexps
@@ -56,45 +57,71 @@ class _LiveCallStudioAppState extends State<LiveCallStudioApp> {
     super.dispose();
   }
 
+  Widget _buildApp(BuildContext mqContext) {
+    final c = widget.controller;
+    final mq = MediaQuery.of(mqContext);
+    final effectiveDisableAnimations = c.reduceMotion || mq.disableAnimations;
+    final effectiveLiquidGlass = AppMotion.resolveLiquidGlassQuality(
+      userEnabled: c.liquidGlass,
+      reduceMotion: effectiveDisableAnimations,
+      platform: defaultTargetPlatform,
+      devicePixelRatio: mq.devicePixelRatio,
+      logicalSize: mq.size,
+    );
+
+    return MediaQuery(
+      data: mq.copyWith(disableAnimations: effectiveDisableAnimations),
+      child: PrismApp(
+        title: 'CallbookMaker',
+        debugShowCheckedModeBanner: false,
+        localizationsDelegates: const [
+          _CallbookUiLocalizationsDelegate(),
+          DefaultWidgetsLocalizations.delegate,
+        ],
+        supportedLocales: const [
+          Locale('zh', 'CN'),
+          Locale('zh'),
+          Locale('en', 'US'),
+          Locale('en'),
+        ],
+        theme: c.buildPrismTheme(Brightness.light),
+        darkTheme: c.buildPrismTheme(Brightness.dark),
+        themeMode: c.themeMode,
+        liquidGlass: effectiveLiquidGlass,
+        emojiFont: (family: 'Twemoji', pattern: _emojiPattern),
+        home: Builder(
+          builder: (innerContext) {
+            final innerMq = MediaQuery.of(innerContext);
+            final systemScale = innerMq.textScaler.scale(1.0);
+            return MediaQuery(
+              data: innerMq.copyWith(
+                textScaler: TextScaler.linear(systemScale * c.textScale),
+              ),
+              child: DefaultTextStyle(
+                style: AppTextStyle.body.of(innerContext),
+                child: HomeShell(controller: c),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = widget.controller;
+    final hasAncestorMediaQuery = MediaQuery.maybeOf(context) != null;
+    final view = View.maybeOf(context);
     return ListenableBuilder(
       listenable: c.themeListenable,
       builder: (context, _) {
-        return PrismApp(
-          title: 'CallbookMaker',
-          debugShowCheckedModeBanner: false,
-          localizationsDelegates: const [
-            _CallbookUiLocalizationsDelegate(),
-            DefaultWidgetsLocalizations.delegate,
-          ],
-          supportedLocales: const [
-            Locale('zh', 'CN'),
-            Locale('zh'),
-            Locale('en', 'US'),
-            Locale('en'),
-          ],
-          theme: c.buildPrismTheme(Brightness.light),
-          darkTheme: c.buildPrismTheme(Brightness.dark),
-          themeMode: c.themeMode,
-          liquidGlass: c.liquidGlass ? LiquidGlassQuality.ultra : null,
-          emojiFont: (family: 'Twemoji', pattern: _emojiPattern),
-          home: Builder(
-            builder: (innerContext) {
-              final mq = MediaQuery.of(innerContext);
-              final systemScale = mq.textScaler.scale(1.0);
-              return MediaQuery(
-                data: mq.copyWith(
-                  textScaler: TextScaler.linear(systemScale * c.textScale),
-                ),
-                child: DefaultTextStyle(
-                  style: AppTextStyle.body.of(innerContext),
-                  child: HomeShell(controller: c),
-                ),
-              );
-            },
-          ),
+        if (hasAncestorMediaQuery || view == null) {
+          return Builder(builder: _buildApp);
+        }
+        return MediaQuery.fromView(
+          view: view,
+          child: Builder(builder: _buildApp),
         );
       },
     );

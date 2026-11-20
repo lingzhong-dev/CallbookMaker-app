@@ -16,6 +16,7 @@ import 'app_dialog.dart';
 import 'call_badge_pill.dart';
 import 'call_preset_dialogs.dart';
 import 'callbook_glyphs.dart';
+import 'continuous_auto_scroller.dart';
 import 'ruby_lyric_text.dart';
 
 int? _parseClockText(String raw) {
@@ -44,23 +45,88 @@ class TimelineEditorWidget extends StatefulWidget {
     super.key,
     required this.controller,
     this.compact = false,
+    this.externalScrollController,
   });
 
   final CallbookController controller;
   final bool compact;
+  final ScrollController? externalScrollController;
 
   @override
   State<TimelineEditorWidget> createState() => TimelineEditorWidgetState();
 }
 
-class TimelineEditorWidgetState extends State<TimelineEditorWidget> {
+class TimelineEditorWidgetState extends State<TimelineEditorWidget>
+    with TickerProviderStateMixin {
+  static const int _maxAnimatedLineDelta = 25;
+
   final ScrollController _scrollController = ScrollController();
   final Map<String, GlobalKey> _lineKeys = {};
+  late final EntryTransitions<String> _lineTransitions =
+      EntryTransitions<String>(vsync: this, onLeft: _handleLineEntryLeft);
+  late final ContinuousAutoScroller _autoScroller = ContinuousAutoScroller(
+    vsync: this,
+    onResumeAutoFollow: _handlePlaybackSync,
+  );
+  late List<TimelineLineItem> _displayedItems = List<TimelineLineItem>.from(
+    widget.controller.timelineItems,
+  );
   String? _lastActiveLineId;
   String? _lastLineListSignature;
   String? _pendingScrollLineId;
   bool _showSectionPanel = false;
   late bool _showShortcuts = widget.controller.shortcutsVisibleNotifier.value;
+
+  ScrollController get _effectiveScrollController =>
+      widget.externalScrollController ?? _scrollController;
+
+  /// Forwards scroll notifications from the outer [DashboardView]
+  /// [SingleChildScrollView] so manual scrolling pauses auto-follow for 3s.
+  void handleOuterScrollNotification(ScrollNotification notification) {
+    _autoScroller.handleScrollNotification(notification, widget.controller);
+  }
+
+  void _handleLineEntryLeft(String lineId) {
+    if (!mounted) return;
+    if (widget.controller.timelineItems.any((item) => item.line.id == lineId)) {
+      return;
+    }
+    setState(() {
+      _displayedItems = [
+        for (final item in _displayedItems)
+          if (item.line.id != lineId) item,
+      ];
+    });
+  }
+
+  void _syncDisplayedItems(List<TimelineLineItem> nextItems) {
+    final prevIds = {
+      for (final item in _displayedItems)
+        if (!_lineTransitions.isLeaving(item.line.id)) item.line.id,
+    };
+    final nextIds = {for (final item in nextItems) item.line.id};
+    final addedCount = nextIds.difference(prevIds).length;
+    final removedCount = prevIds.difference(nextIds).length;
+    if (addedCount == 0 && removedCount == 0) {
+      // Preserve leaving entries while updating staying item references.
+      final byId = {for (final item in nextItems) item.line.id: item};
+      _displayedItems = [
+        for (final item in _displayedItems) byId[item.line.id] ?? item,
+      ];
+      return;
+    }
+    if (addedCount + removedCount > _maxAnimatedLineDelta || !mounted) {
+      _displayedItems = List<TimelineLineItem>.from(nextItems);
+      return;
+    }
+    final duration = AppMotion.d(context, AppMotion.effectsDefault);
+    _displayedItems = _lineTransitions.sync(
+      _displayedItems,
+      nextItems,
+      (item) => item.line.id,
+      duration,
+    );
+  }
 
   String _computeLineListSignature(List<TimelineLineItem> items) {
     if (items.isEmpty) return '';
@@ -120,6 +186,9 @@ class TimelineEditorWidgetState extends State<TimelineEditorWidget> {
       _lastLineListSignature = _computeLineListSignature(
         widget.controller.timelineItems,
       );
+      _displayedItems = List<TimelineLineItem>.from(
+        widget.controller.timelineItems,
+      );
       _showShortcuts = widget.controller.shortcutsVisibleNotifier.value;
       widget.controller.projectListenable.addListener(_handleProjectChanged);
       widget.controller.playbackSyncListenable.addListener(_handlePlaybackSync);
@@ -140,6 +209,7 @@ class TimelineEditorWidgetState extends State<TimelineEditorWidget> {
   }
 
   void _handleJumpToCurrent() {
+    _autoScroller.clearManualPause();
     final targetId = widget.controller.followTargetLineId;
     if (targetId != null) {
       _pendingScrollLineId = null;
@@ -158,10 +228,10 @@ class TimelineEditorWidgetState extends State<TimelineEditorWidget> {
         if (!mounted || scheduledId == null) return;
         final ctx = _lineKeys[scheduledId]?.currentContext;
         if (ctx != null) {
-          Scrollable.ensureVisible(
-            ctx,
-            duration: AppMotion.d(context, AppMotion.effectsDefault),
-            curve: AppMotion.curveEffects,
+          _autoScroller.scrollToContext(
+            context: context,
+            scrollController: _effectiveScrollController,
+            itemContext: ctx,
             alignment: 0.35,
           );
         }
@@ -172,10 +242,11 @@ class TimelineEditorWidgetState extends State<TimelineEditorWidget> {
   void _handleProjectChanged() {
     final c = widget.controller;
     final items = c.timelineItems;
+    _syncDisplayedItems(items);
     final nextSig = _computeLineListSignature(items);
     if (nextSig != _lastLineListSignature) {
       _lastLineListSignature = nextSig;
-      final validIds = {for (final item in items) item.line.id};
+      final validIds = {for (final item in _displayedItems) item.line.id};
       _lineKeys.removeWhere((id, _) => !validIds.contains(id));
     }
 
@@ -184,13 +255,22 @@ class TimelineEditorWidgetState extends State<TimelineEditorWidget> {
     _lastActiveLineId = nextActive;
 
     if (activeChanged) {
+      _autoScroller.clearManualPause();
       _scheduleScrollToLine(nextActive);
+    }
+    if (mounted) {
+      setState(() {});
     }
   }
 
   void _handlePlaybackSync() {
     final c = widget.controller;
-    if (!c.followPlayback || c.isPracticeMode) return;
+    if (!c.followPlayback ||
+        c.isPracticeMode ||
+        c.followPausedByScrollTop ||
+        _autoScroller.isManualPauseActive) {
+      return;
+    }
     final targetId = c.followTargetLineId;
     if (targetId != null) {
       _scheduleScrollToLine(targetId);
@@ -209,6 +289,8 @@ class TimelineEditorWidgetState extends State<TimelineEditorWidget> {
     widget.controller.shortcutsVisibleNotifier.removeListener(
       _handleShortcutsChanged,
     );
+    _autoScroller.dispose();
+    _lineTransitions.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -552,6 +634,7 @@ class TimelineEditorWidgetState extends State<TimelineEditorWidget> {
                           ),
                       compact: true,
                       showShortcut: MediaQuery.sizeOf(context).width >= 600,
+                      enableSparkle: true,
                       onTap: () => triggerCallPresetWithUi(
                         context: context,
                         controller: c,
@@ -598,7 +681,7 @@ class TimelineEditorWidgetState extends State<TimelineEditorWidget> {
         ),
         const SizedBox(height: 10),
 
-        if (items.isEmpty)
+        if (_displayedItems.isEmpty)
           Card(
             inert: true,
             padding: const EdgeInsets.all(24),
@@ -612,50 +695,69 @@ class TimelineEditorWidgetState extends State<TimelineEditorWidget> {
             ),
           )
         else
-          ListView.separated(
-            controller: _scrollController,
-            shrinkWrap: true,
-            physics: widget.compact
-                ? const NeverScrollableScrollPhysics()
-                : const ClampingScrollPhysics(),
-            itemCount: items.length,
-            separatorBuilder: (_, _) => const SizedBox(height: 8),
-            itemBuilder: (context, idx) {
-              final line = items[idx].line;
-              final gtAlert = c.getAlertForLine(line.id);
-              final canMergeNext = !line.kind.isSection &&
-                  idx + 1 < items.length &&
-                  !items[idx + 1].line.kind.isSection;
-              final canSplit =
-                  !line.kind.isSection && line.text.original.runes.length >= 2;
-              return KeyedSubtree(
-                key: _lineKeys.putIfAbsent(line.id, GlobalKey.new),
-                child: _ReactiveTimelineLineCard(
-                  controller: c,
-                  line: line,
-                  presetMap: presetMap,
-                  gtAlert: gtAlert,
-                  isSelected: c.activeLineId == line.id,
-                  canMergeNext: canMergeNext,
-                  canSplit: canSplit,
-                  onCreatePreset: () => _openCreatePresetDialog(context),
-                  onAddSectionAfter: () => _openAddSectionDialog(
-                    context,
-                    initialKind: LyricLineKind.interlude,
-                    afterLineId: line.id,
-                  ),
-                  onEditLine: () => _openEditLineDialog(context, line),
-                  onDoubleTapEdit: () => _openEditLineDialog(
-                    context,
-                    line,
-                    autofocusOriginal: true,
-                  ),
-                  onSplitLine: () => _openSplitLineDialog(context, line),
-                  onOpenSuffix: (tag, preset) =>
-                      _openSuffixDialog(context, line, tag, preset),
-                ),
-              );
+          NotificationListener<ScrollNotification>(
+            onNotification: (notification) {
+              if (!widget.compact) {
+                _autoScroller.handleScrollNotification(notification, c);
+              }
+              return false;
             },
+            child: ListView.separated(
+              controller: _scrollController,
+              shrinkWrap: true,
+              physics: widget.compact
+                  ? const NeverScrollableScrollPhysics()
+                  : const ClampingScrollPhysics(),
+              itemCount: _displayedItems.length,
+              separatorBuilder: (_, _) => const SizedBox(height: 8),
+              itemBuilder: (context, idx) {
+                final line = _displayedItems[idx].line;
+                final leaving = _lineTransitions.isLeaving(line.id);
+                final gtAlert = c.getAlertForLine(line.id);
+                final canMergeNext = !leaving &&
+                    !line.kind.isSection &&
+                    idx + 1 < _displayedItems.length &&
+                    !_lineTransitions.isLeaving(
+                      _displayedItems[idx + 1].line.id,
+                    ) &&
+                    !_displayedItems[idx + 1].line.kind.isSection;
+                final canSplit = !leaving &&
+                    !line.kind.isSection &&
+                    line.text.original.runes.length >= 2;
+                return EntryTransition(
+                  key: ValueKey<String>('timeline-entry-${line.id}'),
+                  animation: _lineTransitions.animationOf(line.id),
+                  leaving: leaving,
+                  child: KeyedSubtree(
+                    key: _lineKeys.putIfAbsent(line.id, GlobalKey.new),
+                    child: _ReactiveTimelineLineCard(
+                      controller: c,
+                      line: line,
+                      presetMap: presetMap,
+                      gtAlert: gtAlert,
+                      isSelected: !leaving && c.activeLineId == line.id,
+                      canMergeNext: canMergeNext,
+                      canSplit: canSplit,
+                      onCreatePreset: () => _openCreatePresetDialog(context),
+                      onAddSectionAfter: () => _openAddSectionDialog(
+                        context,
+                        initialKind: LyricLineKind.interlude,
+                        afterLineId: line.id,
+                      ),
+                      onEditLine: () => _openEditLineDialog(context, line),
+                      onDoubleTapEdit: () => _openEditLineDialog(
+                        context,
+                        line,
+                        autofocusOriginal: true,
+                      ),
+                      onSplitLine: () => _openSplitLineDialog(context, line),
+                      onOpenSuffix: (tag, preset) =>
+                          _openSuffixDialog(context, line, tag, preset),
+                    ),
+                  ),
+                );
+              },
+            ),
           ),
       ],
     );
@@ -698,18 +800,71 @@ class _ReactiveTimelineLineCard extends StatefulWidget {
       _ReactiveTimelineLineCardState();
 }
 
-class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard> {
+class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard>
+    with TickerProviderStateMixin {
   late bool _isPlaying;
   late bool _isUpcoming;
   DateTime? _lastTapAt;
+  int _lastGtFlashSeq = 0;
+
+  late final AnimationController _gtFlashCtrl = AnimationController(
+    vsync: this,
+    duration: AppMotion.gtFlashDuration,
+  );
+  late final EntryTransitions<String> _tagTransitions =
+      EntryTransitions<String>(vsync: this, onLeft: _handleTagEntryLeft);
+  late List<LineCallTag> _displayedTags = List<LineCallTag>.from(
+    widget.line.calls,
+  );
 
   @override
   void initState() {
     super.initState();
     _isPlaying = widget.controller.playingLineId == widget.line.id;
     _isUpcoming = widget.controller.upcomingLineId == widget.line.id;
+    _lastGtFlashSeq = widget.controller.gtFlashListenable.value?.seq ?? 0;
     widget.controller.playingLineIdListenable.addListener(_onPlaybackChanged);
     widget.controller.upcomingLineIdListenable.addListener(_onPlaybackChanged);
+    widget.controller.gtFlashListenable.addListener(_onGtFlashEvent);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _gtFlashCtrl.duration = AppMotion.d(context, AppMotion.gtFlashDuration);
+    if (context.disableAnimations && _gtFlashCtrl.isAnimating) {
+      _gtFlashCtrl.stop();
+      _gtFlashCtrl.value = 0.0;
+    }
+  }
+
+  void _handleTagEntryLeft(String presetId) {
+    if (!mounted) return;
+    if (widget.line.calls.any((t) => t.presetId == presetId)) return;
+    setState(() {
+      _displayedTags = [
+        for (final t in _displayedTags)
+          if (t.presetId != presetId) t,
+      ];
+    });
+  }
+
+  void _onGtFlashEvent() {
+    if (!mounted) return;
+    final event = widget.controller.gtFlashListenable.value;
+    if (event == null ||
+        event.seq == _lastGtFlashSeq ||
+        event.lineId != widget.line.id) {
+      return;
+    }
+    _lastGtFlashSeq = event.seq;
+    if (context.disableAnimations) return;
+    _gtFlashCtrl.duration = AppMotion.d(context, AppMotion.gtFlashDuration);
+    if (event.reverse) {
+      _gtFlashCtrl.reverse(from: 1.0);
+    } else {
+      _gtFlashCtrl.forward(from: 0.0);
+    }
   }
 
   @override
@@ -720,13 +875,23 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard> {
           .removeListener(_onPlaybackChanged);
       oldWidget.controller.upcomingLineIdListenable
           .removeListener(_onPlaybackChanged);
+      oldWidget.controller.gtFlashListenable.removeListener(_onGtFlashEvent);
       widget.controller.playingLineIdListenable.addListener(_onPlaybackChanged);
       widget.controller.upcomingLineIdListenable.addListener(
         _onPlaybackChanged,
       );
+      widget.controller.gtFlashListenable.addListener(_onGtFlashEvent);
     }
     if (oldWidget.line.id != widget.line.id) {
       _lastTapAt = null;
+      _displayedTags = List<LineCallTag>.from(widget.line.calls);
+    } else if (!identical(oldWidget.line.calls, widget.line.calls)) {
+      _displayedTags = _tagTransitions.sync(
+        _displayedTags,
+        widget.line.calls,
+        (tag) => tag.presetId,
+        AppMotion.d(context, AppMotion.effectsDefault),
+      );
     }
     _isPlaying = widget.controller.playingLineId == widget.line.id;
     _isUpcoming = widget.controller.upcomingLineId == widget.line.id;
@@ -761,6 +926,9 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard> {
         .removeListener(_onPlaybackChanged);
     widget.controller.upcomingLineIdListenable
         .removeListener(_onPlaybackChanged);
+    widget.controller.gtFlashListenable.removeListener(_onGtFlashEvent);
+    _tagTransitions.dispose();
+    _gtFlashCtrl.dispose();
     super.dispose();
   }
 
@@ -930,27 +1098,32 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard> {
             );
           },
         ),
-        if (line.calls.isNotEmpty || unalignedShout.isNotEmpty || isSelected) ...[
+        if (_displayedTags.isNotEmpty || unalignedShout.isNotEmpty || isSelected) ...[
           const SizedBox(height: 8),
           Wrap(
             spacing: 6,
             runSpacing: 6,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              for (final tag in line.calls)
+              for (final tag in _displayedTags)
                 if (presetMap[tag.presetId] case final preset?)
-                  CallBadgePill(
-                    preset: preset,
-                    suffix: tag.suffix,
-                    compact: true,
-                    onTap: () => widget.onOpenSuffix(tag, preset),
-                    menuItems: preset.builtIn
-                        ? null
-                        : buildCustomPresetMenuItems(
-                            context,
-                            controller: c,
-                            preset: preset,
-                          ),
+                  EntryTransition(
+                    key: ValueKey<String>('tag-entry-${tag.presetId}'),
+                    animation: _tagTransitions.animationOf(tag.presetId),
+                    leaving: _tagTransitions.isLeaving(tag.presetId),
+                    child: CallBadgePill(
+                      preset: preset,
+                      suffix: tag.suffix,
+                      compact: true,
+                      onTap: () => widget.onOpenSuffix(tag, preset),
+                      menuItems: preset.builtIn
+                          ? null
+                          : buildCustomPresetMenuItems(
+                              context,
+                              controller: c,
+                              preset: preset,
+                            ),
+                    ),
                   ),
               if (unalignedShout.isNotEmpty)
                 Container(
@@ -1064,6 +1237,7 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard> {
                     selected: line.calls.any((t) => t.presetId == preset.id),
                     compact: true,
                     showShortcut: false,
+                    enableSparkle: true,
                     onTap: () => triggerCallPresetWithUi(
                       context: context,
                       controller: c,
@@ -1129,51 +1303,90 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard> {
       ],
     );
 
+    Widget wrapGtFlash(Widget card) {
+      return AnimatedBuilder(
+        animation: _gtFlashCtrl,
+        builder: (context, child) {
+          final v = _gtFlashCtrl.value;
+          if (v <= 0.0 || v >= 1.0) {
+            return child!;
+          }
+          // Smooth bell flash peaking at ~0.58 alpha over ~400ms (and plays
+          // identically in reverse when cancelling/undoing GT).
+          final flashAlpha = math.sin(v * math.pi) * 0.58;
+          return Stack(
+            children: [
+              child!,
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: ShapeDecoration(
+                      color: scheme.warningContainer.withValues(
+                        alpha: flashAlpha,
+                      ),
+                      shape: AppShape.all(AppTokens.radiusSection),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+        child: card,
+      );
+    }
+
     if (gtAlert != null) {
-      return Semantics(
-        selected: highlighted,
-        label: line.text.original.isNotEmpty
-            ? '歌词行：${line.text.original}'
-            : '空白歌词行',
-        child: PressSurface(
-          fill: Color.alphaBlend(
-            scheme.warningContainer.withValues(alpha: highlighted ? 0.46 : 0.34),
-            scheme.surfaceContainerLow,
-          ),
-          shape: AppShape.all(AppTokens.radiusSection),
-          side: BorderSide(
-            color: scheme.warning,
-            width: highlighted ? 1.8 : 1.4,
-          ),
-          padding: const EdgeInsets.all(14),
-          tapTarget: AppTokens.minTapTargetSize,
+      return wrapGtFlash(
+        Semantics(
           selected: highlighted,
-          onPressed: _handleCardTap,
-          child: body,
+          label: line.text.original.isNotEmpty
+              ? '歌词行：${line.text.original}'
+              : '空白歌词行',
+          child: PressSurface(
+            fill: Color.alphaBlend(
+              scheme.warningContainer.withValues(
+                alpha: highlighted ? 0.46 : 0.34,
+              ),
+              scheme.surfaceContainerLow,
+            ),
+            shape: AppShape.all(AppTokens.radiusSection),
+            side: BorderSide(
+              color: scheme.warning,
+              width: highlighted ? 1.8 : 1.4,
+            ),
+            padding: const EdgeInsets.all(14),
+            tapTarget: AppTokens.minTapTargetSize,
+            selected: highlighted,
+            onPressed: _handleCardTap,
+            child: body,
+          ),
         ),
       );
     }
 
-    return Card(
-      isSelected: highlighted,
-      radius: AppTokens.radiusSection,
-      padding: const EdgeInsets.all(14),
-      shape: RoundedSuperellipseBorder(
-        borderRadius: AppTokens.radiusSectionBorder,
-        side: highlighted
-            ? BorderSide(
-                color: isSection ? sectionAccent : scheme.primary,
-                width: isPlaying ? 2.0 : 1.4,
-              )
-            : (isSection
-                  ? BorderSide(
-                      color: sectionAccent.withValues(alpha: 0.42),
-                      width: 1.2,
-                    )
-                  : BorderSide.none),
+    return wrapGtFlash(
+      Card(
+        isSelected: highlighted,
+        radius: AppTokens.radiusSection,
+        padding: const EdgeInsets.all(14),
+        shape: RoundedSuperellipseBorder(
+          borderRadius: AppTokens.radiusSectionBorder,
+          side: highlighted
+              ? BorderSide(
+                  color: isSection ? sectionAccent : scheme.primary,
+                  width: isPlaying ? 2.0 : 1.4,
+                )
+              : (isSection
+                    ? BorderSide(
+                        color: sectionAccent.withValues(alpha: 0.42),
+                        width: 1.2,
+                      )
+                    : BorderSide.none),
+        ),
+        onPressed: _handleCardTap,
+        child: body,
       ),
-      onPressed: _handleCardTap,
-      child: body,
     );
   }
 }

@@ -371,6 +371,7 @@ void main() {
           // Toggle quick tray collapse / reopen works cleanly
           await tester.tap(find.text('收起速标'));
           await tester.pump();
+          await tester.pump(const Duration(milliseconds: 500));
           expect(find.text('速标栏'), findsOneWidget);
           expect(find.text('打完跳下句'), findsNothing);
           expect(
@@ -380,6 +381,7 @@ void main() {
 
           await tester.tap(find.text('速标栏'));
           await tester.pump();
+          await tester.pump(const Duration(milliseconds: 500));
           expect(find.text('收起速标'), findsOneWidget);
           expect(find.text('打完跳下句'), findsOneWidget);
           expect(
@@ -448,16 +450,19 @@ void main() {
           // Switch route -> ArchiveView -> ExportView -> Dashboard -> MoreView cleanly
           await tester.tap(find.descendant(of: sidebar, matching: find.text('存档')));
           await tester.pump();
+          await tester.pump(const Duration(milliseconds: 260));
           expect(controller.route, StudioRoute.archive);
           expect(find.byType(ArchiveView), findsOneWidget);
 
           await tester.tap(find.descendant(of: sidebar, matching: find.text('导出')));
           await tester.pump();
+          await tester.pump(const Duration(milliseconds: 260));
           expect(controller.route, StudioRoute.export);
           expect(find.byType(ExportView), findsOneWidget);
 
           await tester.tap(find.descendant(of: sidebar, matching: find.text('更多')));
           await tester.pump();
+          await tester.pump(const Duration(milliseconds: 260));
           expect(controller.route, StudioRoute.more);
           expect(find.byType(MoreView), findsOneWidget);
 
@@ -859,6 +864,8 @@ void main() {
 
           await tester.sendKeyEvent(LogicalKeyboardKey.escape);
           await tester.pump();
+          await tester.pump(const Duration(milliseconds: 450));
+          await tester.pump();
           expect(controller.isPracticeMode, isFalse);
           expect(find.byType(PracticeOverlay), findsNothing);
 
@@ -1240,9 +1247,12 @@ void main() {
           expect(find.text('存档 1'), findsNothing);
           expect(find.text('First Saved Song'), findsOneWidget);
 
-          // Rename inline inside ArchiveView UI
+          // Rename inline inside ArchiveView UI via ContextMenuRegion
           final archiveId = controller.archives.first.id;
-          await _scrollToAndTap(tester, find.text('重命名'));
+          await tester.longPress(find.text('First Saved Song'));
+          await tester.pumpAndSettle();
+          await tester.tap(find.text('重命名'));
+          await tester.pumpAndSettle();
           await tester.enterText(
             find.widgetWithText(prism.TextField, '输入存档新名称...'),
             'Renamed Song #1',
@@ -1261,12 +1271,13 @@ void main() {
 
           // Save-as duplicate via UI & delete via controller + UI state verification
           await _scrollToAndTap(tester, find.text('另存副本'));
+          await tester.pumpAndSettle();
           await tester.enterText(
             find.widgetWithText(prism.TextField, '输入新存档名称...'),
             'Duplicate Song',
           );
           await tester.tap(find.text('确定保存'));
-          await tester.pump();
+          await tester.pumpAndSettle();
           expect(controller.archives.length, 2);
           expect(find.text('Duplicate Song'), findsWidgets);
 
@@ -2121,6 +2132,7 @@ void main() {
           final sidebar = find.byType(prism.NavigationSidebar);
           await tester.tap(find.descendant(of: sidebar, matching: find.text('存档')));
           await tester.pump();
+          await tester.pump(const Duration(milliseconds: 260));
           expect(find.byType(ArchiveView), findsOneWidget);
           await _scrollToAndTap(tester, find.text('Archive Alpha').last);
           await tester.pump();
@@ -2130,6 +2142,7 @@ void main() {
           // Return to DashboardView for timeline snap & undo assertions
           await tester.tap(find.descendant(of: sidebar, matching: find.text('主页')));
           await tester.pump();
+          await tester.pump(const Duration(milliseconds: 260));
 
           // Bug #5: Idle at 00:00.00 -> clicking 校时 on a later line refuses to corrupt timeline!
           final lines = controller.sortedLines

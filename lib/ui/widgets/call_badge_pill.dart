@@ -15,6 +15,7 @@ class CallBadgePill extends StatelessWidget {
     this.menuItems,
     this.compact = false,
     this.showShortcut = true,
+    this.enableSparkle = false,
   });
 
   final CallPreset preset;
@@ -25,6 +26,7 @@ class CallBadgePill extends StatelessWidget {
   final List<PopupMenuItem>? menuItems;
   final bool compact;
   final bool showShortcut;
+  final bool enableSparkle;
 
   /// Picks black or white text with at least 4.5:1 WCAG contrast against
   /// [background].
@@ -158,6 +160,13 @@ class CallBadgePill extends StatelessWidget {
       child: innerRow,
     );
 
+    if (enableSparkle && onTap != null) {
+      interactive = _CrossPlatformSparkleLayer(
+        color: fg.withValues(alpha: 0.24),
+        child: interactive,
+      );
+    }
+
     if (selected) {
       interactive = DecoratedBox(
         decoration: ShapeDecoration(
@@ -204,4 +213,86 @@ class CallBadgePill extends StatelessWidget {
           : interactive,
     );
   }
+}
+
+/// Triggers `prism_ui`'s [PressSparkles] on non-Android platforms (e.g. Windows)
+/// while Android already receives native sparkles inside [PressSurface].
+/// Strictly disabled when [BuildContextExtension.disableAnimations] is true.
+class _CrossPlatformSparkleLayer extends StatefulWidget {
+  const _CrossPlatformSparkleLayer({
+    required this.color,
+    required this.child,
+  });
+
+  final Color color;
+  final Widget child;
+
+  @override
+  State<_CrossPlatformSparkleLayer> createState() =>
+      _CrossPlatformSparkleLayerState();
+}
+
+class _CrossPlatformSparkleLayerState extends State<_CrossPlatformSparkleLayer>
+    with TickerProviderStateMixin {
+  final PressSparkles _sparkles = PressSparkles();
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (context.disableAnimations && !_sparkles.isEmpty) {
+      _sparkles.clear();
+    }
+  }
+
+  @override
+  void dispose() {
+    _sparkles.dispose();
+    super.dispose();
+  }
+
+  void _handlePointerDown(PointerDownEvent event) {
+    if (context.disableAnimations) return;
+    if (Theme.of(context).platform == TargetPlatform.android) return;
+    _sparkles.start(
+      event.localPosition,
+      vsync: this,
+      timing: context.motionDuration,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: _handlePointerDown,
+      child: ClipPath(
+        clipper: const ShapeBorderClipper(shape: AppShape.full),
+        child: CustomPaint(
+          foregroundPainter: _PillSparklePainter(
+            sparkles: _sparkles,
+            color: widget.color,
+          ),
+          child: widget.child,
+        ),
+      ),
+    );
+  }
+}
+
+class _PillSparklePainter extends CustomPainter {
+  _PillSparklePainter({required this.sparkles, required this.color})
+    : super(repaint: sparkles);
+
+  final PressSparkles sparkles;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (sparkles.isEmpty) return;
+    sparkles.paint(canvas, Offset.zero & size, Offset.zero, color);
+  }
+
+  @override
+  bool shouldRepaint(_PillSparklePainter oldDelegate) =>
+      oldDelegate.sparkles != sparkles || oldDelegate.color != color;
 }
