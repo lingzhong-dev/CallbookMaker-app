@@ -9,6 +9,7 @@ import '../../state/callbook_controller.dart';
 import '../../utils/aligned_calls.dart';
 import '../../utils/lrc_ruby_parser.dart';
 import '../../utils/section_detector.dart';
+import '../../utils/shortcut_validator.dart';
 import 'call_badge_pill.dart';
 import 'call_preset_dialogs.dart';
 import 'callbook_glyphs.dart';
@@ -53,7 +54,6 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
   final ScrollController _scrollController = ScrollController();
   final Map<String, GlobalKey> _lineKeys = {};
   String? _lastActiveLineId;
-  String? _lastPlayingLineId;
   String? _lastLineListSignature;
   String? _pendingScrollLineId;
   bool _showSectionPanel = false;
@@ -68,32 +68,55 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
   void initState() {
     super.initState();
     _lastActiveLineId = widget.controller.activeLineId;
-    _lastPlayingLineId = widget.controller.playingLineId;
     _lastLineListSignature = _computeLineListSignature(
       widget.controller.timelineItems,
     );
-    widget.controller.addListener(_handleFollowScroll);
-    widget.controller.playingLineIdListenable.addListener(_handleFollowScroll);
+    widget.controller.projectListenable.addListener(_handleProjectChanged);
+    widget.controller.playbackSyncListenable.addListener(_handlePlaybackSync);
   }
 
   @override
   void didUpdateWidget(covariant TimelineEditorWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.controller != widget.controller) {
-      oldWidget.controller.removeListener(_handleFollowScroll);
-      oldWidget.controller.playingLineIdListenable
-          .removeListener(_handleFollowScroll);
+      oldWidget.controller.projectListenable.removeListener(
+        _handleProjectChanged,
+      );
+      oldWidget.controller.playbackSyncListenable.removeListener(
+        _handlePlaybackSync,
+      );
       _lastActiveLineId = widget.controller.activeLineId;
-      _lastPlayingLineId = widget.controller.playingLineId;
       _lastLineListSignature = _computeLineListSignature(
         widget.controller.timelineItems,
       );
-      widget.controller.addListener(_handleFollowScroll);
-      widget.controller.playingLineIdListenable.addListener(_handleFollowScroll);
+      widget.controller.projectListenable.addListener(_handleProjectChanged);
+      widget.controller.playbackSyncListenable.addListener(_handlePlaybackSync);
     }
   }
 
-  void _handleFollowScroll() {
+  void _scheduleScrollToLine(String targetId) {
+    if (_pendingScrollLineId == targetId) return;
+    final wasScheduled = _pendingScrollLineId != null;
+    _pendingScrollLineId = targetId;
+    if (!wasScheduled) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final scheduledId = _pendingScrollLineId;
+        _pendingScrollLineId = null;
+        if (!mounted || scheduledId == null) return;
+        final ctx = _lineKeys[scheduledId]?.currentContext;
+        if (ctx != null) {
+          Scrollable.ensureVisible(
+            ctx,
+            duration: const Duration(milliseconds: 240),
+            curve: Curves.easeOutCubic,
+            alignment: 0.35,
+          );
+        }
+      });
+    }
+  }
+
+  void _handleProjectChanged() {
     final c = widget.controller;
     final items = c.timelineItems;
     final nextSig = _computeLineListSignature(items);
@@ -101,53 +124,32 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
       _lastLineListSignature = nextSig;
       final validIds = {for (final item in items) item.line.id};
       _lineKeys.removeWhere((id, _) => !validIds.contains(id));
-      _lastPlayingLineId = null;
     }
 
     final nextActive = c.activeLineId;
-    final nextPlaying = c.playingLineId;
-
-    String? targetId;
-    if (nextActive != null && nextActive != _lastActiveLineId) {
-      targetId = nextActive;
-    } else if (c.followPlayback &&
-        c.isPlaying &&
-        !c.isPracticeMode &&
-        nextPlaying != null &&
-        nextPlaying != _lastPlayingLineId) {
-      targetId = nextPlaying;
-    }
-
+    final activeChanged = nextActive != null && nextActive != _lastActiveLineId;
     _lastActiveLineId = nextActive;
-    _lastPlayingLineId = nextPlaying;
 
-    if (targetId != null && _pendingScrollLineId != targetId) {
-      final wasScheduled = _pendingScrollLineId != null;
-      _pendingScrollLineId = targetId;
-      if (!wasScheduled) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          final scheduledId = _pendingScrollLineId;
-          _pendingScrollLineId = null;
-          if (!mounted || scheduledId == null) return;
-          final ctx = _lineKeys[scheduledId]?.currentContext;
-          if (ctx != null) {
-            Scrollable.ensureVisible(
-              ctx,
-              duration: const Duration(milliseconds: 240),
-              curve: Curves.easeOutCubic,
-              alignment: 0.35,
-            );
-          }
-        });
-      }
+    if (activeChanged) {
+      _scheduleScrollToLine(nextActive);
+    }
+  }
+
+  void _handlePlaybackSync() {
+    final c = widget.controller;
+    if (!c.followPlayback || c.isPracticeMode) return;
+    final targetId = c.followTargetLineId;
+    if (targetId != null) {
+      _scheduleScrollToLine(targetId);
     }
   }
 
   @override
   void dispose() {
-    widget.controller.removeListener(_handleFollowScroll);
-    widget.controller.playingLineIdListenable
-        .removeListener(_handleFollowScroll);
+    widget.controller.projectListenable.removeListener(_handleProjectChanged);
+    widget.controller.playbackSyncListenable.removeListener(
+      _handlePlaybackSync,
+    );
     _scrollController.dispose();
     super.dispose();
   }
@@ -164,7 +166,11 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
       barrierDismissible: true,
       barrierLabel: '关闭',
       barrierColor: const Color(0x66000000),
-      pageBuilder: (ctx, _, _) => const Center(child: _CreatePresetDialog()),
+      pageBuilder: (ctx, _, _) => Center(
+        child: _CreatePresetDialog(
+          existingPresets: widget.controller.allPresets,
+        ),
+      ),
     );
 
     if (result != null && result.label.trim().isNotEmpty) {
@@ -330,7 +336,7 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
     final c = widget.controller;
     final scheme = context.colorScheme;
     final items = c.timelineItems;
-    final presetMap = {for (final p in c.allPresets) p.id: p};
+    final presetMap = c.presetMap;
     final activeLineHasGt =
         c.activeLineId != null && c.getAlertForLine(c.activeLineId!) != null;
 
@@ -650,13 +656,16 @@ class _ReactiveTimelineLineCard extends StatefulWidget {
 
 class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard> {
   late bool _isPlaying;
+  late bool _isUpcoming;
   DateTime? _lastTapAt;
 
   @override
   void initState() {
     super.initState();
     _isPlaying = widget.controller.playingLineId == widget.line.id;
+    _isUpcoming = widget.controller.upcomingLineId == widget.line.id;
     widget.controller.playingLineIdListenable.addListener(_onPlaybackChanged);
+    widget.controller.upcomingLineIdListenable.addListener(_onPlaybackChanged);
   }
 
   @override
@@ -665,19 +674,27 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard> {
     if (oldWidget.controller != widget.controller) {
       oldWidget.controller.playingLineIdListenable
           .removeListener(_onPlaybackChanged);
+      oldWidget.controller.upcomingLineIdListenable
+          .removeListener(_onPlaybackChanged);
       widget.controller.playingLineIdListenable.addListener(_onPlaybackChanged);
+      widget.controller.upcomingLineIdListenable.addListener(
+        _onPlaybackChanged,
+      );
     }
     if (oldWidget.line.id != widget.line.id) {
       _lastTapAt = null;
     }
     _isPlaying = widget.controller.playingLineId == widget.line.id;
+    _isUpcoming = widget.controller.upcomingLineId == widget.line.id;
   }
 
   void _onPlaybackChanged() {
     final nextPlaying = widget.controller.playingLineId == widget.line.id;
-    if (nextPlaying != _isPlaying) {
+    final nextUpcoming = widget.controller.upcomingLineId == widget.line.id;
+    if (nextPlaying != _isPlaying || nextUpcoming != _isUpcoming) {
       setState(() {
         _isPlaying = nextPlaying;
+        _isUpcoming = nextUpcoming;
       });
     }
   }
@@ -698,6 +715,8 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard> {
   void dispose() {
     widget.controller.playingLineIdListenable
         .removeListener(_onPlaybackChanged);
+    widget.controller.upcomingLineIdListenable
+        .removeListener(_onPlaybackChanged);
     super.dispose();
   }
 
@@ -709,9 +728,10 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard> {
     final gtAlert = widget.gtAlert;
     final isSelected = widget.isSelected;
     final isPlaying = _isPlaying;
+    final isUpcoming = _isUpcoming && !isPlaying;
 
     final scheme = context.colorScheme;
-    final highlighted = isPlaying || isSelected;
+    final highlighted = isPlaying || isSelected || isUpcoming;
     final isSection = line.kind.isSection;
     final sectionAccent = _sectionAccentColor(scheme, line.kind);
     final unalignedShout = isSection
@@ -760,6 +780,12 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard> {
                     label: 'PLAYING',
                     color: scheme.primary,
                     foregroundColor: scheme.onPrimary,
+                  )
+                else if (isUpcoming)
+                  TonalChip(
+                    label: c.siteText('即将演唱'),
+                    color: scheme.secondaryContainer,
+                    foregroundColor: scheme.onSecondaryContainer,
                   ),
               ],
             );
@@ -2520,7 +2546,9 @@ class _SplitLyricDialogState extends State<_SplitLyricDialog> {
 }
 
 class _CreatePresetDialog extends StatefulWidget {
-  const _CreatePresetDialog();
+  const _CreatePresetDialog({required this.existingPresets});
+
+  final List<CallPreset> existingPresets;
 
   @override
   State<_CreatePresetDialog> createState() => _CreatePresetDialogState();
@@ -2552,6 +2580,12 @@ class _CreatePresetDialogState extends State<_CreatePresetDialog> {
   @override
   Widget build(BuildContext context) {
     final scheme = context.colorScheme;
+    final shortcutCheck = validatePresetShortcut(
+      _shortcutCtrl.text,
+      existingPresets: widget.existingPresets,
+    );
+    final canCreate =
+        _labelCtrl.text.trim().isNotEmpty && shortcutCheck.isValid;
     return AlertDialog(
       title: '添加自定义 Call 标签',
       hasFields: true,
@@ -2561,12 +2595,14 @@ class _CreatePresetDialogState extends State<_CreatePresetDialog> {
           child: const Text('取消'),
         ),
         FilledButton(
-          onPressed: () => Navigator.of(context).pop((
-            label: _labelCtrl.text,
-            colorHex: _colorHex,
-            category: _category,
-            shortcut: _shortcutCtrl.text,
-          )),
+          onPressed: canCreate
+              ? () => Navigator.of(context).pop((
+                  label: _labelCtrl.text,
+                  colorHex: _colorHex,
+                  category: _category,
+                  shortcut: shortcutCheck.normalized,
+                ))
+              : null,
           child: const Text('创建'),
         ),
       ],
@@ -2577,12 +2613,23 @@ class _CreatePresetDialogState extends State<_CreatePresetDialog> {
           TextField(
             controller: _labelCtrl,
             decoration: const InputDecoration(hintText: '标签名称（如：园长 / 克拉普）'),
+            onChanged: (_) => setState(() {}),
           ),
           const SizedBox(height: 10),
           TextField(
             controller: _shortcutCtrl,
             decoration: const InputDecoration(hintText: '快捷键（单字符，如 Q / W）'),
+            onChanged: (_) => setState(() {}),
           ),
+          if (!shortcutCheck.isValid && shortcutCheck.errorMessage != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              shortcutCheck.errorMessage!,
+              style: AppTextStyle.caption2.of(context).copyWith(
+                color: scheme.error,
+              ),
+            ),
+          ],
           const SizedBox(height: 12),
           Wrap(
             spacing: 8,

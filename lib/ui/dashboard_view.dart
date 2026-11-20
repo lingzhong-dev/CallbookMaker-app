@@ -35,6 +35,8 @@ class _DashboardViewState extends State<DashboardView> {
   late final TextEditingController _editorNameCtrl;
   late final TextEditingController _editorNoteCtrl;
 
+  final FocusNode _titleFocus = FocusNode();
+  final FocusNode _artistFocus = FocusNode();
   final FocusNode _bpmFocus = FocusNode();
   final FocusNode _composerFocus = FocusNode();
   final FocusNode _lyricistFocus = FocusNode();
@@ -44,17 +46,13 @@ class _DashboardViewState extends State<DashboardView> {
   final FocusNode _editorNoteFocus = FocusNode();
 
   bool _showOffsetTools = false;
-  String _lastSyncedTitle = '';
-  String _lastSyncedArtist = '';
 
   @override
   void initState() {
     super.initState();
     final meta = widget.controller.project.meta;
-    _lastSyncedTitle = meta.title;
-    _lastSyncedArtist = meta.artist;
-    _titleCtrl = TextEditingController(text: _lastSyncedTitle);
-    _artistCtrl = TextEditingController(text: _lastSyncedArtist);
+    _titleCtrl = TextEditingController(text: meta.title);
+    _artistCtrl = TextEditingController(text: meta.artist);
     _bpmCtrl = TextEditingController(text: '${meta.bpm}');
     _composerCtrl = TextEditingController(text: meta.composer);
     _lyricistCtrl = TextEditingController(text: meta.lyricist);
@@ -62,7 +60,80 @@ class _DashboardViewState extends State<DashboardView> {
     _tunerCtrl = TextEditingController(text: meta.tuner);
     _editorNameCtrl = TextEditingController(text: meta.editorName);
     _editorNoteCtrl = TextEditingController(text: meta.editorNote);
+    _titleFocus.addListener(_onTitleFocusChanged);
+    _artistFocus.addListener(_onArtistFocusChanged);
     _bpmFocus.addListener(_onBpmFocusChanged);
+    _composerFocus.addListener(_onComposerFocusChanged);
+    _lyricistFocus.addListener(_onLyricistFocusChanged);
+    _vocalistFocus.addListener(_onVocalistFocusChanged);
+    _tunerFocus.addListener(_onTunerFocusChanged);
+    _editorNameFocus.addListener(_onEditorNameFocusChanged);
+    _editorNoteFocus.addListener(_onEditorNoteFocusChanged);
+    widget.controller.projectListenable.addListener(_syncMetaControllers);
+  }
+
+  void _commitTitle() {
+    final next = _titleCtrl.text;
+    if (next != widget.controller.project.meta.title) {
+      widget.controller.updateMeta(title: next);
+    }
+  }
+
+  void _commitArtist() {
+    final next = _artistCtrl.text;
+    if (next != widget.controller.project.meta.artist) {
+      widget.controller.updateMeta(artist: next);
+    }
+  }
+
+  void _commitComposer() {
+    final next = _composerCtrl.text;
+    if (next != widget.controller.project.meta.composer) {
+      widget.controller.updateMeta(composer: next);
+    }
+  }
+
+  void _commitLyricist() {
+    final next = _lyricistCtrl.text;
+    if (next != widget.controller.project.meta.lyricist) {
+      widget.controller.updateMeta(lyricist: next);
+    }
+  }
+
+  void _commitVocalist() {
+    final next = _vocalistCtrl.text;
+    if (next != widget.controller.project.meta.vocalist) {
+      widget.controller.updateMeta(vocalist: next);
+    }
+  }
+
+  void _commitTuner() {
+    final next = _tunerCtrl.text;
+    if (next != widget.controller.project.meta.tuner) {
+      widget.controller.updateMeta(tuner: next);
+    }
+  }
+
+  void _commitEditorName() {
+    final next = _editorNameCtrl.text;
+    if (next != widget.controller.project.meta.editorName) {
+      widget.controller.updateMeta(editorName: next);
+    }
+  }
+
+  void _commitEditorNote() {
+    final next = _editorNoteCtrl.text;
+    if (next != widget.controller.project.meta.editorNote) {
+      widget.controller.updateMeta(editorNote: next);
+    }
+  }
+
+  void _onTitleFocusChanged() {
+    if (!_titleFocus.hasFocus && mounted) _commitTitle();
+  }
+
+  void _onArtistFocusChanged() {
+    if (!_artistFocus.hasFocus && mounted) _commitArtist();
   }
 
   void _onBpmFocusChanged() {
@@ -71,10 +142,38 @@ class _DashboardViewState extends State<DashboardView> {
     }
   }
 
+  void _onComposerFocusChanged() {
+    if (!_composerFocus.hasFocus && mounted) _commitComposer();
+  }
+
+  void _onLyricistFocusChanged() {
+    if (!_lyricistFocus.hasFocus && mounted) _commitLyricist();
+  }
+
+  void _onVocalistFocusChanged() {
+    if (!_vocalistFocus.hasFocus && mounted) _commitVocalist();
+  }
+
+  void _onTunerFocusChanged() {
+    if (!_tunerFocus.hasFocus && mounted) _commitTuner();
+  }
+
+  void _onEditorNameFocusChanged() {
+    if (!_editorNameFocus.hasFocus && mounted) _commitEditorName();
+  }
+
+  void _onEditorNoteFocusChanged() {
+    if (!_editorNoteFocus.hasFocus && mounted) _commitEditorNote();
+  }
+
   @override
   void didUpdateWidget(covariant DashboardView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    _syncMetaControllers();
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.projectListenable.removeListener(_syncMetaControllers);
+      widget.controller.projectListenable.addListener(_syncMetaControllers);
+      _syncMetaControllers();
+    }
   }
 
   void _syncFieldIfIdle(
@@ -88,15 +187,10 @@ class _DashboardViewState extends State<DashboardView> {
   }
 
   void _syncMetaControllers() {
+    if (!mounted) return;
     final meta = widget.controller.project.meta;
-    if (meta.title != _lastSyncedTitle && _titleCtrl.text != meta.title) {
-      _titleCtrl.text = meta.title;
-    }
-    _lastSyncedTitle = meta.title;
-    if (meta.artist != _lastSyncedArtist && _artistCtrl.text != meta.artist) {
-      _artistCtrl.text = meta.artist;
-    }
-    _lastSyncedArtist = meta.artist;
+    _syncFieldIfIdle(_titleCtrl, _titleFocus, meta.title);
+    _syncFieldIfIdle(_artistCtrl, _artistFocus, meta.artist);
     _syncFieldIfIdle(_bpmCtrl, _bpmFocus, '${meta.bpm}');
     _syncFieldIfIdle(_composerCtrl, _composerFocus, meta.composer);
     _syncFieldIfIdle(_lyricistCtrl, _lyricistFocus, meta.lyricist);
@@ -108,7 +202,16 @@ class _DashboardViewState extends State<DashboardView> {
 
   @override
   void dispose() {
+    widget.controller.projectListenable.removeListener(_syncMetaControllers);
+    _titleFocus.removeListener(_onTitleFocusChanged);
+    _artistFocus.removeListener(_onArtistFocusChanged);
     _bpmFocus.removeListener(_onBpmFocusChanged);
+    _composerFocus.removeListener(_onComposerFocusChanged);
+    _lyricistFocus.removeListener(_onLyricistFocusChanged);
+    _vocalistFocus.removeListener(_onVocalistFocusChanged);
+    _tunerFocus.removeListener(_onTunerFocusChanged);
+    _editorNameFocus.removeListener(_onEditorNameFocusChanged);
+    _editorNoteFocus.removeListener(_onEditorNoteFocusChanged);
     _titleCtrl.dispose();
     _artistCtrl.dispose();
     _bpmCtrl.dispose();
@@ -118,6 +221,8 @@ class _DashboardViewState extends State<DashboardView> {
     _tunerCtrl.dispose();
     _editorNameCtrl.dispose();
     _editorNoteCtrl.dispose();
+    _titleFocus.dispose();
+    _artistFocus.dispose();
     _bpmFocus.dispose();
     _composerFocus.dispose();
     _lyricistFocus.dispose();
@@ -152,7 +257,6 @@ class _DashboardViewState extends State<DashboardView> {
 
   @override
   Widget build(BuildContext context) {
-    _syncMetaControllers();
     final c = widget.controller;
     final scheme = context.colorScheme;
     final bottomInset = BottomInsetScope.of(context);
@@ -306,16 +410,14 @@ class _DashboardViewState extends State<DashboardView> {
                   children: [
                     TextField(
                       controller: _titleCtrl,
+                      focusNode: _titleFocus,
                       style: AppTextStyle.headline
                           .of(context, emphasized: true)
                           .copyWith(color: scheme.onSurface),
                       decoration: const InputDecoration.collapsed(
                         hintText: '输入当前歌曲名称',
                       ),
-                      onChanged: (v) {
-                        _lastSyncedTitle = v;
-                        c.updateMeta(title: v);
-                      },
+                      onSubmitted: (_) => _commitTitle(),
                     ),
                     const SizedBox(height: 6),
                     Wrap(
@@ -327,16 +429,14 @@ class _DashboardViewState extends State<DashboardView> {
                           constraints: const BoxConstraints(maxWidth: 160),
                           child: TextField(
                             controller: _artistCtrl,
+                            focusNode: _artistFocus,
                             style: AppTextStyle.caption1
                                 .of(context)
                                 .copyWith(color: scheme.onSurfaceVariant),
                             decoration: const InputDecoration.collapsed(
                               hintText: '歌手 / 企划',
                             ),
-                            onChanged: (v) {
-                              _lastSyncedArtist = v;
-                              c.updateMeta(artist: v);
-                            },
+                            onSubmitted: (_) => _commitArtist(),
                           ),
                         ),
                         TonalChip(
@@ -351,10 +451,13 @@ class _DashboardViewState extends State<DashboardView> {
                 ),
               ),
               const SizedBox(width: 12),
-              ScallopedOrbButton(
-                running: c.isPlaying,
-                size: 58,
-                onToggle: c.togglePlay,
+              ListenableBuilder(
+                listenable: c.playbackListenable,
+                builder: (context, _) => ScallopedOrbButton(
+                  running: c.isPlaying,
+                  size: 58,
+                  onToggle: c.togglePlay,
+                ),
               ),
             ],
           ),
@@ -433,16 +536,19 @@ class _DashboardViewState extends State<DashboardView> {
             ],
           ),
           const SizedBox(height: 8),
-          SegmentedControl<double>(
-            segments: const [
-              (0.5, '0.5×'),
-              (0.75, '0.75×'),
-              (1.0, '1.0×'),
-              (1.1, '1.1×'),
-              (1.25, '1.25×'),
-            ],
-            value: c.playbackRate,
-            onChanged: c.setPlaybackRate,
+          ListenableBuilder(
+            listenable: c.playbackListenable,
+            builder: (context, _) => SegmentedControl<double>(
+              segments: const [
+                (0.5, '0.5×'),
+                (0.75, '0.75×'),
+                (1.0, '1.0×'),
+                (1.1, '1.1×'),
+                (1.25, '1.25×'),
+              ],
+              value: c.playbackRate,
+              onChanged: c.setPlaybackRate,
+            ),
           ),
           if (_showOffsetTools) ...[
             const SizedBox(height: 8),
@@ -535,7 +641,7 @@ class _DashboardViewState extends State<DashboardView> {
     required String hint,
     required TextEditingController controller,
     required FocusNode focusNode,
-    required ValueChanged<String> onChanged,
+    required VoidCallback onSubmitted,
     int maxLines = 1,
   }) {
     return Column(
@@ -554,7 +660,7 @@ class _DashboardViewState extends State<DashboardView> {
           maxLines: maxLines,
           minLines: maxLines,
           decoration: InputDecoration(hintText: hint),
-          onChanged: onChanged,
+          onSubmitted: (_) => onSubmitted(),
         ),
       ],
     );
@@ -618,7 +724,7 @@ class _DashboardViewState extends State<DashboardView> {
                     hint: '如：litterzy',
                     controller: _composerCtrl,
                     focusNode: _composerFocus,
-                    onChanged: (v) => c.updateMeta(composer: v),
+                    onSubmitted: _commitComposer,
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -630,7 +736,7 @@ class _DashboardViewState extends State<DashboardView> {
                     hint: '如：冥凰',
                     controller: _lyricistCtrl,
                     focusNode: _lyricistFocus,
-                    onChanged: (v) => c.updateMeta(lyricist: v),
+                    onSubmitted: _commitLyricist,
                   ),
                 ),
               ],
@@ -648,7 +754,7 @@ class _DashboardViewState extends State<DashboardView> {
                         : '如：初音ミク',
                     controller: _vocalistCtrl,
                     focusNode: _vocalistFocus,
-                    onChanged: (v) => c.updateMeta(vocalist: v),
+                    onSubmitted: _commitVocalist,
                   ),
                 ),
                 if (showTuner) ...[
@@ -661,7 +767,7 @@ class _DashboardViewState extends State<DashboardView> {
                       hint: '调教师 / 调声',
                       controller: _tunerCtrl,
                       focusNode: _tunerFocus,
-                      onChanged: (v) => c.updateMeta(tuner: v),
+                      onSubmitted: _commitTuner,
                     ),
                   ),
                 ],
@@ -681,7 +787,7 @@ class _DashboardViewState extends State<DashboardView> {
                     hint: '编者署名（导出前也可填）',
                     controller: _editorNameCtrl,
                     focusNode: _editorNameFocus,
-                    onChanged: (v) => c.updateMeta(editorName: v),
+                    onSubmitted: _commitEditorName,
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -693,7 +799,7 @@ class _DashboardViewState extends State<DashboardView> {
                     hint: 'Call 本说明 / 寄语（可选）',
                     controller: _editorNoteCtrl,
                     focusNode: _editorNoteFocus,
-                    onChanged: (v) => c.updateMeta(editorNote: v),
+                    onSubmitted: _commitEditorNote,
                   ),
                 ),
               ],

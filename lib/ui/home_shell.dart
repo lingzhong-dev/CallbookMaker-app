@@ -52,9 +52,22 @@ class _HomeShellState extends State<HomeShell> {
     final raw = line.text.original.trim().isNotEmpty
         ? line.text.original.trim()
         : (line.text.translation?.trim() ?? '空歌词行');
-    final clipped = raw.length > 14 ? '${raw.substring(0, 14)}…' : raw;
+    final chars = raw.characters;
+    final clipped = chars.length > 14 ? '${chars.take(14)}…' : raw;
     return '#${index + 1} · $clipped';
   }
+
+  ThemeMode _nextThemeMode(ThemeMode current) => switch (current) {
+    ThemeMode.system => ThemeMode.light,
+    ThemeMode.light => ThemeMode.dark,
+    ThemeMode.dark => ThemeMode.system,
+  };
+
+  String _themeModeCycleLabel(ThemeMode current) => switch (current) {
+    ThemeMode.system => '主题：跟随系统（点击切换浅色）',
+    ThemeMode.light => '主题：浅色（点击切换深色）',
+    ThemeMode.dark => '主题：深色（点击跟随系统）',
+  };
 
   @override
   void dispose() {
@@ -126,11 +139,11 @@ class _HomeShellState extends State<HomeShell> {
       return true;
     }
     if (key == LogicalKeyboardKey.arrowUp) {
-      c.stepActiveLine(-1);
+      _stepTargetLine(c, -1);
       return true;
     }
     if (key == LogicalKeyboardKey.arrowDown) {
-      c.stepActiveLine(1);
+      _stepTargetLine(c, 1);
       return true;
     }
     if (key == LogicalKeyboardKey.arrowLeft) {
@@ -163,10 +176,14 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
+    final c = widget.controller;
     return ListenableBuilder(
-      listenable: widget.controller,
+      listenable: Listenable.merge([
+        c.routeListenable,
+        c.projectListenable,
+        c.themeListenable,
+      ]),
       builder: (context, _) {
-        final c = widget.controller;
         final scheme = context.colorScheme;
         final isDark = scheme.brightness == Brightness.dark;
         final selectedIndex = _routes.indexOf(c.route);
@@ -257,11 +274,11 @@ class _HomeShellState extends State<HomeShell> {
                       ),
                       const SizedBox(width: 6),
                       Semantics(
-                        label: isDark ? '切换浅色主题' : '切换深色主题',
+                        label: _themeModeCycleLabel(c.themeMode),
                         button: true,
                         child: GestureDetector(
                           onTap: () => c.setThemeMode(
-                            isDark ? ThemeMode.light : ThemeMode.dark,
+                            _nextThemeMode(c.themeMode),
                           ),
                           child: Container(
                             width: 34,
@@ -644,25 +661,37 @@ class _HomeShellState extends State<HomeShell> {
                                           const SizedBox(height: 8),
                                           Row(
                                             children: [
-                                              GestureDetector(
-                                                onTap: c.togglePlay,
-                                                child: Container(
-                                                  width: 34,
-                                                  height: 34,
-                                                  decoration: ShapeDecoration(
-                                                    color: scheme.primary,
-                                                    shape: AppShape.circle,
-                                                  ),
-                                                  alignment: Alignment.center,
-                                                  child: GlyphIcon(
-                                                    c.isPlaying
-                                                        ? CallbookGlyphs.stop
-                                                        : CallbookGlyphs.play,
-                                                    size: 16,
-                                                    color: scheme.onPrimary,
-                                                    fill: 1,
-                                                  ),
-                                                ),
+                                              ListenableBuilder(
+                                                listenable:
+                                                    c.playbackListenable,
+                                                builder: (context, _) =>
+                                                    GestureDetector(
+                                                      onTap: c.togglePlay,
+                                                      child: Container(
+                                                        width: 34,
+                                                        height: 34,
+                                                        decoration:
+                                                            ShapeDecoration(
+                                                              color: scheme
+                                                                  .primary,
+                                                              shape: AppShape
+                                                                  .circle,
+                                                            ),
+                                                        alignment:
+                                                            Alignment.center,
+                                                        child: GlyphIcon(
+                                                          c.isPlaying
+                                                              ? CallbookGlyphs
+                                                                    .stop
+                                                              : CallbookGlyphs
+                                                                    .play,
+                                                          size: 16,
+                                                          color:
+                                                              scheme.onPrimary,
+                                                          fill: 1,
+                                                        ),
+                                                      ),
+                                                    ),
                                               ),
                                               const SizedBox(width: 10),
                                               Expanded(
@@ -898,32 +927,35 @@ class _HomeShellState extends State<HomeShell> {
         Row(
           children: [
             Expanded(
-              child: GestureDetector(
-                onTap: () => c.refreshGatewayStatus(probeDirect: true),
-                behavior: HitTestBehavior.opaque,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 8,
-                      height: 8,
-                      decoration: ShapeDecoration(
-                        color: c.backendOnline ? scheme.success : scheme.warning,
-                        shape: AppShape.circle,
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Flexible(
-                      child: Text(
-                        c.backendOnline ? '后端在线' : '纯 Dart 直连',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: AppTextStyle.caption2.of(context).copyWith(
-                          color: scheme.onSurfaceVariant,
+              child: ListenableBuilder(
+                listenable: c.gatewayListenable,
+                builder: (context, _) => GestureDetector(
+                  onTap: () => c.refreshGatewayStatus(probeDirect: true),
+                  behavior: HitTestBehavior.opaque,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 8,
+                        height: 8,
+                        decoration: ShapeDecoration(
+                          color: c.backendOnline ? scheme.success : scheme.warning,
+                          shape: AppShape.circle,
                         ),
                       ),
-                    ),
-                  ],
+                      const SizedBox(width: 6),
+                      Flexible(
+                        child: Text(
+                          c.backendOnline ? '后端在线' : '纯 Dart 直连',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppTextStyle.caption2.of(context).copyWith(
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),

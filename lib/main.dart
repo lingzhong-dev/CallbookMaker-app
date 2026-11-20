@@ -83,9 +83,10 @@ class _LiveCallStudioAppState extends State<LiveCallStudioApp> {
           home: Builder(
             builder: (innerContext) {
               final mq = MediaQuery.of(innerContext);
+              final systemScale = mq.textScaler.scale(1.0);
               return MediaQuery(
                 data: mq.copyWith(
-                  textScaler: TextScaler.linear(c.textScale),
+                  textScaler: TextScaler.linear(systemScale * c.textScale),
                 ),
                 child: DefaultTextStyle(
                   style: AppTextStyle.body.of(innerContext),

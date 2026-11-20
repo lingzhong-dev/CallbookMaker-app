@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'dart:io' show File, Platform;
+import 'dart:io' show File;
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -8,7 +8,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:prism_ui/icons/icons.dart';
 import 'package:prism_ui/prism_ui.dart';
 import 'package:share_plus/share_plus.dart';
@@ -16,6 +15,7 @@ import 'package:share_plus/share_plus.dart';
 import '../models/callbook_models.dart';
 import '../state/callbook_controller.dart';
 import '../utils/aligned_calls.dart';
+import '../utils/file_export_helper.dart';
 import '../utils/lrc_ruby_parser.dart';
 import '../utils/xlsx_export.dart';
 import 'widgets/archive_switcher_dialog.dart';
@@ -139,7 +139,7 @@ class _ExportViewState extends State<ExportView> {
         return;
       }
 
-      final presetMap = {for (final p in c.allPresets) p.id: p};
+      final presetMap = c.presetMap;
       final lines = c.sortedLines;
       final fontFamily = c.useGoogleSans ? 'GoogleSans' : null;
       final uniformCallColWidth = _measureUniformCallColumnWidth(
@@ -197,7 +197,12 @@ class _ExportViewState extends State<ExportView> {
         return;
       }
 
-      final image = await ro.toImage(pixelRatio: 2.5);
+      final safePixelRatio = computeSafePngPixelRatio(
+        logicalWidth: ro.size.width,
+        logicalHeight: ro.size.height,
+        preferredRatio: 2.5,
+      );
+      final image = await ro.toImage(pixelRatio: safePixelRatio);
       final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
       image.dispose();
       if (byteData == null) {
@@ -206,21 +211,19 @@ class _ExportViewState extends State<ExportView> {
       }
 
       final bytes = byteData.buffer.asUint8List();
-      final dir = await getTemporaryDirectory();
-      final outPath =
-          '${dir.path}${Platform.pathSeparator}${_safeFileStem(c.project.meta.title)}_callbook.png';
-      final file = File(outPath);
-      await file.writeAsBytes(bytes, flush: true);
-
-      try {
-        await Share.shareXFiles(
-          [XFile(file.path)],
-          text: '${c.project.meta.title} · Callbook',
-        );
-      } catch (_) {
-        // Desktop platforms without native share sheet still keep the written file.
+      final fileName = '${_safeFileStem(c.project.meta.title)}_callbook.png';
+      final saveResult = await saveBytesToUserLocation(
+        bytes: bytes,
+        fileName: fileName,
+        dialogTitle: '保存 CallBook PNG 长图',
+        allowedExtensions: const ['png'],
+        shareText: '${c.project.meta.title} · Callbook',
+      );
+      if (saveResult.cancelled) {
+        c.setStatus('已取消导出 PNG');
+      } else {
+        c.setStatus('PNG 长图已生成：${saveResult.savedPath ?? fileName}');
       }
-      c.setStatus('PNG 长图已生成：$outPath');
     } catch (err) {
       c.setStatus('导出 PNG 失败：$err');
     } finally {
@@ -247,21 +250,19 @@ class _ExportViewState extends State<ExportView> {
         c.allPresets,
         displayLayers: c.displayLayers,
       );
-      final dir = await getTemporaryDirectory();
-      final outPath =
-          '${dir.path}${Platform.pathSeparator}${_safeFileStem(c.project.meta.title)}_callbook.xlsx';
-      final file = File(outPath);
-      await file.writeAsBytes(bytes, flush: true);
-
-      try {
-        await Share.shareXFiles(
-          [XFile(file.path)],
-          text: '${c.project.meta.title} · Call 本 Excel (.xlsx)',
-        );
-      } catch (_) {
-        // Desktop platforms without native share sheet still keep the written file.
+      final fileName = '${_safeFileStem(c.project.meta.title)}_callbook.xlsx';
+      final saveResult = await saveBytesToUserLocation(
+        bytes: bytes,
+        fileName: fileName,
+        dialogTitle: '保存 CallBook Excel 表格',
+        allowedExtensions: const ['xlsx'],
+        shareText: '${c.project.meta.title} · Call 本 Excel (.xlsx)',
+      );
+      if (saveResult.cancelled) {
+        c.setStatus('已取消导出 Excel');
+      } else {
+        c.setStatus('Excel (.xlsx) 已生成：${saveResult.savedPath ?? fileName}');
       }
-      c.setStatus('Excel (.xlsx) 已生成：$outPath');
     } catch (err) {
       c.setStatus('导出 Excel 失败：$err');
     } finally {
@@ -291,85 +292,19 @@ class _ExportViewState extends State<ExportView> {
       return;
     }
 
-    final isWidgetTest =
-        !kIsWeb && Platform.environment.containsKey('FLUTTER_TEST');
-
-    if (kIsWeb) {
-      try {
-        await FilePicker.platform.saveFile(
-          dialogTitle: '保存 CallBook JSON 工程',
-          fileName: fileName,
-          type: FileType.custom,
-          allowedExtensions: const ['json'],
-          bytes: bytes,
-        );
-        c.setStatus('JSON 工程已导出：$fileName');
-      } catch (err) {
-        c.setStatus('导出 JSON 失败：$err');
-      }
-      return;
-    }
-
-    if (!isWidgetTest && (Platform.isAndroid || Platform.isIOS)) {
-      try {
-        final saved = await FilePicker.platform.saveFile(
-          dialogTitle: '保存 CallBook JSON 工程',
-          fileName: fileName,
-          type: FileType.custom,
-          allowedExtensions: const ['json'],
-          bytes: bytes,
-        );
-        if (saved == null) {
-          c.setStatus('已取消导出 JSON');
-          return;
-        }
-        c.setStatus('JSON 工程已导出：$fileName');
-        return;
-      } catch (_) {
-        // Fall through to temp directory + share sheet fallback.
-      }
-    } else if (!isWidgetTest &&
-        (Platform.isWindows || Platform.isMacOS || Platform.isLinux)) {
-      try {
-        final pickedPath = await FilePicker.platform.saveFile(
-          dialogTitle: '保存 CallBook JSON 工程',
-          fileName: fileName,
-          type: FileType.custom,
-          allowedExtensions: const ['json'],
-          lockParentWindow: true,
-        );
-        if (pickedPath == null) {
-          c.setStatus('已取消导出 JSON');
-          return;
-        }
-        if (pickedPath.trim().isNotEmpty) {
-          final trimmed = pickedPath.trim();
-          final targetPath = trimmed.toLowerCase().endsWith('.json')
-              ? trimmed
-              : '$trimmed.json';
-          await File(targetPath).writeAsBytes(bytes, flush: true);
-          c.setStatus('JSON 工程已导出：$targetPath');
-          return;
-        }
-      } catch (_) {
-        // Fall through to temp directory fallback if zenity/kdialog unavailable.
-      }
-    }
-
     try {
-      final dir = await getTemporaryDirectory();
-      final outPath = '${dir.path}${Platform.pathSeparator}$fileName';
-      final file = File(outPath);
-      await file.writeAsBytes(bytes, flush: true);
-      try {
-        await Share.shareXFiles(
-          [XFile(file.path)],
-          text: '${c.project.meta.title} · CallBook JSON 工程',
-        );
-      } catch (_) {
-        // Headless / desktop environments without share sheet keep written file.
+      final saveResult = await saveBytesToUserLocation(
+        bytes: bytes,
+        fileName: fileName,
+        dialogTitle: '保存 CallBook JSON 工程',
+        allowedExtensions: const ['json'],
+        shareText: '${c.project.meta.title} · CallBook JSON 工程',
+      );
+      if (saveResult.cancelled) {
+        c.setStatus('已取消导出 JSON');
+      } else {
+        c.setStatus('JSON 工程已导出：${saveResult.savedPath ?? fileName}');
       }
-      c.setStatus('JSON 工程已导出：$outPath');
     } catch (err) {
       c.setStatus('导出 JSON 失败：$err');
     }
@@ -378,7 +313,7 @@ class _ExportViewState extends State<ExportView> {
   String _buildMarkdown() {
     final c = widget.controller;
     final meta = c.project.meta;
-    final presetMap = {for (final p in c.allPresets) p.id: p};
+    final presetMap = c.presetMap;
     final creditParts = <String>[
       '艺人：${_formatCreditValue(meta.artist)}',
       '作曲：${_formatCreditValue(meta.composer)}',
@@ -464,7 +399,7 @@ class _ExportViewState extends State<ExportView> {
     final c = widget.controller;
     final scheme = context.colorScheme;
     final bottomInset = BottomInsetScope.of(context);
-    final presetMap = {for (final p in c.allPresets) p.id: p};
+    final presetMap = c.presetMap;
     final fontFamily = c.useGoogleSans ? 'GoogleSans' : null;
 
     return SingleChildScrollView(

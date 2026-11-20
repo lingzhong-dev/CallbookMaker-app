@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
 import 'package:prism_ui/icons/icons.dart';
 import 'package:prism_ui/prism_ui.dart';
@@ -25,6 +27,7 @@ class _OnboardingOverlayState extends State<OnboardingOverlay> {
   bool _userPickedSong = false;
   bool _customColorExpanded = false;
   final TextEditingController _colorCtrl = TextEditingController();
+  Timer? _colorDebounceTimer;
   Color? _parsedCustomColor;
   String? _colorError;
 
@@ -39,11 +42,13 @@ class _OnboardingOverlayState extends State<OnboardingOverlay> {
 
   @override
   void dispose() {
+    _colorDebounceTimer?.cancel();
     _colorCtrl.dispose();
     super.dispose();
   }
 
   void _onColorInputChanged(String raw) {
+    _colorDebounceTimer?.cancel();
     final trimmed = raw.trim();
     if (trimmed.isEmpty) {
       setState(() {
@@ -64,10 +69,14 @@ class _OnboardingOverlayState extends State<OnboardingOverlay> {
       _parsedCustomColor = parsed;
       _colorError = null;
     });
-    widget.controller.setSeedColor(parsed);
+    _colorDebounceTimer = Timer(const Duration(milliseconds: 300), () {
+      if (!mounted) return;
+      widget.controller.setSeedColor(parsed);
+    });
   }
 
   void _applyColorInput() {
+    _colorDebounceTimer?.cancel();
     final parsed = parseSupportColor(_colorCtrl.text);
     if (parsed == null) {
       setState(() {

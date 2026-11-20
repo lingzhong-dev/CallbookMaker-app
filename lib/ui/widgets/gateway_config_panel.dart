@@ -43,15 +43,27 @@ class _GatewayConfigPanelState extends State<GatewayConfigPanel> {
     _lastSyncedBackendUrl = c.backendUrl;
     _lastSyncedGatewayUrl = c.savedGatewayUrl;
     _lastSyncedCookie = c.savedNeteaseCookie;
-    c.addListener(_syncNetworkControllers);
+    c.gatewayListenable.addListener(_syncNetworkControllers);
+    _backendUrlFocus.addListener(_onBackendUrlFocusChanged);
+  }
+
+  void _onBackendUrlFocusChanged() {
+    if (!_backendUrlFocus.hasFocus && mounted) {
+      final trimmed = _backendCtrl.text.trim();
+      if (trimmed.isNotEmpty && trimmed != widget.controller.backendUrl) {
+        widget.controller.setBackendUrl(trimmed);
+      }
+    }
   }
 
   @override
   void didUpdateWidget(covariant GatewayConfigPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.controller != widget.controller) {
-      oldWidget.controller.removeListener(_syncNetworkControllers);
-      widget.controller.addListener(_syncNetworkControllers);
+      oldWidget.controller.gatewayListenable.removeListener(
+        _syncNetworkControllers,
+      );
+      widget.controller.gatewayListenable.addListener(_syncNetworkControllers);
     }
     if (oldWidget.collapsible != widget.collapsible && !widget.collapsible) {
       _expanded = true;
@@ -98,7 +110,8 @@ class _GatewayConfigPanelState extends State<GatewayConfigPanel> {
 
   @override
   void dispose() {
-    widget.controller.removeListener(_syncNetworkControllers);
+    widget.controller.gatewayListenable.removeListener(_syncNetworkControllers);
+    _backendUrlFocus.removeListener(_onBackendUrlFocusChanged);
     _backendCtrl.dispose();
     _gatewayUrlCtrl.dispose();
     _neteaseCookieCtrl.dispose();
@@ -111,15 +124,18 @@ class _GatewayConfigPanelState extends State<GatewayConfigPanel> {
   @override
   Widget build(BuildContext context) {
     final c = widget.controller;
-    final scheme = context.colorScheme;
-    final gw = c.gatewayStatus;
-    final isDesktop = c.isDesktopHost;
-    final account = gw.neteaseAccount?.trim() ?? '';
-    final backendNodeGatewayActive =
-        c.backendOnline &&
-        (gw.managedByBackend || (gw.gatewayOnline && gw.nodeAvailable));
+    return ListenableBuilder(
+      listenable: c.gatewayListenable,
+      builder: (context, _) {
+        final scheme = context.colorScheme;
+        final gw = c.gatewayStatus;
+        final isDesktop = c.isDesktopHost;
+        final account = gw.neteaseAccount?.trim() ?? '';
+        final backendNodeGatewayActive =
+            c.backendOnline &&
+            (gw.managedByBackend || (gw.gatewayOnline && gw.nodeAvailable));
 
-    return Card(
+        return Card(
       inert: true,
       radius: 22,
       padding: const EdgeInsets.all(14),
@@ -385,6 +401,8 @@ class _GatewayConfigPanelState extends State<GatewayConfigPanel> {
           ],
         ],
       ),
+        );
+      },
     );
   }
 }
