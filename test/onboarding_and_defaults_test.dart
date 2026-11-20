@@ -592,9 +592,9 @@ void main() {
 
           // Navigate to ThemeView via MoreView ('更多' -> '主题') & reopen onboarding
           await tester.tap(find.text('更多'));
-          await tester.pump();
+          await tester.pumpAndSettle();
           await tester.tap(find.text('主题'));
-          await tester.pump();
+          await tester.pumpAndSettle();
           await _scrollAndTap(tester, find.text('重新查看功能引导'));
           expect(controller.showOnboarding, isTrue);
           expect(controller.onboardingReopened, isTrue);

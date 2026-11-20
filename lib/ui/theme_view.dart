@@ -4,7 +4,6 @@ import 'package:prism_ui/icons/icons.dart';
 import 'package:prism_ui/prism_ui.dart';
 
 import '../state/callbook_controller.dart';
-import 'theme/app_motion.dart';
 import 'theme/app_tokens.dart';
 import 'widgets/callbook_glyphs.dart';
 
@@ -132,26 +131,23 @@ class ThemeView extends StatelessWidget {
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     for (final seed in savedSwatchSeeds)
-                      GestureDetector(
-                        onTap: () => c.setSeedColor(seed),
-                        child: AnimatedContainer(
-                          duration: AppMotion.d(
-                            context,
-                            AppMotion.effectsFast,
-                          ),
-                          curve: AppMotion.curveEffects,
-                          width: 32,
-                          height: 32,
-                          decoration: BoxDecoration(
-                            color: seed,
-                            shape: BoxShape.circle,
-                            border: seed.toARGB32() == c.seedColor.toARGB32()
-                                ? Border.all(color: scheme.onSurface, width: 3)
-                                : Border.all(
-                                    color: scheme.outlineVariant,
-                                    width: 1,
-                                  ),
-                          ),
+                      Semantics(
+                        button: true,
+                        selected: seed.toARGB32() == c.seedColor.toARGB32(),
+                        label: '主题色 ${_hexString(seed)}',
+                        child: PressSurface(
+                          fill: seed,
+                          shape: AppShape.circle,
+                          side: seed.toARGB32() == c.seedColor.toARGB32()
+                              ? BorderSide(color: scheme.onSurface, width: 3)
+                              : BorderSide(
+                                  color: scheme.outlineVariant,
+                                  width: 1,
+                                ),
+                          tapTarget: AppTokens.minTapTargetSize,
+                          selected: seed.toARGB32() == c.seedColor.toARGB32(),
+                          onPressed: () => c.setSeedColor(seed),
+                          child: const SizedBox(width: 32, height: 32),
                         ),
                       ),
                   ],
@@ -199,7 +195,7 @@ class ThemeView extends StatelessWidget {
                 ),
                 const SizedBox(height: 14),
                 Text(
-                  'Prism ColorStyle 生成算法',
+                  '配色风格',
                   style: AppTextStyle.caption1.of(context).copyWith(
                     color: scheme.onSurfaceVariant,
                   ),
@@ -225,13 +221,13 @@ class ThemeView extends StatelessWidget {
                 const SizedBox(height: 10),
                 _SwitchTileRow(
                   title: 'Liquid Glass 液态玻璃质感',
-                  subtitle: '在悬浮 NavigationDock 与模态弹窗启用液态折射效果',
+                  subtitle: '在悬浮底部导航与模态弹窗启用液态折射效果',
                   value: c.liquidGlass,
                   onChanged: c.setLiquidGlass,
                 ),
                 const SizedBox(height: 10),
                 _SwitchTileRow(
-                  title: 'Floating NavigationDock 悬浮胶囊',
+                  title: '悬浮底部导航',
                   subtitle: '移动端与紧凑窗口采用悬浮胶囊底部导航栏',
                   value: c.floatingNavDock,
                   onChanged: c.setFloatingNavDock,
@@ -480,58 +476,62 @@ class ThemeView extends StatelessWidget {
             runSpacing: 10,
             children: [
               for (final preset in curatedThemePresets)
-                GestureDetector(
-                  onTap: () => c.applyThemePreset(preset),
-                  child: Container(
-                    width: 190,
-                    padding: const EdgeInsets.all(12),
-                    decoration: ShapeDecoration(
-                      color:
-                          preset.seedColor.toARGB32() == c.seedColor.toARGB32()
-                          ? scheme.primaryContainer
-                          : scheme.surfaceContainerLow,
-                      shape: RoundedSuperellipseBorder(
-                        borderRadius: AppRadius.lg,
-                        side:
-                            preset.seedColor.toARGB32() ==
-                                c.seedColor.toARGB32()
-                            ? BorderSide(color: scheme.primary, width: 1.5)
-                            : BorderSide.none,
-                      ),
+                Semantics(
+                  button: true,
+                  selected:
+                      preset.seedColor.toARGB32() == c.seedColor.toARGB32(),
+                  label: '${preset.name} 配色方案',
+                  child: PressSurface(
+                    fill: preset.seedColor.toARGB32() == c.seedColor.toARGB32()
+                        ? scheme.primaryContainer
+                        : scheme.surfaceContainerLow,
+                    shape: const RoundedSuperellipseBorder(
+                      borderRadius: AppRadius.lg,
                     ),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 24,
-                          height: 24,
-                          decoration: BoxDecoration(
-                            color: preset.seedColor,
-                            shape: BoxShape.circle,
+                    side: preset.seedColor.toARGB32() == c.seedColor.toARGB32()
+                        ? BorderSide(color: scheme.primary, width: 1.5)
+                        : BorderSide.none,
+                    padding: const EdgeInsets.all(12),
+                    tapTarget: AppTokens.minTapTargetSize,
+                    selected:
+                        preset.seedColor.toARGB32() == c.seedColor.toARGB32(),
+                    onPressed: () => c.applyThemePreset(preset),
+                    child: SizedBox(
+                      width: 166,
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 24,
+                            height: 24,
+                            decoration: BoxDecoration(
+                              color: preset.seedColor,
+                              shape: BoxShape.circle,
+                            ),
                           ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                preset.name,
-                                style: AppTextStyle.subheadline
-                                    .of(context, emphasized: true)
-                                    .copyWith(color: scheme.onSurface),
-                              ),
-                              Text(
-                                preset.description,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: AppTextStyle.caption2.of(context).copyWith(
-                                  color: scheme.onSurfaceVariant,
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  preset.name,
+                                  style: AppTextStyle.subheadline
+                                      .of(context, emphasized: true)
+                                      .copyWith(color: scheme.onSurface),
                                 ),
-                              ),
-                            ],
+                                Text(
+                                  preset.description,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: AppTextStyle.caption2.of(context).copyWith(
+                                    color: scheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 ),

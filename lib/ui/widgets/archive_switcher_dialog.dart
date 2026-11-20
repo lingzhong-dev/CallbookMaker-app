@@ -4,6 +4,7 @@ import 'package:prism_ui/prism_ui.dart';
 
 import '../../models/callbook_models.dart';
 import '../../state/callbook_controller.dart';
+import 'app_dialog.dart';
 import 'callbook_glyphs.dart';
 
 enum _ArchiveSaveDecision { saveAndContinue, discardAndContinue, cancel }
@@ -31,10 +32,9 @@ Future<bool> confirmArchiveSaveIfNeeded(
           ? '（目标：$targetLabel）'
           : '';
 
-  final decision = await showFloatingDialog<_ArchiveSaveDecision>(
+  final decision = await showAppDialog<_ArchiveSaveDecision>(
     context: context,
-    child: Builder(
-      builder: (dialogCtx) => AlertDialog(
+    builder: (dialogCtx) => AlertDialog(
         title: '保存当前 Call 本再$actionLabel？',
         actions: [
           TextButton(
@@ -67,8 +67,7 @@ Future<bool> confirmArchiveSaveIfNeeded(
           ),
         ),
       ),
-    ),
-  );
+    );
 
   if (decision == _ArchiveSaveDecision.saveAndContinue) {
     controller.saveCurrentToArchive();
@@ -81,14 +80,12 @@ Future<void> showArchiveQuickSwitchDialog(
   BuildContext context,
   CallbookController controller,
 ) async {
-  await showFloatingDialog<void>(
+  await showAppDialog<void>(
     context: context,
-    child: Builder(
-      builder: (dialogCtx) => _ArchiveQuickSwitchContent(
-        parentContext: context,
-        dialogContext: dialogCtx,
-        controller: controller,
-      ),
+    builder: (dialogCtx) => _ArchiveQuickSwitchContent(
+      parentContext: context,
+      dialogContext: dialogCtx,
+      controller: controller,
     ),
   );
 }

@@ -1,5 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show File;
+import 'dart:io' show File, Platform;
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -11,6 +12,7 @@ import 'package:flutter/widgets.dart';
 import 'package:prism_ui/icons/icons.dart';
 import 'package:prism_ui/prism_ui.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../models/callbook_models.dart';
 import '../state/callbook_controller.dart';
@@ -19,6 +21,7 @@ import '../utils/file_export_helper.dart';
 import '../utils/lrc_ruby_parser.dart';
 import '../utils/xlsx_export.dart';
 import 'theme/app_tokens.dart';
+import 'widgets/app_dialog.dart';
 import 'widgets/archive_switcher_dialog.dart';
 import 'widgets/call_badge_pill.dart';
 import 'widgets/callbook_glyphs.dart';
@@ -44,10 +47,23 @@ class _ExportViewState extends State<ExportView> {
   bool _exportingPng = false;
   bool _exportingXlsx = false;
 
+  Future<void> _openExportedPath(String? path) async {
+    if (path == null || path.trim().isEmpty) return;
+    if (kIsWeb || Platform.environment.containsKey('FLUTTER_TEST')) return;
+    try {
+      await launchUrl(
+        Uri.file(path),
+        mode: LaunchMode.externalApplication,
+      );
+    } catch (_) {
+      widget.controller.notify('无法自动打开文件：$path', level: BannerLevel.warning);
+    }
+  }
+
   Future<bool> _promptEditorInfoBeforeExport({String? formatBadge}) async {
     final c = widget.controller;
     final meta = c.project.meta;
-    final res = await showFloatingDialog<
+    final res = await showAppDialog<
         ({
           String editorName,
           String editorNote,
@@ -58,7 +74,7 @@ class _ExportViewState extends State<ExportView> {
           String tuner,
         })>(
       context: context,
-      child: _ExportEditorInfoDialog(
+      builder: (_) => _ExportEditorInfoDialog(
         initialMeta: meta,
         formatBadge: formatBadge,
       ),
@@ -104,6 +120,12 @@ class _ExportViewState extends State<ExportView> {
       }
       if (rawJson == null || rawJson.trim().isEmpty || !mounted) {
         c.setStatus('所选 JSON 工程文件为空');
+        c.notify(
+          '导入失败：文件为空',
+          level: BannerLevel.error,
+          actionLabel: '重试',
+          onAction: _importJsonFile,
+        );
         return;
       }
 
@@ -116,8 +138,15 @@ class _ExportViewState extends State<ExportView> {
       if (!ok || !mounted) return;
 
       await c.importProjectJson(rawJson, sourceName: picked.name);
+      c.notify('已导入工程：${picked.name}', level: BannerLevel.success);
     } catch (err) {
       c.setStatus('导入 JSON 工程失败：$err');
+      c.notify(
+        '导入 JSON 工程失败：$err',
+        level: BannerLevel.error,
+        actionLabel: '重试',
+        onAction: _importJsonFile,
+      );
     }
   }
 
@@ -224,9 +253,25 @@ class _ExportViewState extends State<ExportView> {
         c.setStatus('已取消导出 PNG');
       } else {
         c.setStatus('PNG 长图已生成：${saveResult.savedPath ?? fileName}');
+        c.notify(
+          saveResult.savedPath != null
+              ? 'PNG 长图已导出（点击打开）'
+              : 'PNG 长图已生成',
+          level: BannerLevel.success,
+          actionLabel: saveResult.savedPath != null ? '打开' : null,
+          onAction: saveResult.savedPath != null
+              ? () => unawaited(_openExportedPath(saveResult.savedPath))
+              : null,
+        );
       }
     } catch (err) {
       c.setStatus('导出 PNG 失败：$err');
+      c.notify(
+        '导出 PNG 失败：$err',
+        level: BannerLevel.error,
+        actionLabel: '重试',
+        onAction: _exportCallbookPng,
+      );
     } finally {
       offscreenEntry?.remove();
       if (mounted) setState(() => _exportingPng = false);
@@ -263,9 +308,25 @@ class _ExportViewState extends State<ExportView> {
         c.setStatus('已取消导出 Excel');
       } else {
         c.setStatus('Excel (.xlsx) 已生成：${saveResult.savedPath ?? fileName}');
+        c.notify(
+          saveResult.savedPath != null
+              ? 'Excel (.xlsx) 已导出（点击打开）'
+              : 'Excel (.xlsx) 已生成',
+          level: BannerLevel.success,
+          actionLabel: saveResult.savedPath != null ? '打开' : null,
+          onAction: saveResult.savedPath != null
+              ? () => unawaited(_openExportedPath(saveResult.savedPath))
+              : null,
+        );
       }
     } catch (err) {
       c.setStatus('导出 Excel 失败：$err');
+      c.notify(
+        '导出 Excel 失败：$err',
+        level: BannerLevel.error,
+        actionLabel: '重试',
+        onAction: _exportXlsx,
+      );
     } finally {
       if (mounted) setState(() => _exportingXlsx = false);
     }
@@ -305,9 +366,25 @@ class _ExportViewState extends State<ExportView> {
         c.setStatus('已取消导出 JSON');
       } else {
         c.setStatus('JSON 工程已导出：${saveResult.savedPath ?? fileName}');
+        c.notify(
+          saveResult.savedPath != null
+              ? 'JSON 工程已导出（点击打开）'
+              : 'JSON 工程已生成',
+          level: BannerLevel.success,
+          actionLabel: saveResult.savedPath != null ? '打开' : null,
+          onAction: saveResult.savedPath != null
+              ? () => unawaited(_openExportedPath(saveResult.savedPath))
+              : null,
+        );
       }
     } catch (err) {
       c.setStatus('导出 JSON 失败：$err');
+      c.notify(
+        '导出 JSON 失败：$err',
+        level: BannerLevel.error,
+        actionLabel: '重试',
+        onAction: _exportJsonFile,
+      );
     }
   }
 
@@ -375,6 +452,7 @@ class _ExportViewState extends State<ExportView> {
     final c = widget.controller;
     await Clipboard.setData(ClipboardData(text: _buildMarkdown()));
     c.setStatus('已复制 Markdown Call 本到剪贴板');
+    c.notify('已复制 Markdown Call 本到剪贴板', level: BannerLevel.success);
   }
 
   Future<void> _shareMarkdown() async {
@@ -393,6 +471,7 @@ class _ExportViewState extends State<ExportView> {
     final c = widget.controller;
     await Clipboard.setData(ClipboardData(text: _buildMarkdown()));
     c.setStatus('已复制 Markdown Call 本到剪贴板');
+    c.notify('已复制 Markdown Call 本到剪贴板', level: BannerLevel.success);
   }
 
   @override
@@ -504,6 +583,10 @@ class _ExportViewState extends State<ExportView> {
                     ),
                   ],
                 ),
+                if (_exportingPng || _exportingXlsx) ...[
+                  const SizedBox(height: AppTokens.s12),
+                  const LinearProgressIndicator(),
+                ],
               ],
             ),
           ),

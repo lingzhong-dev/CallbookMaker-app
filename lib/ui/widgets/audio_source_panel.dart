@@ -7,37 +7,85 @@ import '../../data/default_songs.dart';
 import '../../state/callbook_controller.dart';
 import '../theme/app_tokens.dart';
 import 'archive_switcher_dialog.dart';
+import 'app_dialog.dart';
 import 'callbook_glyphs.dart';
 
 Future<void> showAudioSourceModal(
   BuildContext context,
   CallbookController controller,
 ) async {
-  await showFloatingDialog<void>(
+  await showAppAdaptiveSheetOrDialog<void>(
     context: context,
-    child: Builder(
-      builder: (dialogCtx) => AlertDialog(
-        title: '音源与歌词导入',
-        hasFields: true,
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogCtx).pop(),
-            child: const Text('关闭'),
-          ),
-        ],
-        child: SizedBox(
-          width: 460,
-          child: AudioSourcePanel(
-            controller: controller,
-            modalMode: true,
-            onImported: () {
-              if (dialogCtx.mounted) {
-                Navigator.of(dialogCtx).pop();
-              }
-            },
-          ),
+    dialogBuilder: (dialogCtx) => AlertDialog(
+      title: '音源与歌词导入',
+      hasFields: true,
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(dialogCtx).pop(),
+          child: const Text('关闭'),
+        ),
+      ],
+      child: SizedBox(
+        width: 460,
+        child: AudioSourcePanel(
+          controller: controller,
+          modalMode: true,
+          onImported: () {
+            if (dialogCtx.mounted) {
+              Navigator.of(dialogCtx).pop();
+            }
+          },
         ),
       ),
+    ),
+    sheetBuilder: (sheetCtx, scrollController) => Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const SheetDragHandle(),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '音源与歌词导入',
+                  style: AppTextStyle.headline
+                      .of(sheetCtx, emphasized: true)
+                      .copyWith(color: sheetCtx.colorScheme.onSurface),
+                ),
+              ),
+              Semantics(
+                button: true,
+                label: '关闭音源面板',
+                child: IconButton(
+                  tooltip: '关闭',
+                  icon: const GlyphIcon(Glyphs.close, size: 18),
+                  style: const ButtonStyle(
+                    minimumSize: AppTokens.minTapTargetSize,
+                  ),
+                  onPressed: () => Navigator.of(sheetCtx).pop(),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: SingleChildScrollView(
+            controller: scrollController,
+            padding: const EdgeInsets.all(AppTokens.s16),
+            child: AudioSourcePanel(
+              controller: controller,
+              modalMode: true,
+              onImported: () {
+                if (sheetCtx.mounted) {
+                  Navigator.of(sheetCtx).pop();
+                }
+              },
+            ),
+          ),
+        ),
+      ],
     ),
   );
 }
@@ -136,55 +184,61 @@ class _AudioSourcePanelState extends State<AudioSourcePanel> {
     final c = widget.controller;
     final scheme = context.colorScheme;
 
-    final body = Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (!widget.modalMode) ...[
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  '音源与歌词导入',
-                  style: AppTextStyle.headline
-                      .of(context, emphasized: true)
-                      .copyWith(color: scheme.onSurface),
-                ),
+    return ListenableBuilder(
+      listenable: Listenable.merge([c.gatewayListenable, c.projectListenable]),
+      builder: (context, _) {
+        final body = Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (!widget.modalMode) ...[
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '音源与歌词导入',
+                      style: AppTextStyle.headline
+                          .of(context, emphasized: true)
+                          .copyWith(color: scheme.onSurface),
+                    ),
+                  ),
+                  TonalChip(
+                    label: c.backendOnline ? '服务在线' : '直接连接',
+                    color: c.backendOnline
+                        ? scheme.successContainer
+                        : scheme.primaryContainer,
+                    foregroundColor: c.backendOnline
+                        ? scheme.onSuccessContainer
+                        : scheme.onPrimaryContainer,
+                  ),
+                ],
               ),
-              TonalChip(
-                label: c.backendOnline ? '服务在线' : '纯 Dart 直连',
-                color: c.backendOnline
-                    ? scheme.successContainer
-                    : scheme.primaryContainer,
-                foregroundColor: c.backendOnline
-                    ? scheme.onSuccessContainer
-                    : scheme.onPrimaryContainer,
-              ),
+              const SizedBox(height: 10),
             ],
-          ),
-          const SizedBox(height: 10),
-        ],
-        SegmentedControl<String>(
-          segments: _tabs,
-          value: _sourceTab,
-          onChanged: (v) => setState(() => _sourceTab = v),
-        ),
-        const SizedBox(height: 12),
-        if (_sourceTab == 'search') _buildSearchTab(context, c, scheme),
-        if (_sourceTab == 'local') _buildLocalTab(context, c, scheme),
-        if (_sourceTab == 'defaults') _buildDefaultSongsTab(context, c, scheme),
-      ],
-    );
+            SegmentedControl<String>(
+              segments: _tabs,
+              value: _sourceTab,
+              onChanged: (v) => setState(() => _sourceTab = v),
+            ),
+            const SizedBox(height: 12),
+            if (_sourceTab == 'search') _buildSearchTab(context, c, scheme),
+            if (_sourceTab == 'local') _buildLocalTab(context, c, scheme),
+            if (_sourceTab == 'defaults')
+              _buildDefaultSongsTab(context, c, scheme),
+          ],
+        );
 
-    if (widget.modalMode) {
-      return body;
-    }
+        if (widget.modalMode) {
+          return body;
+        }
 
-    return Card(
-      inert: true,
-      radius: AppTokens.radiusCard,
-      padding: const EdgeInsets.all(14),
-      child: body,
+        return Card(
+          inert: true,
+          radius: AppTokens.radiusCard,
+          padding: const EdgeInsets.all(14),
+          child: body,
+        );
+      },
     );
   }
 
@@ -193,26 +247,15 @@ class _AudioSourcePanelState extends State<AudioSourcePanel> {
     CallbookController c,
     ColorScheme scheme,
   ) {
+    final loadingSkeleton = c.isSearching || c.isFetchingLyrics;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: [
-        Wrap(
-          spacing: 6,
-          runSpacing: 6,
-          children: [
-            for (final (id, label) in _providers)
-              TonalChip(
-                label: label,
-                color: _searchSource == id
-                    ? scheme.primaryContainer
-                    : scheme.surfaceContainerHigh,
-                foregroundColor: _searchSource == id
-                    ? scheme.onPrimaryContainer
-                    : scheme.onSurfaceVariant,
-                onPressed: () => setState(() => _searchSource = id),
-              ),
-          ],
+        SegmentedControl<String>(
+          segments: _providers,
+          value: _searchSource,
+          onChanged: (v) => setState(() => _searchSource = v),
         ),
         if (_searchSource == 'custom_proxy' &&
             !c.gatewayStatus.cookieConfigured &&
@@ -220,7 +263,7 @@ class _AudioSourcePanelState extends State<AudioSourcePanel> {
             !c.customProxyEnabled) ...[
           const SizedBox(height: 6),
           Text(
-            '纯 Dart 直连网易云已就绪（游客模式可直接检索公开曲目与歌词；如需 VIP/完整音源可在下方粘贴 Cookie）。',
+            '直接连接网易云已就绪（游客模式可直接检索公开曲目与歌词；如需 VIP/完整音源可在下方粘贴 Cookie）。',
             style: AppTextStyle.caption1.of(context).copyWith(
               color: scheme.onSurfaceVariant,
             ),
@@ -250,7 +293,35 @@ class _AudioSourcePanelState extends State<AudioSourcePanel> {
             ),
           ],
         ),
-        if (c.searchResults.isNotEmpty) ...[
+        if (loadingSkeleton) ...[
+          const SizedBox(height: 10),
+          for (var i = 0; i < 3; i++)
+            Container(
+              margin: const EdgeInsets.only(bottom: 6),
+              padding: const EdgeInsets.symmetric(
+                horizontal: 10,
+                vertical: 10,
+              ),
+              decoration: ShapeDecoration(
+                color: scheme.surfaceContainerLow,
+                shape: AppShape.lg,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SkeletonText(
+                    width: i == 1 ? 180 : 140,
+                    style: AppTextStyle.subheadline.of(context),
+                  ),
+                  const SizedBox(height: 6),
+                  SkeletonText(
+                    width: 110,
+                    style: AppTextStyle.caption1.of(context),
+                  ),
+                ],
+              ),
+            ),
+        ] else if (c.searchResults.isNotEmpty) ...[
           const SizedBox(height: 10),
           for (final track in c.searchResults.take(widget.modalMode ? 6 : 5))
             Container(
@@ -346,8 +417,11 @@ class _AudioSourcePanelState extends State<AudioSourcePanel> {
         Row(
           children: [
             Expanded(
-              child: GestureDetector(
-                onTap: () =>
+              child: PressSurface(
+                fill: const Color(0x00000000),
+                shape: AppShape.sm,
+                tapTarget: AppTokens.minTapTargetSize,
+                onPressed: () =>
                     setState(() => _forceJapaneseRuby = !_forceJapaneseRuby),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,

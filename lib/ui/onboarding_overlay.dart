@@ -8,6 +8,7 @@ import '../data/default_songs.dart';
 import '../state/callbook_controller.dart';
 import '../utils/color_parser.dart';
 import 'theme/app_motion.dart';
+import 'theme/app_tokens.dart';
 import 'widgets/archive_switcher_dialog.dart';
 import 'widgets/callbook_glyphs.dart';
 
@@ -233,14 +234,20 @@ class _OnboardingOverlayState extends State<OnboardingOverlay> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   for (var i = 0; i < _totalSteps; i++)
-                    GestureDetector(
-                      onTap: () => setState(() => _step = i),
-                      behavior: HitTestBehavior.opaque,
-                      child: Padding(
+                    Semantics(
+                      button: true,
+                      selected: i == _step,
+                      label: '第 ${i + 1} 步，共 $_totalSteps 步',
+                      child: PressSurface(
+                        fill: const Color(0x00000000),
+                        shape: AppShape.full,
+                        tapTarget: AppTokens.minTapTargetSize,
+                        selected: i == _step,
                         padding: EdgeInsets.symmetric(
                           horizontal: isMobile ? 2 : 3,
                           vertical: 6,
                         ),
+                        onPressed: () => setState(() => _step = i),
                         child: AnimatedContainer(
                           duration: AppMotion.d(
                             context,
@@ -669,10 +676,10 @@ class _OnboardingOverlayState extends State<OnboardingOverlay> {
                     color: scheme.primaryContainer,
                     foregroundColor: scheme.onPrimaryContainer,
                   ),
-                  const TonalChip(
+                  TonalChip(
                     label: '尾句上升气流 ↑',
-                    color: Color(0xFF0284C7),
-                    foregroundColor: Color(0xFFFFFFFF),
+                    color: scheme.tertiary,
+                    foregroundColor: scheme.onTertiary,
                   ),
                 ],
               ),

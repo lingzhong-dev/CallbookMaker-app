@@ -144,40 +144,46 @@ class _GatewayConfigPanelState extends State<GatewayConfigPanel> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           if (widget.collapsible)
-            GestureDetector(
-              onTap: () => setState(() => _expanded = !_expanded),
-              behavior: HitTestBehavior.opaque,
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '网易云直连 & 可选后端服务',
-                          style: AppTextStyle.subheadline
-                              .of(context, emphasized: true)
-                              .copyWith(color: scheme.onSurface),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          c.backendOnline
-                              ? '后端注音在线 · 支持纯 Dart 直连'
-                              : '纯 Dart 引擎直连就绪（点击展开配置）',
-                          style: AppTextStyle.caption2.of(context).copyWith(
-                            color: scheme.onSurfaceVariant,
+            Semantics(
+              button: true,
+              label: _expanded ? '收起网络与账号配置' : '展开网络与账号配置',
+              child: PressSurface(
+                fill: const Color(0x00000000),
+                shape: AppShape.all(AppTokens.radiusSection),
+                tapTarget: AppTokens.minTapTargetSize,
+                onPressed: () => setState(() => _expanded = !_expanded),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '网易云直连 & 可选后端服务',
+                            style: AppTextStyle.subheadline
+                                .of(context, emphasized: true)
+                                .copyWith(color: scheme.onSurface),
                           ),
-                        ),
-                      ],
+                          const SizedBox(height: 2),
+                          Text(
+                            c.backendOnline
+                                ? '后端注音在线 · 支持直接连接'
+                                : '直接连接已就绪（点击展开配置）',
+                            style: AppTextStyle.caption2.of(context).copyWith(
+                              color: scheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                  TonalChip(
-                    label: _expanded ? '收起' : '配置',
-                    color: scheme.surfaceContainerHigh,
-                    foregroundColor: scheme.onSurface,
-                    onPressed: () => setState(() => _expanded = !_expanded),
-                  ),
-                ],
+                    TonalChip(
+                      label: _expanded ? '收起' : '配置',
+                      color: scheme.surfaceContainerHigh,
+                      foregroundColor: scheme.onSurface,
+                      onPressed: () => setState(() => _expanded = !_expanded),
+                    ),
+                  ],
+                ),
               ),
             )
           else
@@ -193,8 +199,8 @@ class _GatewayConfigPanelState extends State<GatewayConfigPanel> {
                 const SizedBox(height: 2),
                 Text(
                   c.backendOnline
-                      ? '后端注音在线 · 支持纯 Dart 直连'
-                      : '纯 Dart 引擎直连就绪 · 可选接入 FastAPI 注音服务',
+                      ? '后端注音在线 · 支持直接连接'
+                      : '直接连接已就绪 · 可选接入注音服务',
                   style: AppTextStyle.caption1.of(context).copyWith(
                     color: scheme.onSurfaceVariant,
                   ),
@@ -205,8 +211,8 @@ class _GatewayConfigPanelState extends State<GatewayConfigPanel> {
             const SizedBox(height: 10),
             Text(
               c.backendOnline
-                  ? '已连接 FastAPI 后端（日语假名/罗马音注音可用）；未开 Node 网关时自动使用内置纯 Dart 引擎直连'
-                  : '免 Node / 免后端：App 内置纯 Dart EAPI 引擎直接检索网易云与 LRCLIB；粘贴 MUSIC_U 可登录账号，可选连接 FastAPI 获取假名注音',
+                  ? '已连接注音服务后端（日语假名/罗马音注音可用）；未开网关时自动直接连接曲库'
+                  : '免后端：App 内置直接连接引擎检索网易云与 LRCLIB；粘贴 MUSIC_U 可登录账号，可选连接注音服务获取假名注音',
               style: AppTextStyle.caption1.of(context).copyWith(
                 color: scheme.onSurfaceVariant,
               ),
@@ -217,7 +223,7 @@ class _GatewayConfigPanelState extends State<GatewayConfigPanel> {
               runSpacing: 6,
               children: [
                 TonalChip(
-                  label: '纯 Dart 直连',
+                  label: '直接连接',
                   color: scheme.primaryContainer,
                   foregroundColor: scheme.onPrimaryContainer,
                 ),
@@ -259,7 +265,7 @@ class _GatewayConfigPanelState extends State<GatewayConfigPanel> {
                     focusNode: _backendUrlFocus,
                     decoration: const InputDecoration(
                       hintText:
-                          '可选 FastAPI 地址：桌面 127.0.0.1:8000 / 模拟器 10.0.2.2:8000',
+                          '可选注音服务地址：桌面 127.0.0.1:8000 / 模拟器 10.0.2.2:8000',
                     ),
                     onSubmitted: (v) => c.setBackendUrl(v),
                   ),
@@ -376,7 +382,7 @@ class _GatewayConfigPanelState extends State<GatewayConfigPanel> {
                               gw.nodeAvailable &&
                               gw.packageAvailable
                           ? '一键写入 Cookie 并启动网关'
-                          : '验证并保存 Cookie（纯 Dart 直连）'),
+                          : '验证并保存 Cookie（直接连接）'),
               ),
             ),
             if (gw.message.isNotEmpty || gw.pid != null) ...[
@@ -393,7 +399,7 @@ class _GatewayConfigPanelState extends State<GatewayConfigPanel> {
                 (!gw.nodeAvailable || !gw.packageAvailable)) ...[
               const SizedBox(height: 4),
               Text(
-                '提示：FastAPI 后端未配置 Node 网关，App 将直接使用内置纯 Dart 引擎直连网易云（同时保留后端注音增强）。',
+                '提示：注音服务后端未配置 Node 网关，App 将直接使用内置直接连接引擎检索网易云（同时保留后端注音增强）。',
                 style: AppTextStyle.caption1.of(context).copyWith(
                   color: scheme.onSurfaceVariant,
                 ),

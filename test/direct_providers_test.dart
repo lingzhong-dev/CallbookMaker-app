@@ -624,9 +624,9 @@ void main() {
           expect(captured, isEmpty);
           expect(tester.takeException(), isNull);
           expect(gatewayHeader, findsOneWidget);
-          expect(find.text('纯 Dart 直连'), findsAtLeastNWidgets(1));
+          expect(find.text('直接连接'), findsAtLeastNWidgets(1));
           expect(find.text('后端未连 (可选)'), findsOneWidget);
-          expect(find.text('验证并保存 Cookie（纯 Dart 直连）'), findsOneWidget);
+          expect(find.text('验证并保存 Cookie（直接连接）'), findsOneWidget);
           expect(find.textContaining('未检测到 Node.js'), findsNothing);
         } finally {
           FlutterError.onError = prevOnError;
@@ -686,7 +686,7 @@ void main() {
           await tester.pump(const Duration(milliseconds: 50));
 
           final gatewayHeader = find.text('网易云直连 & 可选后端服务');
-          final target = find.text('验证并保存 Cookie（纯 Dart 直连）');
+          final target = find.text('验证并保存 Cookie（直接连接）');
           await tester.scrollUntilVisible(
             target,
             240,

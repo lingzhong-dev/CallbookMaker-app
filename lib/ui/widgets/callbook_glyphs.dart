@@ -164,4 +164,37 @@ abstract final class CallbookGlyphs {
       prism.GlyphVertex(12.0, 16.6),
     ], role: prism.GlyphRole.detail),
   ]);
+
+  static const arrowUp = prism.Glyph([
+    prism.GlyphPolyline([
+      prism.GlyphVertex(12.0, 19.0),
+      prism.GlyphVertex(12.0, 5.2),
+    ], role: prism.GlyphRole.line),
+    prism.GlyphPolyline([
+      prism.GlyphVertex(6.2, 11.0),
+      prism.GlyphVertex(12.0, 5.0, 0.4),
+      prism.GlyphVertex(17.8, 11.0),
+    ], role: prism.GlyphRole.line),
+  ]);
+
+  static const currentLine = prism.Glyph([
+    prism.GlyphCircle(12.0, 12.0, 7.2),
+    prism.GlyphCircle(12.0, 12.0, 2.2, role: prism.GlyphRole.detail, solid: true),
+    prism.GlyphPolyline([
+      prism.GlyphVertex(12.0, 2.5),
+      prism.GlyphVertex(12.0, 5.0),
+    ], role: prism.GlyphRole.detail),
+    prism.GlyphPolyline([
+      prism.GlyphVertex(12.0, 19.0),
+      prism.GlyphVertex(12.0, 21.5),
+    ], role: prism.GlyphRole.detail),
+    prism.GlyphPolyline([
+      prism.GlyphVertex(2.5, 12.0),
+      prism.GlyphVertex(5.0, 12.0),
+    ], role: prism.GlyphRole.detail),
+    prism.GlyphPolyline([
+      prism.GlyphVertex(19.0, 12.0),
+      prism.GlyphVertex(21.5, 12.0),
+    ], role: prism.GlyphRole.detail),
+  ]);
 }
