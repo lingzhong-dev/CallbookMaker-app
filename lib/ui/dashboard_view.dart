@@ -11,7 +11,9 @@ import '../utils/lrc_ruby_parser.dart';
 import 'theme/app_motion.dart';
 import 'theme/app_tokens.dart';
 import 'widgets/audio_source_panel.dart';
+import 'widgets/beat_dots_indicator.dart';
 import 'widgets/callbook_glyphs.dart';
+import 'widgets/continuous_auto_scroller.dart';
 import 'widgets/line_sparkline.dart';
 import 'widgets/scalloped_orb_button.dart';
 import 'widgets/scroll_to_top_button.dart';
@@ -263,11 +265,22 @@ class _DashboardViewState extends State<DashboardView> {
 
   void _scrollToTimeline() {
     final ctx = _timelineKey.currentContext;
-    if (ctx != null) {
-      Scrollable.ensureVisible(
-        ctx,
-        duration: AppMotion.d(context, AppMotion.effectsSlow),
-        curve: AppMotion.curveEffects,
+    if (ctx == null || !_scrollController.hasClients) return;
+    final target = ContinuousAutoScroller.computeTargetOffset(
+      scrollController: _scrollController,
+      itemContext: ctx,
+      alignment: 0.0,
+    );
+    if (target == null) return;
+    if (context.disableAnimations) {
+      _scrollController.jumpTo(target);
+    } else {
+      unawaited(
+        _scrollController.animateTo(
+          target,
+          duration: AppMotion.d(context, AppMotion.effectsSlow),
+          curve: AppMotion.curveEffects,
+        ),
       );
     }
   }
@@ -290,33 +303,42 @@ class _DashboardViewState extends State<DashboardView> {
     final bottomInset = BottomInsetScope.of(context);
     return Stack(
       children: [
-        SingleChildScrollView(
-          controller: _scrollController,
-          padding: EdgeInsets.fromLTRB(16, 4, 16, 20 + bottomInset),
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final twoCols = constraints.maxWidth >= 960;
-              final leftColumn = _buildLeftControlColumn(context, c, scheme);
-              final timeline = TimelineEditorWidget(
-                key: _timelineKey,
-                controller: c,
-                compact: true,
-              );
-              if (twoCols) {
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(flex: 4, child: leftColumn),
-                    const SizedBox(width: 16),
-                    Expanded(flex: 8, child: timeline),
-                  ],
+        NotificationListener<ScrollNotification>(
+          onNotification: (notification) {
+            _timelineKey.currentState?.handleOuterScrollNotification(
+              notification,
+            );
+            return false;
+          },
+          child: SingleChildScrollView(
+            controller: _scrollController,
+            padding: EdgeInsets.fromLTRB(16, 4, 16, 20 + bottomInset),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final twoCols = constraints.maxWidth >= 960;
+                final leftColumn = _buildLeftControlColumn(context, c, scheme);
+                final timeline = TimelineEditorWidget(
+                  key: _timelineKey,
+                  controller: c,
+                  compact: true,
+                  externalScrollController: _scrollController,
                 );
-              }
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [leftColumn, const SizedBox(height: 12), timeline],
-              );
-            },
+                if (twoCols) {
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(flex: 4, child: leftColumn),
+                      const SizedBox(width: 16),
+                      Expanded(flex: 8, child: timeline),
+                    ],
+                  );
+                }
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [leftColumn, const SizedBox(height: 12), timeline],
+                );
+              },
+            ),
           ),
         ),
         ScrollToTopButton(
@@ -360,7 +382,6 @@ class _DashboardViewState extends State<DashboardView> {
     CallbookController c,
     ColorScheme scheme,
   ) {
-    final beats = c.project.meta.beatsPerBar;
     final sourceModeLabel = c.project.meta.audioUrl.isNotEmpty
         ? (c.project.meta.platform == 'local' ? '本地音频' : '在线音源')
         : '节拍器演练';
@@ -373,74 +394,82 @@ class _DashboardViewState extends State<DashboardView> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          ListenableBuilder(
-            listenable: c.playbackListenable,
-            builder: (context, _) => Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Expanded(
-                  child: Wrap(
-                    spacing: 6,
-                    runSpacing: 4,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      Text(
-                        c.siteText('播放状态'),
-                        style: AppTextStyle.caption1
-                            .of(context, emphasized: true)
-                            .copyWith(color: scheme.onSurfaceVariant),
-                      ),
-                      TonalChip(
-                        label: c.isPlaying ? '播放中' : '已暂停',
-                        color: c.isPlaying
-                            ? scheme.successContainer
-                            : scheme.surfaceContainerHigh,
-                        foregroundColor: c.isPlaying
-                            ? scheme.onSuccessContainer
-                            : scheme.onSurfaceVariant,
-                      ),
-                      TonalChip(
-                        label: sourceModeLabel,
-                        color: scheme.primaryContainer,
-                        foregroundColor: scheme.onPrimaryContainer,
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 6),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    for (var b = 1; b <= beats; b++) ...[
-                      AnimatedContainer(
-                        duration: AppMotion.d(context, AppMotion.effectsFast),
-                        curve: AppMotion.curveEffects,
-                        width: 9,
-                        height: 9,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: c.isPlaying && c.currentBeatInBar == b
-                              ? (b == 1 ? scheme.error : scheme.primary)
-                              : scheme.surfaceContainerHighest,
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: ListenableBuilder(
+                  listenable: c.playbackListenable,
+                  builder: (context, _) {
+                    final playingBg = c.isPlaying
+                        ? scheme.successContainer
+                        : scheme.surfaceContainerHigh;
+                    final playingFg = c.isPlaying
+                        ? scheme.onSuccessContainer
+                        : scheme.onSurfaceVariant;
+                    final playingLabel = c.siteText(
+                      c.isPlaying ? '播放中' : '已暂停',
+                    );
+                    final statusDuration = AppMotion.d(
+                      context,
+                      AppMotion.effectsDefault,
+                    );
+                    return Wrap(
+                      spacing: 6,
+                      runSpacing: 4,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        Text(
+                          c.siteText('播放状态'),
+                          style: AppTextStyle.caption1
+                              .of(context, emphasized: true)
+                              .copyWith(color: scheme.onSurfaceVariant),
                         ),
-                      ),
-                      const SizedBox(width: 4),
-                    ],
-                    const SizedBox(width: 2),
-                    Text(
-                      '${c.currentBar}.${c.currentBeatInBar}',
-                      style: AppTextStyle.caption1
-                          .of(context, emphasized: true)
-                          .copyWith(
-                            fontFamily: 'GoogleSans',
-                            fontFeatures: const [FontFeature.tabularFigures()],
-                            color: scheme.onSurfaceVariant,
+                        AnimatedContainer(
+                          duration: statusDuration,
+                          curve: AppMotion.curveEffects,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 4,
                           ),
-                    ),
-                  ],
+                          decoration: ShapeDecoration(
+                            color: playingBg,
+                            shape: AppShape.full,
+                          ),
+                          child: AnimatedSwitcher(
+                            duration: statusDuration,
+                            switchInCurve: AppMotion.curveEffects,
+                            switchOutCurve: AppMotion.curveEffectsReverse,
+                            child: Text(
+                              playingLabel,
+                              key: ValueKey<String>(playingLabel),
+                              style: AppTextStyle.caption1
+                                  .of(context, emphasized: true)
+                                  .copyWith(color: playingFg),
+                            ),
+                          ),
+                        ),
+                        TonalChip(
+                          label: sourceModeLabel,
+                          color: scheme.primaryContainer,
+                          foregroundColor: scheme.onPrimaryContainer,
+                        ),
+                      ],
+                    );
+                  },
                 ),
-              ],
-            ),
+              ),
+              const SizedBox(width: 6),
+              BeatDotsIndicator(
+                controller: c,
+                downbeatColor: scheme.error,
+                beatColor: scheme.primary,
+                inactiveColor: scheme.surfaceContainerHighest,
+                dotSize: 9,
+                spacing: 4,
+                showBarBeatLabel: true,
+              ),
+            ],
           ),
           const SizedBox(height: 12),
           Row(

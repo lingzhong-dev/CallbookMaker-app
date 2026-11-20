@@ -4,6 +4,7 @@ import 'package:prism_ui/icons/icons.dart';
 import 'package:prism_ui/prism_ui.dart';
 
 import '../state/callbook_controller.dart';
+import 'theme/app_motion.dart';
 import 'theme/app_tokens.dart';
 import 'widgets/callbook_glyphs.dart';
 
@@ -131,24 +132,11 @@ class ThemeView extends StatelessWidget {
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     for (final seed in savedSwatchSeeds)
-                      Semantics(
-                        button: true,
+                      _ColorSwatchButton(
+                        seed: seed,
                         selected: seed.toARGB32() == c.seedColor.toARGB32(),
                         label: '主题色 ${_hexString(seed)}',
-                        child: PressSurface(
-                          fill: seed,
-                          shape: AppShape.circle,
-                          side: seed.toARGB32() == c.seedColor.toARGB32()
-                              ? BorderSide(color: scheme.onSurface, width: 3)
-                              : BorderSide(
-                                  color: scheme.outlineVariant,
-                                  width: 1,
-                                ),
-                          tapTarget: AppTokens.minTapTargetSize,
-                          selected: seed.toARGB32() == c.seedColor.toARGB32(),
-                          onPressed: () => c.setSeedColor(seed),
-                          child: const SizedBox(width: 32, height: 32),
-                        ),
+                        onPressed: () => c.setSeedColor(seed),
                       ),
                   ],
                 ),
@@ -224,6 +212,15 @@ class ThemeView extends StatelessWidget {
                   subtitle: '在悬浮底部导航与模态弹窗启用液态折射效果',
                   value: c.liquidGlass,
                   onChanged: c.setLiquidGlass,
+                ),
+                const SizedBox(height: 10),
+                _SwitchTileRow(
+                  title: c.siteText('减少动效'),
+                  subtitle: c.siteText(
+                    '关闭液态玻璃、节拍脉动、缩放与滑动等装饰动效，仅保留按压反馈与颜色过渡',
+                  ),
+                  value: c.reduceMotion,
+                  onChanged: c.setReduceMotion,
                 ),
                 const SizedBox(height: 10),
                 _SwitchTileRow(
@@ -538,6 +535,93 @@ class ThemeView extends StatelessWidget {
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _ColorSwatchButton extends StatelessWidget {
+  const _ColorSwatchButton({
+    required this.seed,
+    required this.selected,
+    required this.label,
+    required this.onPressed,
+  });
+
+  final Color seed;
+  final bool selected;
+  final String label;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = context.colorScheme;
+    final duration = AppMotion.d(context, AppMotion.effectsFast);
+
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: label,
+      child: PressSurface(
+        fill: const Color(0x00000000),
+        shape: AppShape.circle,
+        look: PressLook.none,
+        tapTarget: AppTokens.minTapTargetSize,
+        selected: selected,
+        onPressed: onPressed,
+        child: SizedBox.square(
+          dimension: 38,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              AnimatedOpacity(
+                opacity: selected ? 1.0 : 0.0,
+                duration: duration,
+                curve: AppMotion.curveEffects,
+                child: AnimatedScale(
+                  scale: selected ? 1.0 : 0.72,
+                  duration: duration,
+                  curve: AppMotion.curveEffects,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(color: scheme.onSurface, width: 2.5),
+                    ),
+                    child: const SizedBox.square(dimension: 38),
+                  ),
+                ),
+              ),
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  color: seed,
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: selected
+                        ? scheme.surface
+                        : scheme.outlineVariant,
+                    width: selected ? 2 : 1,
+                  ),
+                ),
+                child: SizedBox.square(
+                  dimension: 30,
+                  child: Center(
+                    child: AnimatedOpacity(
+                      opacity: selected ? 1.0 : 0.0,
+                      duration: duration,
+                      curve: AppMotion.curveEffects,
+                      child: AnimatedScale(
+                        scale: selected ? 1.0 : 0.6,
+                        duration: duration,
+                        curve: AppMotion.curveEffects,
+                        child: const SelectionBadge(size: 18),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

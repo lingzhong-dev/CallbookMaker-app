@@ -115,6 +115,18 @@ sealed class TimelineItem {
   final int sortMs;
 }
 
+class GtFlashEvent {
+  const GtFlashEvent({
+    required this.lineId,
+    required this.reverse,
+    required this.seq,
+  });
+
+  final String lineId;
+  final bool reverse;
+  final int seq;
+}
+
 class TimelineLineItem extends TimelineItem {
   TimelineLineItem(this.line) : super(line.startTimeMs);
   final LyricLine line;
@@ -196,11 +208,14 @@ class CallbookController extends ChangeNotifier {
       ValueNotifier<String>('已就绪 · CallbookMaker');
   final ValueNotifier<AppBannerEvent?> _bannerNotifier =
       ValueNotifier<AppBannerEvent?>(null);
+  final ValueNotifier<GtFlashEvent?> _gtFlashNotifier =
+      ValueNotifier<GtFlashEvent?>(null);
   final ValueNotifier<int> _jumpToCurrentLineSignal = ValueNotifier<int>(0);
   final ValueNotifier<int> _scrollToTopSignal = ValueNotifier<int>(0);
   final ValueNotifier<bool> shortcutsVisibleNotifier =
       ValueNotifier<bool>(false);
   int _bannerSeq = 0;
+  int _gtFlashSeq = 0;
 
   bool _disposed = false;
 
@@ -233,6 +248,7 @@ class CallbookController extends ChangeNotifier {
   prism.ColorStyle _colorStyle = prism.ColorStyle.vivid;
   bool _pureBlack = false;
   bool _liquidGlass = true;
+  bool _reduceMotion = false;
   bool _floatingNavDock = true;
   bool _useGoogleSans = true;
   double _textScale = 1.0;
@@ -295,6 +311,7 @@ class CallbookController extends ChangeNotifier {
   ValueListenable<String?> get upcomingLineIdListenable => _upcomingLineIdNotifier;
   ValueListenable<String> get statusListenable => _statusNotifier;
   ValueListenable<AppBannerEvent?> get bannerListenable => _bannerNotifier;
+  ValueListenable<GtFlashEvent?> get gtFlashListenable => _gtFlashNotifier;
   ValueListenable<int> get jumpToCurrentLineSignal => _jumpToCurrentLineSignal;
   ValueListenable<int> get scrollToTopSignal => _scrollToTopSignal;
 
@@ -342,6 +359,7 @@ class CallbookController extends ChangeNotifier {
   prism.ColorStyle get colorStyle => _colorStyle;
   bool get pureBlack => _pureBlack;
   bool get liquidGlass => _liquidGlass;
+  bool get reduceMotion => _reduceMotion;
   bool get floatingNavDock => _floatingNavDock;
   bool get useGoogleSans => _useGoogleSans;
   double get textScale => _textScale;
@@ -892,6 +910,7 @@ class CallbookController extends ChangeNotifier {
     }
     _pureBlack = map['pureBlack'] == true;
     _liquidGlass = map['liquidGlass'] != false;
+    _reduceMotion = map['reduceMotion'] == true;
     _floatingNavDock = map['floatingNavDock'] != false;
     _useGoogleSans = map['useGoogleSans'] != false;
     _autoAdvanceOnTag = map['autoAdvanceOnTag'] == true;
@@ -1190,6 +1209,13 @@ class CallbookController extends ChangeNotifier {
     _notifyThemeChanged();
   }
 
+  void setReduceMotion(bool v) {
+    if (_reduceMotion == v) return;
+    _reduceMotion = v;
+    _saveThemePrefs();
+    _notifyThemeChanged();
+  }
+
   void setFloatingNavDock(bool v) {
     _floatingNavDock = v;
     _saveThemePrefs();
@@ -1223,6 +1249,7 @@ class CallbookController extends ChangeNotifier {
     _colorStyle = curatedThemePresets.first.style;
     _pureBlack = curatedThemePresets.first.pureBlack;
     _liquidGlass = true;
+    _reduceMotion = false;
     _floatingNavDock = true;
     _useGoogleSans = true;
     _textScale = 1.0;
@@ -1238,6 +1265,7 @@ class CallbookController extends ChangeNotifier {
         'colorStyle': _colorStyle.index,
         'pureBlack': _pureBlack,
         'liquidGlass': _liquidGlass,
+        'reduceMotion': _reduceMotion,
         'floatingNavDock': _floatingNavDock,
         'useGoogleSans': _useGoogleSans,
         'autoAdvanceOnTag': _autoAdvanceOnTag,
@@ -1601,8 +1629,17 @@ class CallbookController extends ChangeNotifier {
 
   bool undoLastTimelineEdit() {
     if (_undoHistory.isEmpty) return false;
+    final prevAlertLineIds = _alertByLineIdCache.keys.toSet();
     final entry = _undoHistory.removeLast();
     _setProject(_normalizeProjectAlerts(entry.project));
+    final nextAlertLineIds = _alertByLineIdCache.keys.toSet();
+    final removedGtLines = prevAlertLineIds.difference(nextAlertLineIds);
+    final addedGtLines = nextAlertLineIds.difference(prevAlertLineIds);
+    if (removedGtLines.isNotEmpty) {
+      _emitGtFlash(removedGtLines.first, reverse: true);
+    } else if (addedGtLines.isNotEmpty) {
+      _emitGtFlash(addedGtLines.first, reverse: false);
+    }
     final fallbackId = sortedLines.isNotEmpty ? sortedLines.first.id : null;
     if (entry.activeLineId != null &&
         _project.lines.any((l) => l.id == entry.activeLineId)) {
@@ -2045,6 +2082,14 @@ class CallbookController extends ChangeNotifier {
     return best.id;
   }
 
+  void _emitGtFlash(String lineId, {required bool reverse}) {
+    _gtFlashNotifier.value = GtFlashEvent(
+      lineId: lineId,
+      reverse: reverse,
+      seq: ++_gtFlashSeq,
+    );
+  }
+
   void toggleLineGtAlert({String? lineId}) {
     final ordered = sortedLines;
     final targetId = lineId ?? _pickTargetLineForGt();
@@ -2074,6 +2119,7 @@ class CallbookController extends ChangeNotifier {
       _syncEngine();
       schedulePersist();
       _setStatusInternal('已取消该句的 GT 警报');
+      _emitGtFlash(targetId, reverse: true);
       _playbackNotifier.notifyListeners();
       _notifyProjectChanged();
       return;
@@ -2089,6 +2135,7 @@ class CallbookController extends ChangeNotifier {
     _syncEngine();
     schedulePersist();
     _setStatusInternal('已为歌词行开启 GT 警报 · ${targetLine.text.original}');
+    _emitGtFlash(targetId, reverse: false);
     _playbackNotifier.notifyListeners();
     _notifyProjectChanged();
   }
@@ -3123,6 +3170,7 @@ class CallbookController extends ChangeNotifier {
     _upcomingLineIdNotifier.dispose();
     _statusNotifier.dispose();
     _bannerNotifier.dispose();
+    _gtFlashNotifier.dispose();
     _jumpToCurrentLineSignal.dispose();
     _scrollToTopSignal.dispose();
     shortcutsVisibleNotifier.dispose();

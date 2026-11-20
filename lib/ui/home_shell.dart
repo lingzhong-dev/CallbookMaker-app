@@ -14,6 +14,7 @@ import 'export_view.dart';
 import 'more_view.dart';
 import 'onboarding_overlay.dart';
 import 'practice_overlay.dart';
+import 'theme/app_motion.dart';
 import 'theme/app_tokens.dart';
 import 'widgets/app_dialog.dart';
 import 'widgets/audio_source_panel.dart';
@@ -30,15 +31,43 @@ class HomeShell extends StatefulWidget {
   State<HomeShell> createState() => _HomeShellState();
 }
 
-class _HomeShellState extends State<HomeShell> {
+class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
   bool _mobileQuickTrayOpen = true;
   int _lastBannerId = 0;
+  late bool _practiceMounted = widget.controller.isPracticeMode;
+  late bool _onboardingMounted = widget.controller.showOnboarding;
+  late final AnimationController _quickTrayCtrl = AnimationController(
+    vsync: this,
+    duration: AppMotion.spatialDefaultDuration,
+    value: _mobileQuickTrayOpen &&
+            widget.controller.route == StudioRoute.dashboard
+        ? 1.0
+        : 0.0,
+  );
+  late final CurvedAnimation _quickTrayCurve = CurvedAnimation(
+    parent: _quickTrayCtrl,
+    curve: SpringCurve(
+      AppMotion.spatialDefault,
+      seconds: AppMotion.spatialDefaultDuration.inMilliseconds / 1000.0,
+    ),
+    reverseCurve: AppMotion.curveEffectsReverse,
+  );
 
   @override
   void initState() {
     super.initState();
     HardwareKeyboard.instance.addHandler(_handleHardwareKeyEvent);
     widget.controller.bannerListenable.addListener(_handleBannerEvent);
+    widget.controller.routeListenable.addListener(_handleRouteOrOverlayChange);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _quickTrayCtrl.duration = AppMotion.d(
+      context,
+      AppMotion.spatialDefaultDuration,
+    );
   }
 
   @override
@@ -46,7 +75,55 @@ class _HomeShellState extends State<HomeShell> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.controller != widget.controller) {
       oldWidget.controller.bannerListenable.removeListener(_handleBannerEvent);
+      oldWidget.controller.routeListenable.removeListener(
+        _handleRouteOrOverlayChange,
+      );
       widget.controller.bannerListenable.addListener(_handleBannerEvent);
+      widget.controller.routeListenable.addListener(
+        _handleRouteOrOverlayChange,
+      );
+      _practiceMounted = widget.controller.isPracticeMode;
+      _onboardingMounted = widget.controller.showOnboarding;
+    }
+  }
+
+  void _handleRouteOrOverlayChange() {
+    if (!mounted) return;
+    final c = widget.controller;
+    var needsSetState = false;
+    if (c.isPracticeMode && !_practiceMounted) {
+      _practiceMounted = true;
+      needsSetState = true;
+    }
+    if (c.showOnboarding && !_onboardingMounted) {
+      _onboardingMounted = true;
+      needsSetState = true;
+    }
+    _syncQuickTrayAnimation();
+    if (needsSetState) {
+      setState(() {});
+    }
+  }
+
+  void _syncQuickTrayAnimation() {
+    if (!mounted) return;
+    final shouldShow =
+        _mobileQuickTrayOpen &&
+        widget.controller.route == StudioRoute.dashboard;
+    _quickTrayCtrl.duration = AppMotion.d(
+      context,
+      AppMotion.spatialDefaultDuration,
+    );
+    if (shouldShow) {
+      if (_quickTrayCtrl.value < 1.0 &&
+          _quickTrayCtrl.status != AnimationStatus.forward) {
+        _quickTrayCtrl.forward();
+      }
+    } else {
+      if (_quickTrayCtrl.value > 0.0 &&
+          _quickTrayCtrl.status != AnimationStatus.reverse) {
+        _quickTrayCtrl.reverse();
+      }
     }
   }
 
@@ -119,7 +196,12 @@ class _HomeShellState extends State<HomeShell> {
   @override
   void dispose() {
     widget.controller.bannerListenable.removeListener(_handleBannerEvent);
+    widget.controller.routeListenable.removeListener(
+      _handleRouteOrOverlayChange,
+    );
     HardwareKeyboard.instance.removeHandler(_handleHardwareKeyEvent);
+    _quickTrayCurve.dispose();
+    _quickTrayCtrl.dispose();
     super.dispose();
   }
 
@@ -270,6 +352,29 @@ class _HomeShellState extends State<HomeShell> {
                   rootResetNonce: c.moreRootResetNonce,
                 ),
               };
+              final switchedPage = PageTransitionSwitcher(
+                duration: AppMotion.d(context, AppMotion.tabDuration),
+                layoutBuilder: (entries) => Stack(
+                  fit: StackFit.expand,
+                  children: entries,
+                ),
+                transitionBuilder: (child, primaryAnimation, secondaryAnimation) {
+                  final fadeIn = primaryAnimation.drive(
+                    CurveTween(curve: AppMotion.tabCurve),
+                  );
+                  final fadeOut = ReverseAnimation(secondaryAnimation).drive(
+                    CurveTween(curve: AppMotion.tabCurve),
+                  );
+                  return FadeTransition(
+                    opacity: fadeIn,
+                    child: FadeTransition(opacity: fadeOut, child: child),
+                  );
+                },
+                child: KeyedSubtree(
+                  key: ValueKey<StudioRoute>(c.route),
+                  child: pageContent,
+                ),
+              );
 
               final appBar = Container(
                 padding: EdgeInsets.fromLTRB(
@@ -418,23 +523,39 @@ class _HomeShellState extends State<HomeShell> {
                 child: Column(
                   children: [
                     appBar,
-                    Expanded(child: pageContent),
+                    Expanded(child: switchedPage),
                   ],
                 ),
               );
+
+              final trayActive =
+                  c.route == StudioRoute.dashboard && _mobileQuickTrayOpen;
+              final mobileBaseInset = c.floatingNavDock
+                  ? NavigationDock.insetOf(context)
+                  : 56.0 + MediaQuery.paddingOf(context).bottom;
 
               return Stack(
                 fit: StackFit.expand,
                 children: [
                   if (isMobile)
-                    BottomInsetScope(
-                      inset: (c.floatingNavDock
-                              ? NavigationDock.insetOf(context)
-                              : 56.0 + MediaQuery.paddingOf(context).bottom) +
-                          (c.route == StudioRoute.dashboard &&
-                                  _mobileQuickTrayOpen
-                              ? 168
-                              : 24),
+                    TweenAnimationBuilder<double>(
+                      tween: Tween<double>(
+                        end: trayActive ? 168.0 : 24.0,
+                      ),
+                      duration: AppMotion.d(
+                        context,
+                        AppMotion.spatialDefaultDuration,
+                      ),
+                      curve: SpringCurve(
+                        AppMotion.spatialDefault,
+                        seconds:
+                            AppMotion.spatialDefaultDuration.inMilliseconds /
+                            1000.0,
+                      ),
+                      builder: (context, trayInset, child) => BottomInsetScope(
+                        inset: mobileBaseInset + trayInset,
+                        child: child!,
+                      ),
                       child: mainColumn,
                     )
                   else
@@ -520,10 +641,13 @@ class _HomeShellState extends State<HomeShell> {
                                     label: _mobileQuickTrayOpen ? '收起速标' : '速标栏',
                                     color: scheme.surfaceContainerHigh,
                                     foreground: scheme.onSurface,
-                                    onTap: () => setState(
-                                      () => _mobileQuickTrayOpen =
-                                          !_mobileQuickTrayOpen,
-                                    ),
+                                    onTap: () {
+                                      setState(
+                                        () => _mobileQuickTrayOpen =
+                                            !_mobileQuickTrayOpen,
+                                      );
+                                      _syncQuickTrayAnimation();
+                                    },
                                   ),
                                   const SizedBox(width: 8),
                                   Tooltip(
@@ -556,38 +680,68 @@ class _HomeShellState extends State<HomeShell> {
                                 ],
                               ),
                             ),
-                          if (_mobileQuickTrayOpen &&
-                              c.route == StudioRoute.dashboard)
-                            ListenableBuilder(
-                              listenable: c.playingLineIdListenable,
-                              builder: (context, _) {
-                                final ordered = c.sortedLines;
-                                final targetLine = c.resolveLineForQuickTag();
-                                final targetIdx = targetLine == null
-                                    ? -1
-                                    : ordered.indexWhere(
-                                        (l) => l.id == targetLine.id,
-                                      );
-                                return Padding(
-                                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
-                                  child: DecoratedBox(
-                                    decoration: ShapeDecoration(
-                                      color: scheme.surfaceContainer,
-                                      shape: AppShape.xl,
-                                      shadows: [
-                                        BoxShadow(
-                                          color: scheme.shadow
-                                              .withValues(alpha: 0.14),
-                                          blurRadius: 18,
-                                          offset: const Offset(0, 6),
+                          if (c.route == StudioRoute.dashboard)
+                            AnimatedBuilder(
+                              animation: _quickTrayCtrl,
+                              builder: (context, child) {
+                                final factor = _quickTrayCurve.value.clamp(
+                                  0.0,
+                                  1.0,
+                                );
+                                if (_quickTrayCtrl.isDismissed && !trayActive) {
+                                  return const SizedBox.shrink();
+                                }
+                                return IgnorePointer(
+                                  ignoring: !trayActive,
+                                  child: ClipRect(
+                                    child: SizeTransition(
+                                      sizeFactor: _quickTrayCurve,
+                                      alignment: Alignment.topCenter,
+                                      child: FadeTransition(
+                                        opacity: AlwaysStoppedAnimation<double>(
+                                          factor,
                                         ),
-                                      ],
+                                        child: child,
+                                      ),
                                     ),
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(10),
-                                      child: Column(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
+                                  ),
+                                );
+                              },
+                              child: ListenableBuilder(
+                                listenable: c.playingLineIdListenable,
+                                builder: (context, _) {
+                                  final ordered = c.sortedLines;
+                                  final targetLine = c.resolveLineForQuickTag();
+                                  final targetIdx = targetLine == null
+                                      ? -1
+                                      : ordered.indexWhere(
+                                          (l) => l.id == targetLine.id,
+                                        );
+                                  return Padding(
+                                    padding: const EdgeInsets.fromLTRB(
+                                      16,
+                                      4,
+                                      16,
+                                      4,
+                                    ),
+                                    child: DecoratedBox(
+                                      decoration: ShapeDecoration(
+                                        color: scheme.surfaceContainer,
+                                        shape: AppShape.xl,
+                                        shadows: [
+                                          BoxShadow(
+                                            color: scheme.shadow
+                                                .withValues(alpha: 0.14),
+                                            blurRadius: 18,
+                                            offset: const Offset(0, 6),
+                                          ),
+                                        ],
+                                      ),
+                                      child: Padding(
+                                        padding: const EdgeInsets.all(10),
+                                        child: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
                                           Row(
                                             children: [
                                               Expanded(
@@ -672,6 +826,7 @@ class _HomeShellState extends State<HomeShell> {
                                                   selected: isActive,
                                                   compact: true,
                                                   showShortcut: false,
+                                                  enableSparkle: true,
                                                   onTap: () =>
                                                       triggerCallPresetWithUi(
                                                         context: context,
@@ -912,6 +1067,7 @@ class _HomeShellState extends State<HomeShell> {
                                 );
                               },
                             ),
+                            ),
                           if (c.floatingNavDock)
                             NavigationDock(
                               destinations: [
@@ -962,8 +1118,26 @@ class _HomeShellState extends State<HomeShell> {
                       ),
                     ),
 
-                  if (c.isPracticeMode) PracticeOverlay(controller: c),
-                  if (c.showOnboarding) OnboardingOverlay(controller: c),
+                  if (_practiceMounted || c.isPracticeMode)
+                    PracticeOverlay(
+                      controller: c,
+                      visible: c.isPracticeMode,
+                      onExitComplete: () {
+                        if (mounted && !c.isPracticeMode) {
+                          setState(() => _practiceMounted = false);
+                        }
+                      },
+                    ),
+                  if (_onboardingMounted || c.showOnboarding)
+                    OnboardingOverlay(
+                      controller: c,
+                      visible: c.showOnboarding,
+                      onExitComplete: () {
+                        if (mounted && !c.showOnboarding) {
+                          setState(() => _onboardingMounted = false);
+                        }
+                      },
+                    ),
                 ],
               );
             },

@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/physics.dart';
 import 'package:flutter/widgets.dart';
 import 'package:prism_ui/icons/icons.dart';
 import 'package:prism_ui/prism_ui.dart';
@@ -14,7 +15,8 @@ final Morph _startMorph = Morph(
   MaterialShapes.cookie9Sided,
 );
 
-/// FlClash signature M3 Expressive Circle -> Cookie-9Sided Play/Stop Orb button.
+/// M3 Expressive Circle -> Cookie-9Sided Play/Stop Orb button driven by
+/// `prism_ui`'s [dropletSpring] [SpringSimulation].
 class ScallopedOrbButton extends StatefulWidget {
   const ScallopedOrbButton({
     super.key,
@@ -33,44 +35,42 @@ class ScallopedOrbButton extends StatefulWidget {
 
 class _ScallopedOrbButtonState extends State<ScallopedOrbButton>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _controller = AnimationController(
+  late final AnimationController _controller = AnimationController.unbounded(
     vsync: this,
-    duration: AppMotion.spatialDefaultDuration,
     value: widget.running ? 1.0 : 0.0,
-  );
-  late final CurvedAnimation _progress = CurvedAnimation(
-    parent: _controller,
-    curve: SpringCurve(
-      AppMotion.spatialDefault,
-      seconds: AppMotion.spatialDefaultDuration.inMilliseconds / 1000.0,
-    ),
-    reverseCurve: AppMotion.curveEffectsReverse,
   );
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _controller.duration = AppMotion.d(
-      context,
-      AppMotion.spatialDefaultDuration,
-    );
+    if (context.disableAnimations && _controller.isAnimating) {
+      _controller.stop();
+      _controller.value = widget.running ? 1.0 : 0.0;
+    }
   }
 
   @override
   void didUpdateWidget(covariant ScallopedOrbButton oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.running != widget.running) {
-      if (widget.running) {
-        _controller.forward();
+      final target = widget.running ? 1.0 : 0.0;
+      if (context.disableAnimations) {
+        _controller.stop();
+        _controller.value = target;
       } else {
-        _controller.reverse();
+        final simulation = SpringSimulation(
+          dropletSpring,
+          _controller.value,
+          target,
+          _controller.velocity,
+        );
+        _controller.animateWith(simulation);
       }
     }
   }
 
   @override
   void dispose() {
-    _progress.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -102,21 +102,36 @@ class _ScallopedOrbButtonState extends State<ScallopedOrbButton>
                 alignment: Alignment.center,
                 children: [
                   AnimatedBuilder(
-                    animation: _progress,
+                    animation: _controller,
                     builder: (_, _) => CustomPaint(
                       size: Size.square(widget.size),
                       painter: _OrbMorphPainter(
-                        progress: _progress.value.clamp(0.0, 1.0),
+                        progress: _controller.value,
                         color: fill,
                         shadow: shadow,
                       ),
                     ),
                   ),
-                  GlyphIcon(
-                    widget.running ? CallbookGlyphs.stop : CallbookGlyphs.play,
-                    color: fg,
-                    fill: 1,
-                    size: widget.size * 0.38,
+                  AnimatedSwitcher(
+                    duration: AppMotion.d(context, AppMotion.effectsFast),
+                    switchInCurve: AppMotion.curveEffects,
+                    switchOutCurve: AppMotion.curveEffectsReverse,
+                    transitionBuilder: (child, animation) => FadeTransition(
+                      opacity: animation,
+                      child: ScaleTransition(
+                        scale: Tween<double>(begin: 0.6, end: 1.0).animate(
+                          animation,
+                        ),
+                        child: child,
+                      ),
+                    ),
+                    child: GlyphIcon(
+                      widget.running ? CallbookGlyphs.stop : CallbookGlyphs.play,
+                      key: ValueKey<bool>(widget.running),
+                      color: fg,
+                      fill: 1,
+                      size: widget.size * 0.38,
+                    ),
                   ),
                 ],
               ),
@@ -141,7 +156,8 @@ class _OrbMorphPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final path = _startMorph.toPath(progress: progress);
+    final clamped = progress.clamp(0.0, 1.0);
+    final path = _startMorph.toPath(progress: clamped);
     final turn = progress * 2 * math.pi / 9;
 
     canvas
