@@ -21,6 +21,22 @@ import '../utils/shortcut_validator.dart';
 
 enum StudioRoute { dashboard, export, archive, more }
 
+class AppBannerEvent {
+  const AppBannerEvent({
+    required this.id,
+    required this.text,
+    this.level = prism.BannerLevel.info,
+    this.actionLabel,
+    this.onAction,
+  });
+
+  final int id;
+  final String text;
+  final prism.BannerLevel level;
+  final String? actionLabel;
+  final VoidCallback? onAction;
+}
+
 class CuratedThemePreset {
   const CuratedThemePreset({
     required this.id,
@@ -149,6 +165,7 @@ class CallbookController extends ChangeNotifier {
       onEnded: () {
         if (_disposed) return;
         _isPlaying = false;
+        _followPausedByScrollTop = false;
         _playbackNotifier.notifyListeners();
         notifyListeners();
       },
@@ -177,6 +194,13 @@ class CallbookController extends ChangeNotifier {
   final ValueNotifier<String?> _upcomingLineIdNotifier = ValueNotifier<String?>(null);
   final ValueNotifier<String> _statusNotifier =
       ValueNotifier<String>('已就绪 · CallbookMaker');
+  final ValueNotifier<AppBannerEvent?> _bannerNotifier =
+      ValueNotifier<AppBannerEvent?>(null);
+  final ValueNotifier<int> _jumpToCurrentLineSignal = ValueNotifier<int>(0);
+  final ValueNotifier<int> _scrollToTopSignal = ValueNotifier<int>(0);
+  final ValueNotifier<bool> shortcutsVisibleNotifier =
+      ValueNotifier<bool>(false);
+  int _bannerSeq = 0;
 
   bool _disposed = false;
 
@@ -221,6 +245,7 @@ class CallbookController extends ChangeNotifier {
   int _sourceSwitchSeq = 0;
   bool _isPracticeMode = false;
   bool _followPlayback = true;
+  bool _followPausedByScrollTop = false;
   bool _autoAdvanceOnTag = false;
   bool _metronomeEnabled = true;
   double _metronomeVolume = 0.95;
@@ -234,6 +259,7 @@ class CallbookController extends ChangeNotifier {
   bool _backendOnline = false;
   bool _customProxyEnabled = false;
   bool _isSearching = false;
+  bool _isFetchingLyrics = false;
   bool _isConfiguringGateway = false;
   bool _isLaunchingBackend = false;
   GatewayStatusInfo _gatewayStatus = const GatewayStatusInfo();
@@ -268,8 +294,13 @@ class CallbookController extends ChangeNotifier {
   ValueListenable<String?> get playingLineIdListenable => _playingLineIdNotifier;
   ValueListenable<String?> get upcomingLineIdListenable => _upcomingLineIdNotifier;
   ValueListenable<String> get statusListenable => _statusNotifier;
+  ValueListenable<AppBannerEvent?> get bannerListenable => _bannerNotifier;
+  ValueListenable<int> get jumpToCurrentLineSignal => _jumpToCurrentLineSignal;
+  ValueListenable<int> get scrollToTopSignal => _scrollToTopSignal;
 
   // Getters
+  bool get isFetchingLyrics => _isFetchingLyrics;
+  bool get followPausedByScrollTop => _followPausedByScrollTop;
   CallProject get project => _project;
   bool get canUndo => _undoHistory.isNotEmpty;
   String? get lastUndoLabel =>
@@ -1068,7 +1099,57 @@ class CallbookController extends ChangeNotifier {
 
   void setFollowPlayback(bool value) {
     _followPlayback = value;
+    if (value) {
+      _followPausedByScrollTop = false;
+    }
     _notifyProjectChanged();
+  }
+
+  /// Pauses automatic playback following when the user taps "Back to Top"
+  /// during active playback, allowing a one-tap return to the current line.
+  void pauseFollowFromScrollToTop() {
+    if (!_isPlaying) return;
+    _followPausedByScrollTop = true;
+    _followPlayback = false;
+    _playbackNotifier.notifyListeners();
+    _notifyProjectChanged();
+  }
+
+  /// Restores automatic playback following and triggers a scroll back to the
+  /// active/upcoming playback line.
+  void resumeFollowFromScrollToTop() {
+    _followPausedByScrollTop = false;
+    _followPlayback = true;
+    syncPlaybackState(forceNotify: true);
+    _jumpToCurrentLineSignal.value++;
+    _playbackNotifier.notifyListeners();
+    _notifyProjectChanged();
+  }
+
+  void toggleShortcutsPanel([bool? visible]) {
+    shortcutsVisibleNotifier.value =
+        visible ?? !shortcutsVisibleNotifier.value;
+  }
+
+  void triggerScrollToTop() {
+    _scrollToTopSignal.value++;
+  }
+
+  void notify(
+    String text, {
+    prism.BannerLevel level = prism.BannerLevel.info,
+    String? actionLabel,
+    VoidCallback? onAction,
+  }) {
+    if (_disposed) return;
+    _bannerSeq++;
+    _bannerNotifier.value = AppBannerEvent(
+      id: _bannerSeq,
+      text: text,
+      level: level,
+      actionLabel: actionLabel,
+      onAction: onAction,
+    );
   }
 
   void setAutoAdvanceOnTag(bool value) {
@@ -1173,6 +1254,7 @@ class CallbookController extends ChangeNotifier {
       if (_isPlaying) {
         await _audio.pause();
         _isPlaying = false;
+        _followPausedByScrollTop = false;
         _playbackNotifier.notifyListeners();
       } else {
         final started = await _audio.play();
@@ -2277,6 +2359,9 @@ class CallbookController extends ChangeNotifier {
   }
 
   Future<void> loadRemoteTrack(TrackSummary summary) async {
+    _isFetchingLyrics = true;
+    _gatewayNotifier.notifyListeners();
+    notifyListeners();
     try {
       final providerName =
           summary.provider.isNotEmpty ? summary.provider : summary.platform;
@@ -2429,6 +2514,15 @@ class CallbookController extends ChangeNotifier {
       );
     } catch (err) {
       _setStatusInternal('导入曲目失败：$err');
+      notify(
+        '导入失败：$err',
+        level: prism.BannerLevel.error,
+        actionLabel: '重试',
+        onAction: () => unawaited(loadRemoteTrack(summary)),
+      );
+    } finally {
+      _isFetchingLyrics = false;
+      _gatewayNotifier.notifyListeners();
     }
     _playbackNotifier.notifyListeners();
     notifyListeners();
@@ -3028,6 +3122,10 @@ class CallbookController extends ChangeNotifier {
     _playingLineIdNotifier.dispose();
     _upcomingLineIdNotifier.dispose();
     _statusNotifier.dispose();
+    _bannerNotifier.dispose();
+    _jumpToCurrentLineSignal.dispose();
+    _scrollToTopSignal.dispose();
+    shortcutsVisibleNotifier.dispose();
     super.dispose();
   }
 }

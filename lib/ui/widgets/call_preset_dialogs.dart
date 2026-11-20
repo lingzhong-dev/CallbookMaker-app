@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/widgets.dart';
@@ -6,6 +7,8 @@ import 'package:prism_ui/prism_ui.dart';
 
 import '../../models/callbook_models.dart';
 import '../../state/callbook_controller.dart';
+import '../theme/app_tokens.dart';
+import 'app_dialog.dart';
 import 'callbook_glyphs.dart';
 
 const List<String> customPresetColorPalette = [
@@ -102,16 +105,11 @@ Future<String?> showSingAlongInputDialog(
   String initialValue = '',
   bool isEditing = false,
 }) {
-  return showGeneralDialog<String>(
+  return showAppDialog<String>(
     context: context,
-    barrierDismissible: true,
-    barrierLabel: '关闭',
-    barrierColor: const Color(0x66000000),
-    pageBuilder: (ctx, _, _) => Center(
-      child: _SingAlongDialogModal(
-        initialValue: initialValue,
-        isEditing: isEditing,
-      ),
+    builder: (ctx) => _SingAlongDialogModal(
+      initialValue: initialValue,
+      isEditing: isEditing,
     ),
   );
 }
@@ -189,6 +187,38 @@ class _SingAlongDialogModalState extends State<_SingAlongDialogModal> {
   }
 }
 
+List<PopupMenuItem> buildCustomPresetMenuItems(
+  BuildContext context, {
+  required CallbookController controller,
+  required CallPreset preset,
+}) {
+  if (preset.builtIn) return const [];
+  return [
+    PopupMenuItem(
+      label: '修改名称 / 颜色',
+      onPressed: () => unawaited(
+        showEditCustomPresetDialog(
+          context,
+          controller: controller,
+          preset: preset,
+        ),
+      ),
+    ),
+    PopupMenuItem(
+      label: '删除自定义标签',
+      glyph: CallbookGlyphs.trash,
+      danger: true,
+      onPressed: () => unawaited(
+        showDeleteCustomPresetDialog(
+          context,
+          controller: controller,
+          preset: preset,
+        ),
+      ),
+    ),
+  ];
+}
+
 Future<void> showCustomPresetContextMenu(
   BuildContext context, {
   required CallbookController controller,
@@ -197,12 +227,9 @@ Future<void> showCustomPresetContextMenu(
 }) async {
   if (preset.builtIn) return;
 
-  final action = await showGeneralDialog<_PresetContextAction>(
+  final action = await showAppDialog<_PresetContextAction>(
     context: context,
-    barrierDismissible: true,
-    barrierLabel: '关闭菜单',
-    barrierColor: const Color(0x14000000),
-    pageBuilder: (ctx, _, _) {
+    builder: (ctx) {
       final size = MediaQuery.sizeOf(ctx);
       final scheme = ctx.colorScheme;
       const menuWidth = 204.0;
@@ -373,14 +400,9 @@ Future<void> showEditCustomPresetDialog(
 }) async {
   if (preset.builtIn) return;
 
-  final result = await showGeneralDialog<({String label, String colorHex})>(
+  final result = await showAppDialog<({String label, String colorHex})>(
     context: context,
-    barrierDismissible: true,
-    barrierLabel: '关闭',
-    barrierColor: const Color(0x66000000),
-    pageBuilder: (ctx, _, _) => Center(
-      child: _EditCustomPresetModal(preset: preset),
-    ),
+    builder: (ctx) => _EditCustomPresetModal(preset: preset),
   );
 
   if (result != null && result.label.trim().isNotEmpty) {
@@ -477,26 +499,24 @@ class _EditCustomPresetModalState extends State<_EditCustomPresetModal> {
             runSpacing: 8,
             children: [
               for (final hex in customPresetColorPalette)
-                GestureDetector(
-                  onTap: () => setState(() {
-                    _selectedColorHex = hex;
-                    _hexCtrl.text = hex;
-                  }),
-                  child: Container(
-                    width: 28,
-                    height: 28,
-                    decoration: BoxDecoration(
-                      color: Color(
-                        int.parse('FF${hex.substring(1)}', radix: 16),
-                      ),
-                      shape: BoxShape.circle,
-                      border: _selectedColorHex.toUpperCase() == hex
-                          ? Border.all(
-                              color: scheme.onSurface,
-                              width: 2.5,
-                            )
-                          : null,
+                Semantics(
+                  button: true,
+                  selected: _selectedColorHex.toUpperCase() == hex,
+                  label: '颜色 $hex',
+                  child: PressSurface(
+                    fill: Color(
+                      int.parse('FF${hex.substring(1)}', radix: 16),
                     ),
+                    shape: AppShape.circle,
+                    side: _selectedColorHex.toUpperCase() == hex
+                        ? BorderSide(color: scheme.onSurface, width: 2.5)
+                        : BorderSide.none,
+                    tapTarget: AppTokens.minTapTargetSize,
+                    onPressed: () => setState(() {
+                      _selectedColorHex = hex;
+                      _hexCtrl.text = hex;
+                    }),
+                    child: const SizedBox(width: 28, height: 28),
                   ),
                 ),
             ],
@@ -534,29 +554,24 @@ Future<void> showDeleteCustomPresetDialog(
       ? '（当前已挂载于 $usedCount 句歌词，删除后将同步移除对应徽章）'
       : '';
 
-  final confirmed = await showGeneralDialog<bool>(
+  final confirmed = await showAppDialog<bool>(
     context: context,
-    barrierDismissible: true,
-    barrierLabel: '关闭',
-    barrierColor: const Color(0x66000000),
-    pageBuilder: (ctx, _, _) => Center(
-      child: AlertDialog(
-        title: '删除自定义标签',
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('确认删除'),
-          ),
-        ],
-        child: Text(
-          '确定要删除自定义标签「${preset.label}」吗？$usageNote',
-          style: AppTextStyle.caption1.of(ctx).copyWith(
-            color: ctx.colorScheme.onSurfaceVariant,
-          ),
+    builder: (ctx) => AlertDialog(
+      title: '删除自定义标签',
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(false),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(ctx).pop(true),
+          child: const Text('确认删除'),
+        ),
+      ],
+      child: Text(
+        '确定要删除自定义标签「${preset.label}」吗？$usageNote',
+        style: AppTextStyle.caption1.of(ctx).copyWith(
+          color: ctx.colorScheme.onSurfaceVariant,
         ),
       ),
     ),

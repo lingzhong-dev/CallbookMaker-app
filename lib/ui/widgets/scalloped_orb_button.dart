@@ -6,6 +6,7 @@ import 'package:prism_ui/prism_ui.dart';
 import 'package:prism_ui/shapes/shapes.dart';
 
 import '../theme/app_motion.dart';
+import '../theme/app_tokens.dart';
 import 'callbook_glyphs.dart';
 
 final Morph _startMorph = Morph(
@@ -81,32 +82,45 @@ class _ScallopedOrbButtonState extends State<ScallopedOrbButton>
     final fg = scheme.onPrimary;
     final shadow = scheme.primary.withValues(alpha: 0.34);
 
-    return GestureDetector(
-      onTap: widget.onToggle,
-      child: ElasticPress(
-        child: SizedBox.square(
-          dimension: widget.size,
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              AnimatedBuilder(
-                animation: _progress,
-                builder: (_, _) => CustomPaint(
-                  size: Size.square(widget.size),
-                  painter: _OrbMorphPainter(
-                    progress: _progress.value.clamp(0.0, 1.0),
-                    color: fill,
-                    shadow: shadow,
+    final label = widget.running ? '停止' : '播放';
+    return Semantics(
+      button: true,
+      label: label,
+      child: Tooltip(
+        message: '$label（Space）',
+        child: PressSurface(
+          fill: const Color(0x00000000),
+          shape: AppShape.circle,
+          look: PressLook.none,
+          ringStandsOff: true,
+          tapTarget: AppTokens.minTapTargetSize,
+          onPressed: widget.onToggle,
+          child: ElasticPress(
+            child: SizedBox.square(
+              dimension: widget.size,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  AnimatedBuilder(
+                    animation: _progress,
+                    builder: (_, _) => CustomPaint(
+                      size: Size.square(widget.size),
+                      painter: _OrbMorphPainter(
+                        progress: _progress.value.clamp(0.0, 1.0),
+                        color: fill,
+                        shadow: shadow,
+                      ),
+                    ),
                   ),
-                ),
+                  GlyphIcon(
+                    widget.running ? CallbookGlyphs.stop : CallbookGlyphs.play,
+                    color: fg,
+                    fill: 1,
+                    size: widget.size * 0.38,
+                  ),
+                ],
               ),
-              GlyphIcon(
-                widget.running ? CallbookGlyphs.stop : CallbookGlyphs.play,
-                color: fg,
-                fill: 1,
-                size: widget.size * 0.38,
-              ),
-            ],
+            ),
           ),
         ),
       ),

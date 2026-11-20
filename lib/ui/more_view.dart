@@ -12,6 +12,7 @@ import '../constants/app_info.dart';
 import '../state/callbook_controller.dart';
 import 'theme/app_tokens.dart';
 import 'theme_view.dart';
+import 'widgets/app_dialog.dart';
 import 'widgets/callbook_glyphs.dart';
 import 'widgets/gateway_config_panel.dart';
 
@@ -34,20 +35,23 @@ class MoreView extends StatefulWidget {
 }
 
 class _MoreViewState extends State<MoreView> {
-  _MoreSubPage _subPage = _MoreSubPage.root;
+  final GlobalKey<NavigatorState> _navKey = GlobalKey<NavigatorState>();
 
   @override
   void didUpdateWidget(covariant MoreView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.rootResetNonce != oldWidget.rootResetNonce &&
-        _subPage != _MoreSubPage.root) {
-      setState(() => _subPage = _MoreSubPage.root);
+    if (widget.rootResetNonce != oldWidget.rootResetNonce) {
+      _navKey.currentState?.popUntil((route) => route.isFirst);
     }
   }
 
   Future<void> _openGithubUrl() async {
     await Clipboard.setData(const ClipboardData(text: kDeveloperGithubUrl));
     widget.controller.setStatus('已复制 GitHub 主页链接 ($kDeveloperGithubUrl)');
+    widget.controller.notify(
+      '已复制 GitHub 主页链接',
+      level: BannerLevel.success,
+    );
 
     if (widget.onLaunchExternalUrl != null) {
       await widget.onLaunchExternalUrl!(kDeveloperGithubUrl);
@@ -71,50 +75,48 @@ class _MoreViewState extends State<MoreView> {
 
   Future<void> _showLicenseDialog(BuildContext context) async {
     final scheme = context.colorScheme;
-    await showFloatingDialog<void>(
+    await showAppDialog<void>(
       context: context,
-      child: Builder(
-        builder: (dialogCtx) => AlertDialog(
-          title: '$kAppLicenseName 开源协议',
-          actions: [
-            FilledButton(
-              onPressed: () => Navigator.of(dialogCtx).pop(),
-              child: const Text('关闭'),
-            ),
-          ],
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 320),
-            child: SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'GNU GENERAL PUBLIC LICENSE\nVersion 3, 29 June 2007',
-                    style: AppTextStyle.subheadline
-                        .of(dialogCtx, emphasized: true)
-                        .copyWith(color: scheme.onSurface),
+      builder: (dialogCtx) => AlertDialog(
+        title: '$kAppLicenseName 开源协议',
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(),
+            child: const Text('关闭'),
+          ),
+        ],
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 320),
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'GNU GENERAL PUBLIC LICENSE\nVersion 3, 29 June 2007',
+                  style: AppTextStyle.subheadline
+                      .of(dialogCtx, emphasized: true)
+                      .copyWith(color: scheme.onSurface),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'CallbookMaker（Version $kAppVersion）依据 GNU GPL v3.0 自由软件开源协议发布。'
+                  '你可以自由运行、研究、修改并分发本软件及其衍生版本，前提是衍生作品同样遵循 GPL v3.0 协议并公开对应源代码。',
+                  style: AppTextStyle.caption1.of(dialogCtx).copyWith(
+                    color: scheme.onSurfaceVariant,
+                    height: 1.45,
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'CallbookMaker（Version $kAppVersion）依据 GNU GPL v3.0 自由软件开源协议发布。'
-                    '你可以自由运行、研究、修改并分发本软件及其衍生版本，前提是衍生作品同样遵循 GPL v3.0 协议并公开对应源代码。',
-                    style: AppTextStyle.caption1.of(dialogCtx).copyWith(
-                      color: scheme.onSurfaceVariant,
-                      height: 1.45,
-                    ),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  'Copyright (C) 2025-2026 $kDeveloperGithubId\n'
+                  'Repository License: GNU General Public License v3.0\n'
+                  'This program comes with ABSOLUTELY NO WARRANTY.',
+                  style: AppTextStyle.caption2.of(dialogCtx).copyWith(
+                    color: scheme.onSurfaceVariant,
+                    height: 1.45,
                   ),
-                  const SizedBox(height: 10),
-                  Text(
-                    'Copyright (C) 2025-2026 $kDeveloperGithubId\n'
-                    'Repository License: GNU General Public License v3.0\n'
-                    'This program comes with ABSOLUTELY NO WARRANTY.',
-                    style: AppTextStyle.caption2.of(dialogCtx).copyWith(
-                      color: scheme.onSurfaceVariant,
-                      height: 1.45,
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ),
@@ -122,33 +124,58 @@ class _MoreViewState extends State<MoreView> {
     );
   }
 
+  void _openSubPage(BuildContext navCtx, _MoreSubPage page) {
+    Navigator.of(navCtx).push<void>(
+      CardPageRoute<void>(
+        builder: (routeCtx) => switch (page) {
+          _MoreSubPage.root => _buildRootMenu(routeCtx),
+          _MoreSubPage.gateway => _buildSubPageScaffold(
+            routeCtx,
+            title: '网关配置',
+            child: SingleChildScrollView(
+              padding: EdgeInsets.fromLTRB(
+                16,
+                4,
+                16,
+                20 + BottomInsetScope.of(routeCtx),
+              ),
+              child: GatewayConfigPanel(
+                controller: widget.controller,
+                collapsible: false,
+              ),
+            ),
+          ),
+          _MoreSubPage.theme => _buildSubPageScaffold(
+            routeCtx,
+            title: '主题',
+            child: ThemeView(controller: widget.controller),
+          ),
+          _MoreSubPage.about => _buildAboutPage(routeCtx),
+        },
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return switch (_subPage) {
-      _MoreSubPage.root => _buildRootMenu(context),
-      _MoreSubPage.gateway => _buildSubPageScaffold(
-        context,
-        title: '网关配置',
-        child: SingleChildScrollView(
-          padding: EdgeInsets.fromLTRB(
-            16,
-            4,
-            16,
-            20 + BottomInsetScope.of(context),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) {
+          _navKey.currentState?.maybePop();
+        }
+      },
+      child: Navigator(
+        key: _navKey,
+        onGenerateInitialRoutes: (navigator, initialRoute) => [
+          PageRouteBuilder<void>(
+            pageBuilder: (navCtx, _, _) => _buildRootMenu(navCtx),
+            transitionDuration: Duration.zero,
+            reverseTransitionDuration: Duration.zero,
           ),
-          child: GatewayConfigPanel(
-            controller: widget.controller,
-            collapsible: false,
-          ),
-        ),
+        ],
       ),
-      _MoreSubPage.theme => _buildSubPageScaffold(
-        context,
-        title: '主题',
-        child: ThemeView(controller: widget.controller),
-      ),
-      _MoreSubPage.about => _buildAboutPage(context),
-    };
+    );
   }
 
   Widget _buildRootMenu(BuildContext context) {
@@ -174,9 +201,9 @@ class _MoreViewState extends State<MoreView> {
                   iconColor: scheme.onPrimaryContainer,
                   title: c.siteText('网关配置'),
                   subtitle: c.backendOnline
-                      ? '后端注音在线 · 支持纯 Dart 直连'
-                      : '纯 Dart 直连就绪 · Cookie 与可选后端地址',
-                  onTap: () => setState(() => _subPage = _MoreSubPage.gateway),
+                      ? '后端注音在线 · 支持直接连接'
+                      : '直接连接就绪 · Cookie 与可选后端地址',
+                  onTap: () => _openSubPage(context, _MoreSubPage.gateway),
                 ),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -191,7 +218,7 @@ class _MoreViewState extends State<MoreView> {
                   iconColor: scheme.onSecondaryContainer,
                   title: c.siteText('主题'),
                   subtitle: 'HCT 色彩调色盘 · 深浅模式 · Prism 质感控制',
-                  onTap: () => setState(() => _subPage = _MoreSubPage.theme),
+                  onTap: () => _openSubPage(context, _MoreSubPage.theme),
                 ),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -205,8 +232,9 @@ class _MoreViewState extends State<MoreView> {
                   iconBackground: scheme.surfaceContainerHigh,
                   iconColor: scheme.primary,
                   title: c.siteText('关于'),
-                  subtitle: '$kAppDisplayName · Version $kAppVersion · $kAppLicenseName',
-                  onTap: () => setState(() => _subPage = _MoreSubPage.about),
+                  subtitle:
+                      '$kAppDisplayName · Version $kAppVersion · $kAppLicenseName',
+                  onTap: () => _openSubPage(context, _MoreSubPage.about),
                 ),
               ],
             ),
@@ -222,29 +250,38 @@ class _MoreViewState extends State<MoreView> {
     required Widget child,
   }) {
     final scheme = context.colorScheme;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 2, 16, 8),
-          child: Row(
-            children: [
-              _BackChevronButton(
-                semanticLabel: '返回更多',
-                onTap: () => setState(() => _subPage = _MoreSubPage.root),
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.escape): () =>
+            Navigator.of(context).maybePop(),
+      },
+      child: DecoratedBox(
+        decoration: BoxDecoration(color: scheme.surface),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 2, 16, 8),
+              child: Row(
+                children: [
+                  _BackChevronButton(
+                    semanticLabel: '返回更多',
+                    onTap: () => Navigator.of(context).maybePop(),
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    title,
+                    style: AppTextStyle.headline
+                        .of(context, emphasized: true)
+                        .copyWith(color: scheme.onSurface),
+                  ),
+                ],
               ),
-              const SizedBox(width: 4),
-              Text(
-                title,
-                style: AppTextStyle.headline
-                    .of(context, emphasized: true)
-                    .copyWith(color: scheme.onSurface),
-              ),
-            ],
-          ),
+            ),
+            Expanded(child: child),
+          ],
         ),
-        Expanded(child: child),
-      ],
+      ),
     );
   }
 
@@ -252,22 +289,29 @@ class _MoreViewState extends State<MoreView> {
     final scheme = context.colorScheme;
     final bottomInset = BottomInsetScope.of(context);
 
-    return CustomScrollView(
-      slivers: [
-        SliverPadding(
-          padding: EdgeInsets.fromLTRB(20, 4, 20, 20 + bottomInset),
-          sliver: SliverFillRemaining(
-            hasScrollBody: false,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: _BackChevronButton(
-                    semanticLabel: '返回更多',
-                    onTap: () => setState(() => _subPage = _MoreSubPage.root),
-                  ),
-                ),
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.escape): () =>
+            Navigator.of(context).maybePop(),
+      },
+      child: DecoratedBox(
+        decoration: BoxDecoration(color: scheme.surface),
+        child: CustomScrollView(
+          slivers: [
+            SliverPadding(
+              padding: EdgeInsets.fromLTRB(20, 4, 20, 20 + bottomInset),
+              sliver: SliverFillRemaining(
+                hasScrollBody: false,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: _BackChevronButton(
+                        semanticLabel: '返回更多',
+                        onTap: () => Navigator.of(context).maybePop(),
+                      ),
+                    ),
                 const SizedBox(height: 12),
 
                 // Upper Section (matched to reference layout: centered rounded icon + App Name + Version)
@@ -387,42 +431,30 @@ class _MoreViewState extends State<MoreView> {
                   height: 1,
                   color: scheme.outlineVariant.withValues(alpha: 0.35),
                 ),
-                GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: _openGithubUrl,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'GitHub 主页',
-                                style: AppTextStyle.subheadline
-                                    .of(context, emphasized: true)
-                                    .copyWith(color: scheme.onSurface),
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                kDeveloperGithubUrl,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: AppTextStyle.caption1
-                                    .of(context)
-                                    .copyWith(color: scheme.primary),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        GlyphIcon(
-                          Glyphs.chevronForward,
-                          size: 16,
-                          color: scheme.onSurfaceVariant,
-                        ),
-                      ],
+                Semantics(
+                  button: true,
+                  label: '打开 GitHub 主页 $kDeveloperGithubUrl',
+                  child: PressSurface(
+                    fill: const Color(0x00000000),
+                    shape: AppShape.sm,
+                    tapTarget: AppTokens.minTapTargetSize,
+                    onPressed: _openGithubUrl,
+                    child: ListRow(
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      title: const Text('GitHub 主页'),
+                      subtitle: Text(
+                        kDeveloperGithubUrl,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTextStyle.caption1
+                            .of(context)
+                            .copyWith(color: scheme.primary),
+                      ),
+                      trailing: GlyphIcon(
+                        Glyphs.chevronForward,
+                        size: 16,
+                        color: scheme.onSurfaceVariant,
+                      ),
                     ),
                   ),
                 ),
@@ -435,14 +467,18 @@ class _MoreViewState extends State<MoreView> {
 
                 // Bottom Section: Current App Version + Open Source License
                 Center(
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: () => _showLicenseDialog(context),
-                    child: Padding(
+                  child: Semantics(
+                    button: true,
+                    label: '查看 $kAppLicenseName 开源协议',
+                    child: PressSurface(
+                      fill: const Color(0x00000000),
+                      shape: AppShape.sm,
+                      tapTarget: AppTokens.minTapTargetSize,
                       padding: const EdgeInsets.symmetric(
                         horizontal: 12,
                         vertical: 4,
                       ),
+                      onPressed: () => _showLicenseDialog(context),
                       child: Text(
                         '《$kAppLicenseName 开源协议》',
                         textAlign: TextAlign.center,
@@ -475,6 +511,8 @@ class _MoreViewState extends State<MoreView> {
           ),
         ),
       ],
+    ),
+      ),
     );
   }
 }
@@ -499,53 +537,37 @@ class _MoreMenuRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = context.colorScheme;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        child: Row(
-          children: [
-            Container(
-              width: 38,
-              height: 38,
-              decoration: ShapeDecoration(
-                color: iconBackground,
-                shape: AppShape.all(12),
-              ),
-              alignment: Alignment.center,
-              child: GlyphIcon(glyph, size: 19, color: iconColor),
+    return Semantics(
+      button: true,
+      label: title,
+      child: PressSurface(
+        fill: const Color(0x00000000),
+        shape: AppShape.sm,
+        tapTarget: AppTokens.minTapTargetSize,
+        onPressed: onTap,
+        child: ListRow(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          leading: Container(
+            width: 38,
+            height: 38,
+            decoration: ShapeDecoration(
+              color: iconBackground,
+              shape: AppShape.all(12),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: AppTextStyle.subheadline
-                        .of(context, emphasized: true)
-                        .copyWith(color: scheme.onSurface),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: AppTextStyle.caption1.of(context).copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            GlyphIcon(
-              Glyphs.chevronForward,
-              size: 16,
-              color: scheme.onSurfaceVariant,
-            ),
-          ],
+            alignment: Alignment.center,
+            child: GlyphIcon(glyph, size: 19, color: iconColor),
+          ),
+          title: Text(title),
+          subtitle: Text(
+            subtitle,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          trailing: GlyphIcon(
+            Glyphs.chevronForward,
+            size: 16,
+            color: scheme.onSurfaceVariant,
+          ),
         ),
       ),
     );
@@ -565,25 +587,27 @@ class _BackChevronButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = context.colorScheme;
     return Semantics(
+      container: true,
       label: semanticLabel,
       button: true,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: Container(
-          width: 38,
-          height: 38,
-          alignment: Alignment.center,
-          decoration: ShapeDecoration(
-            color: scheme.surfaceContainerHigh.withValues(alpha: 0.55),
-            shape: AppShape.circle,
-          ),
-          child: GlyphIcon(
-            Glyphs.chevronBack,
-            size: 18,
-            color: scheme.onSurface,
-          ),
+      excludeSemantics: true,
+      child: IconButton(
+        tooltip: semanticLabel,
+        icon: GlyphIcon(
+          Glyphs.chevronBack,
+          size: 18,
+          color: scheme.onSurface,
         ),
+        style: ButtonStyle(
+          backgroundColor: WidgetStatePropertyAll(
+            scheme.surfaceContainerHigh.withValues(alpha: 0.55),
+          ),
+          shape: AppShape.circle,
+          minimumSize: AppTokens.minTapTargetSize,
+          fixedSize: const Size(38, 38),
+          tapTargetSize: TapTargetSize.padded,
+        ),
+        onPressed: onTap,
       ),
     );
   }

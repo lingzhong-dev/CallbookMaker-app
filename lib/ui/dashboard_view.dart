@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/services.dart';
@@ -13,6 +14,7 @@ import 'widgets/audio_source_panel.dart';
 import 'widgets/callbook_glyphs.dart';
 import 'widgets/line_sparkline.dart';
 import 'widgets/scalloped_orb_button.dart';
+import 'widgets/scroll_to_top_button.dart';
 import 'widgets/timeline_editor_widget.dart';
 
 class DashboardView extends StatefulWidget {
@@ -25,7 +27,9 @@ class DashboardView extends StatefulWidget {
 }
 
 class _DashboardViewState extends State<DashboardView> {
-  final GlobalKey _timelineKey = GlobalKey();
+  final ScrollController _scrollController = ScrollController();
+  final GlobalKey<TimelineEditorWidgetState> _timelineKey =
+      GlobalKey<TimelineEditorWidgetState>();
 
   late final TextEditingController _titleCtrl;
   late final TextEditingController _artistCtrl;
@@ -72,6 +76,7 @@ class _DashboardViewState extends State<DashboardView> {
     _editorNameFocus.addListener(_onEditorNameFocusChanged);
     _editorNoteFocus.addListener(_onEditorNoteFocusChanged);
     widget.controller.projectListenable.addListener(_syncMetaControllers);
+    widget.controller.scrollToTopSignal.addListener(_handleScrollToTopSignal);
   }
 
   void _commitTitle() {
@@ -173,9 +178,26 @@ class _DashboardViewState extends State<DashboardView> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.controller != widget.controller) {
       oldWidget.controller.projectListenable.removeListener(_syncMetaControllers);
+      oldWidget.controller.scrollToTopSignal.removeListener(
+        _handleScrollToTopSignal,
+      );
       widget.controller.projectListenable.addListener(_syncMetaControllers);
+      widget.controller.scrollToTopSignal.addListener(_handleScrollToTopSignal);
       _syncMetaControllers();
     }
+  }
+
+  void _handleScrollToTopSignal() {
+    if (!mounted) return;
+    final c = widget.controller;
+    if (c.isPracticeMode || c.route != StudioRoute.dashboard) return;
+    unawaited(
+      ScrollToTopButton.scrollToTop(
+        context,
+        _scrollController,
+        controller: c,
+      ),
+    );
   }
 
   void _syncFieldIfIdle(
@@ -205,6 +227,10 @@ class _DashboardViewState extends State<DashboardView> {
   @override
   void dispose() {
     widget.controller.projectListenable.removeListener(_syncMetaControllers);
+    widget.controller.scrollToTopSignal.removeListener(
+      _handleScrollToTopSignal,
+    );
+    _scrollController.dispose();
     _titleFocus.removeListener(_onTitleFocusChanged);
     _artistFocus.removeListener(_onArtistFocusChanged);
     _bpmFocus.removeListener(_onBpmFocusChanged);
@@ -262,32 +288,45 @@ class _DashboardViewState extends State<DashboardView> {
     final c = widget.controller;
     final scheme = context.colorScheme;
     final bottomInset = BottomInsetScope.of(context);
-    return SingleChildScrollView(
-      padding: EdgeInsets.fromLTRB(16, 4, 16, 20 + bottomInset),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final twoCols = constraints.maxWidth >= 960;
-          final leftColumn = _buildLeftControlColumn(context, c, scheme);
-          final timeline = KeyedSubtree(
-            key: _timelineKey,
-            child: TimelineEditorWidget(controller: c, compact: true),
-          );
-          if (twoCols) {
-            return Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(flex: 4, child: leftColumn),
-                const SizedBox(width: 16),
-                Expanded(flex: 8, child: timeline),
-              ],
-            );
-          }
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [leftColumn, const SizedBox(height: 12), timeline],
-          );
-        },
-      ),
+    return Stack(
+      children: [
+        SingleChildScrollView(
+          controller: _scrollController,
+          padding: EdgeInsets.fromLTRB(16, 4, 16, 20 + bottomInset),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final twoCols = constraints.maxWidth >= 960;
+              final leftColumn = _buildLeftControlColumn(context, c, scheme);
+              final timeline = TimelineEditorWidget(
+                key: _timelineKey,
+                controller: c,
+                compact: true,
+              );
+              if (twoCols) {
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(flex: 4, child: leftColumn),
+                    const SizedBox(width: 16),
+                    Expanded(flex: 8, child: timeline),
+                  ],
+                );
+              }
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [leftColumn, const SizedBox(height: 12), timeline],
+              );
+            },
+          ),
+        ),
+        ScrollToTopButton(
+          scrollController: _scrollController,
+          controller: c,
+          isCurrentLineVisible: () =>
+              _timelineKey.currentState?.isFollowTargetVisible() ?? false,
+          bottomOffset: bottomInset + AppTokens.s16,
+        ),
+      ],
     );
   }
 
@@ -352,7 +391,7 @@ class _DashboardViewState extends State<DashboardView> {
                             .copyWith(color: scheme.onSurfaceVariant),
                       ),
                       TonalChip(
-                        label: c.isPlaying ? 'Running' : 'Standby',
+                        label: c.isPlaying ? '播放中' : '已暂停',
                         color: c.isPlaying
                             ? scheme.successContainer
                             : scheme.surfaceContainerHigh,
@@ -595,37 +634,22 @@ class _DashboardViewState extends State<DashboardView> {
             spacing: 6,
             runSpacing: 6,
             children: [
-              TonalChip(
-                label: '${c.displayLayers.showRuby ? "✓ " : ""}日语注音 (Furigana)',
-                color: c.displayLayers.showRuby
-                    ? scheme.primaryContainer
-                    : scheme.surfaceContainerHigh,
-                foregroundColor: c.displayLayers.showRuby
-                    ? scheme.onPrimaryContainer
-                    : scheme.onSurfaceVariant,
+              _DisplayFilterChip(
+                label: '日语注音 (Furigana)',
+                selected: c.displayLayers.showRuby,
                 onPressed: () =>
                     c.updateDisplayLayers(showRuby: !c.displayLayers.showRuby),
               ),
-              TonalChip(
-                label: '${c.displayLayers.showRomaji ? "✓ " : ""}罗马音 (Romaji)',
-                color: c.displayLayers.showRomaji
-                    ? scheme.primaryContainer
-                    : scheme.surfaceContainerHigh,
-                foregroundColor: c.displayLayers.showRomaji
-                    ? scheme.onPrimaryContainer
-                    : scheme.onSurfaceVariant,
+              _DisplayFilterChip(
+                label: '罗马音 (Romaji)',
+                selected: c.displayLayers.showRomaji,
                 onPressed: () => c.updateDisplayLayers(
                   showRomaji: !c.displayLayers.showRomaji,
                 ),
               ),
-              TonalChip(
-                label: '${c.displayLayers.showTranslation ? "✓ " : ""}中文翻译',
-                color: c.displayLayers.showTranslation
-                    ? scheme.primaryContainer
-                    : scheme.surfaceContainerHigh,
-                foregroundColor: c.displayLayers.showTranslation
-                    ? scheme.onPrimaryContainer
-                    : scheme.onSurfaceVariant,
+              _DisplayFilterChip(
+                label: '中文翻译',
+                selected: c.displayLayers.showTranslation,
                 onPressed: () => c.updateDisplayLayers(
                   showTranslation: !c.displayLayers.showTranslation,
                 ),
@@ -696,22 +720,32 @@ class _DashboardViewState extends State<DashboardView> {
                         .copyWith(color: scheme.onSurface),
                   ),
                 ),
-                GestureDetector(
-                  onTap: () => c.updateMeta(showTuner: !showTuner),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Checkbox(
-                        value: showTuner,
-                        onChanged: (v) => c.updateMeta(showTuner: v ?? false),
-                      ),
-                      Text(
-                        '添加调教',
-                        style: AppTextStyle.footnote
-                            .of(context, emphasized: true)
-                            .copyWith(color: scheme.onSurface),
-                      ),
-                    ],
+                Semantics(
+                  button: true,
+                  selected: showTuner,
+                  label: '添加调教',
+                  child: PressSurface(
+                    fill: const Color(0x00000000),
+                    shape: AppShape.sm,
+                    tapTarget: AppTokens.minTapTargetSize,
+                    selected: showTuner,
+                    onPressed: () => c.updateMeta(showTuner: !showTuner),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Checkbox(
+                          value: showTuner,
+                          onChanged: (v) =>
+                              c.updateMeta(showTuner: v ?? false),
+                        ),
+                        Text(
+                          '添加调教',
+                          style: AppTextStyle.footnote
+                              .of(context, emphasized: true)
+                              .copyWith(color: scheme.onSurface),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ],
@@ -1158,13 +1192,17 @@ class _DashboardViewState extends State<DashboardView> {
     CallbookController c,
     ColorScheme scheme,
   ) {
-    return GestureDetector(
-      onTap: () => c.setRoute(StudioRoute.export),
+    return Semantics(
+      button: true,
+      label: c.siteText('导出Callbook'),
       child: ElasticPress(
         child: Card(
-          inert: true,
           radius: AppTokens.radiusCard,
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: AppTokens.s12),
+          padding: const EdgeInsets.symmetric(
+            horizontal: 14,
+            vertical: AppTokens.s12,
+          ),
+          onPressed: () => c.setRoute(StudioRoute.export),
           child: Row(
             children: [
               Container(
@@ -1214,6 +1252,59 @@ class _DashboardViewState extends State<DashboardView> {
   }
 }
 
+class _DisplayFilterChip extends StatelessWidget {
+  const _DisplayFilterChip({
+    required this.label,
+    required this.selected,
+    required this.onPressed,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = context.colorScheme;
+    final fg = selected ? scheme.onPrimaryContainer : scheme.onSurfaceVariant;
+    final bg = selected
+        ? scheme.primaryContainer
+        : scheme.surfaceContainerHigh;
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: label,
+      child: PressSurface(
+        fill: bg,
+        shape: AppShape.full,
+        foreground: fg,
+        inkColor: fg,
+        selected: selected,
+        tapTarget: AppTokens.minTapTargetSize,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        onPressed: onPressed,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (selected) ...[
+              GlyphIcon(Glyphs.check, size: 13, color: fg),
+              const SizedBox(width: 4),
+            ],
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: AppTextStyle.caption1
+                  .of(context, emphasized: selected)
+                  .copyWith(color: fg),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _OffsetChipButton extends StatelessWidget {
   const _OffsetChipButton({
     required this.label,
@@ -1229,21 +1320,28 @@ class _OffsetChipButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
+    return Semantics(
+      button: true,
+      label: '偏移 $label 毫秒',
+      child: PressSurface(
+        fill: color,
+        shape: AppShape.md,
+        foreground: foreground,
+        inkColor: foreground,
+        tapTarget: AppTokens.minTapTargetSize,
         padding: const EdgeInsets.symmetric(vertical: 6),
-        decoration: ShapeDecoration(color: color, shape: AppShape.md),
-        alignment: Alignment.center,
-        child: Text(
-          label,
-          style: AppTextStyle.caption1
-              .of(context, emphasized: true)
-              .copyWith(
-                fontFamily: 'GoogleSans',
-                fontFeatures: const [FontFeature.tabularFigures()],
-                color: foreground,
-              ),
+        onPressed: onTap,
+        child: Center(
+          child: Text(
+            label,
+            style: AppTextStyle.caption1
+                .of(context, emphasized: true)
+                .copyWith(
+                  fontFamily: 'GoogleSans',
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                  color: foreground,
+                ),
+          ),
         ),
       ),
     );

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
 import 'package:prism_ui/icons/icons.dart';
 import 'package:prism_ui/prism_ui.dart';
@@ -5,8 +7,10 @@ import 'package:prism_ui/prism_ui.dart';
 import '../models/callbook_models.dart';
 import '../state/callbook_controller.dart';
 import 'theme/app_tokens.dart';
+import 'widgets/app_dialog.dart';
 import 'widgets/archive_switcher_dialog.dart';
 import 'widgets/callbook_glyphs.dart';
+import 'widgets/scroll_to_top_button.dart';
 
 class ArchiveView extends StatefulWidget {
   const ArchiveView({super.key, required this.controller});
@@ -18,6 +22,7 @@ class ArchiveView extends StatefulWidget {
 }
 
 class _ArchiveViewState extends State<ArchiveView> {
+  final ScrollController _scrollController = ScrollController();
   bool _saveAsMode = false;
   String? _editingId;
   bool _isSwitching = false;
@@ -25,7 +30,37 @@ class _ArchiveViewState extends State<ArchiveView> {
   final TextEditingController _renameCtrl = TextEditingController();
 
   @override
+  void initState() {
+    super.initState();
+    widget.controller.scrollToTopSignal.addListener(_handleScrollToTopSignal);
+  }
+
+  @override
+  void didUpdateWidget(covariant ArchiveView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.scrollToTopSignal.removeListener(
+        _handleScrollToTopSignal,
+      );
+      widget.controller.scrollToTopSignal.addListener(
+        _handleScrollToTopSignal,
+      );
+    }
+  }
+
+  void _handleScrollToTopSignal() {
+    if (!mounted) return;
+    final c = widget.controller;
+    if (c.isPracticeMode || c.route != StudioRoute.archive) return;
+    unawaited(ScrollToTopButton.scrollToTop(context, _scrollController));
+  }
+
+  @override
   void dispose() {
+    widget.controller.scrollToTopSignal.removeListener(
+      _handleScrollToTopSignal,
+    );
+    _scrollController.dispose();
     _saveAsCtrl.dispose();
     _renameCtrl.dispose();
     super.dispose();
@@ -80,29 +115,27 @@ class _ArchiveViewState extends State<ArchiveView> {
     CallbookArchiveEntry entry,
   ) async {
     final scheme = context.colorScheme;
-    final ok = await showFloatingDialog<bool>(
+    final ok = await showAppDialog<bool>(
       context: context,
-      child: Builder(
-        builder: (confirmCtx) => AlertDialog(
-          title: '删除 Call 本存档？',
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(confirmCtx).pop(false),
-              child: const Text('取消'),
+      builder: (confirmCtx) => AlertDialog(
+        title: '删除 Call 本存档？',
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(confirmCtx).pop(false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(confirmCtx).pop(true),
+            child: Text(
+              '删除存档',
+              style: TextStyle(color: scheme.error),
             ),
-            TextButton(
-              onPressed: () => Navigator.of(confirmCtx).pop(true),
-              child: Text(
-                '删除存档',
-                style: TextStyle(color: scheme.error),
-              ),
-            ),
-          ],
-          child: Text(
-            '确定要删除存档「${entry.name}」吗？该操作不可撤销。',
-            style: AppTextStyle.subheadline.of(confirmCtx).copyWith(
-              color: scheme.onSurfaceVariant,
-            ),
+          ),
+        ],
+        child: Text(
+          '确定要删除存档「${entry.name}」吗？该操作不可撤销。',
+          style: AppTextStyle.subheadline.of(confirmCtx).copyWith(
+            color: scheme.onSurfaceVariant,
           ),
         ),
       ),
@@ -129,11 +162,14 @@ class _ArchiveViewState extends State<ArchiveView> {
                 ? '有未保存更改'
                 : (c.needsSavePromptBeforeSwitch ? '待归档' : '示例工程'));
 
-        return SingleChildScrollView(
-          padding: EdgeInsets.fromLTRB(16, 4, 16, 20 + bottomInset),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
+        return Stack(
+          children: [
+            SingleChildScrollView(
+              controller: _scrollController,
+              padding: EdgeInsets.fromLTRB(16, 4, 16, 20 + bottomInset),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
               Card(
                 inert: true,
                 radius: AppTokens.radiusCard,
@@ -311,15 +347,21 @@ class _ArchiveViewState extends State<ArchiveView> {
               else
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    for (var i = 0; i < archives.length; i++) ...[
-                      if (i > 0) const SizedBox(height: 10),
-                      _buildArchiveCard(ctx, scheme, c, archives[i]),
+                    children: [
+                      for (var i = 0; i < archives.length; i++) ...[
+                        if (i > 0) const SizedBox(height: 10),
+                        _buildArchiveCard(ctx, scheme, c, archives[i]),
+                      ],
                     ],
-                  ],
-                ),
-            ],
-          ),
+                  ),
+                ],
+              ),
+            ),
+            ScrollToTopButton(
+              scrollController: _scrollController,
+              bottomOffset: 16 + bottomInset,
+            ),
+          ],
         );
       },
     );
@@ -387,12 +429,19 @@ class _ArchiveViewState extends State<ArchiveView> {
           : Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () => _handleSwitch(c, entry),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
+                Semantics(
+                  button: true,
+                  selected: isCurrent,
+                  label: '存档 ${entry.name}',
+                  child: PressSurface(
+                    fill: const Color(0x00000000),
+                    shape: AppShape.all(AppTokens.radiusSection),
+                    tapTarget: AppTokens.minTapTargetSize,
+                    selected: isCurrent,
+                    onPressed: () => _handleSwitch(c, entry),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
                       Row(
                         children: [
                           Flexible(
@@ -438,6 +487,7 @@ class _ArchiveViewState extends State<ArchiveView> {
                     ],
                   ),
                 ),
+              ),
                 const SizedBox(height: 10),
                 Wrap(
                   spacing: 8,

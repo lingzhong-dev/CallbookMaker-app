@@ -463,28 +463,28 @@ void main() {
 
           // 1) Enter Gateway Config subpage, verify GatewayConfigPanel & back chevron
           await tester.tap(find.descendant(of: find.byType(MoreView), matching: find.text('网关配置')));
-          await tester.pump();
+          await tester.pumpAndSettle();
           expect(find.byType(GatewayConfigPanel), findsOneWidget);
           expect(find.text('网易云直连 & 可选后端服务'), findsOneWidget);
           expect(find.bySemanticsLabel('返回更多'), findsOneWidget);
           await tester.tap(find.bySemanticsLabel('返回更多'));
-          await tester.pump();
+          await tester.pumpAndSettle();
           expect(find.byType(GatewayConfigPanel), findsNothing);
           expect(find.descendant(of: find.byType(MoreView), matching: find.text('主题')), findsOneWidget);
 
           // 2) Enter Theme subpage, then verify re-tapping '更多' nav resets subpage back to root
           await tester.tap(find.descendant(of: find.byType(MoreView), matching: find.text('主题')));
-          await tester.pump();
+          await tester.pumpAndSettle();
           expect(find.byType(ThemeView), findsOneWidget);
 
           await tester.tap(find.descendant(of: sidebar, matching: find.text('更多')));
-          await tester.pump();
+          await tester.pumpAndSettle();
           expect(find.byType(ThemeView), findsNothing);
           expect(find.descendant(of: find.byType(MoreView), matching: find.text('网关配置')), findsOneWidget);
 
           // 3) Re-enter ThemeView & exercise ThemeMode, ColorStyle, OLED, Glass, GoogleSans & Reset
           await tester.tap(find.descendant(of: find.byType(MoreView), matching: find.text('主题')));
-          await tester.pump();
+          await tester.pumpAndSettle();
           expect(find.byType(ThemeView), findsOneWidget);
 
           await _scrollToAndTap(tester, find.text('深色 Dark'));
@@ -507,7 +507,7 @@ void main() {
 
           await _scrollToAndTap(
             tester,
-            find.bySemanticsLabel('Floating NavigationDock 悬浮胶囊'),
+            find.bySemanticsLabel('悬浮底部导航'),
           );
           expect(controller.floatingNavDock, isFalse);
 
@@ -528,12 +528,11 @@ void main() {
           expect(find.text('HCT 色相与明度滑块'), findsNothing);
 
           await tester.tap(find.bySemanticsLabel('返回更多'));
-          await tester.pump();
+          await tester.pumpAndSettle();
 
           // 4) Enter About subpage & verify layout, version, developer GitHub & GPL license dialog
           await tester.tap(find.descendant(of: find.byType(MoreView), matching: find.text('关于')));
-          await tester.pump();
-          await tester.pump(const Duration(milliseconds: 50));
+          await tester.pumpAndSettle();
           expect(find.bySemanticsLabel('返回更多'), findsOneWidget);
           expect(find.text(kAppDisplayName), findsOneWidget);
           expect(find.text('Version $kAppVersion'), findsOneWidget);
@@ -550,10 +549,11 @@ void main() {
           expect(clipboardText, kDeveloperGithubUrl);
 
           await _scrollToAndTap(tester, find.text('《$kAppLicenseName 开源协议》'));
+          await tester.pumpAndSettle();
           expect(find.text('$kAppLicenseName 开源协议'), findsOneWidget);
           expect(find.textContaining('GNU GENERAL PUBLIC LICENSE'), findsOneWidget);
           await tester.tap(find.text('关闭'));
-          await tester.pump();
+          await tester.pumpAndSettle();
           expect(find.text('$kAppLicenseName 开源协议'), findsNothing);
 
           expect(tester.takeException(), isNull);
@@ -611,8 +611,7 @@ void main() {
             viewport: const Size(390, 844),
           );
           await tester.tap(find.text('关于'));
-          await tester.pump();
-          await tester.pump(const Duration(milliseconds: 50));
+          await tester.pumpAndSettle();
           expect(find.text(kAppDisplayName), findsOneWidget);
           expect(find.text(kDeveloperGithubId), findsOneWidget);
           await tester.tap(find.text(kDeveloperGithubUrl));
@@ -2050,7 +2049,8 @@ void main() {
           expect(controller.isPlaying, isFalse);
 
           // Re-restore metronome & test modal dialog suppresses HomeShell Space shortcut
-          await tester.tap(metroSwitch);
+          await tester.pumpAndSettle();
+          await _scrollToAndTap(tester, metroSwitch);
           await tester.pump();
           await _scrollToAndTap(tester, find.text('+ 自定义标签'));
           await tester.pump();

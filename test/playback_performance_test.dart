@@ -95,7 +95,7 @@ void main() {
             findsAtLeastNWidgets(1),
           );
           expect(find.text('00:00.00'), findsOneWidget);
-          expect(find.text('Running'), findsOneWidget);
+          expect(find.text('播放中'), findsOneWidget);
 
           // Verify ThemeCrossFade never captured an overlay snapshot during playback.
           final fadeLayer = tester.widget<Widget>(

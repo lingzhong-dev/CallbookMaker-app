@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/widgets.dart';
@@ -14,6 +15,7 @@ import 'theme/app_tokens.dart';
 import 'widgets/call_badge_pill.dart';
 import 'widgets/ruby_lyric_text.dart';
 import 'widgets/scalloped_orb_button.dart';
+import 'widgets/scroll_to_top_button.dart';
 
 class PracticeOverlay extends StatefulWidget {
   const PracticeOverlay({super.key, required this.controller});
@@ -33,6 +35,8 @@ class _PracticeOverlayState extends State<PracticeOverlay> {
   void initState() {
     super.initState();
     widget.controller.playbackSyncListenable.addListener(_handlePlaybackSync);
+    widget.controller.jumpToCurrentLineSignal.addListener(_handleJumpToCurrent);
+    widget.controller.scrollToTopSignal.addListener(_handleScrollToTopSignal);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _scrollToLine(
         widget.controller.followTargetLineId ?? widget.controller.activeLineId,
@@ -47,13 +51,58 @@ class _PracticeOverlayState extends State<PracticeOverlay> {
       oldWidget.controller.playbackSyncListenable.removeListener(
         _handlePlaybackSync,
       );
+      oldWidget.controller.jumpToCurrentLineSignal.removeListener(
+        _handleJumpToCurrent,
+      );
+      oldWidget.controller.scrollToTopSignal.removeListener(
+        _handleScrollToTopSignal,
+      );
       widget.controller.playbackSyncListenable.addListener(_handlePlaybackSync);
+      widget.controller.jumpToCurrentLineSignal.addListener(
+        _handleJumpToCurrent,
+      );
+      widget.controller.scrollToTopSignal.addListener(_handleScrollToTopSignal);
     }
+  }
+
+  void _handleJumpToCurrent() {
+    if (!mounted || !widget.controller.isPracticeMode) return;
+    _scrollToLine(
+      widget.controller.followTargetLineId ?? widget.controller.activeLineId,
+    );
+  }
+
+  void _handleScrollToTopSignal() {
+    if (!mounted || !widget.controller.isPracticeMode) return;
+    unawaited(
+      ScrollToTopButton.scrollToTop(
+        context,
+        _scrollController,
+        controller: widget.controller,
+      ),
+    );
+  }
+
+  bool _isFollowTargetVisible() {
+    final targetId =
+        widget.controller.followTargetLineId ?? widget.controller.activeLineId;
+    if (targetId == null) return false;
+    final ctx = _lineKeys[targetId]?.currentContext;
+    if (ctx == null) return false;
+    final ro = ctx.findRenderObject();
+    if (ro is! RenderBox || !ro.attached || !ro.hasSize) return false;
+    final scrollable = Scrollable.maybeOf(ctx);
+    if (scrollable == null) return true;
+    final scrollBox = scrollable.context.findRenderObject();
+    if (scrollBox is! RenderBox || !scrollBox.hasSize) return false;
+    final topLeft = ro.localToGlobal(Offset.zero, ancestor: scrollBox);
+    final rect = topLeft & ro.size;
+    return rect.bottom > 0 && rect.top < scrollBox.size.height;
   }
 
   void _handlePlaybackSync() {
     final c = widget.controller;
-    if (!c.isPracticeMode) return;
+    if (!c.isPracticeMode || c.followPausedByScrollTop) return;
     final targetId = c.followTargetLineId ?? c.activeLineId;
     if (targetId == null) return;
     final wasScheduled = _pendingScrollLineId != null;
@@ -98,6 +147,12 @@ class _PracticeOverlayState extends State<PracticeOverlay> {
     widget.controller.playbackSyncListenable.removeListener(
       _handlePlaybackSync,
     );
+    widget.controller.jumpToCurrentLineSignal.removeListener(
+      _handleJumpToCurrent,
+    );
+    widget.controller.scrollToTopSignal.removeListener(
+      _handleScrollToTopSignal,
+    );
     _scrollController.dispose();
     super.dispose();
   }
@@ -109,11 +164,16 @@ class _PracticeOverlayState extends State<PracticeOverlay> {
     final lines = c.sortedLines;
     final presetMap = c.presetMap;
     final pad = MediaQuery.paddingOf(context);
+    final stageBg = c.pureBlack
+        ? const Color(0xFF000000)
+        : scheme.surfaceContainerLowest;
+    final deckBg = c.pureBlack
+        ? const Color(0xFF000000)
+        : scheme.surfaceContainer;
 
-    // Pure OLED black stage without any screen-edge flashing borders.
     return Positioned.fill(
       child: ColoredBox(
-        color: const Color(0xFF000000),
+        color: stageBg,
         child: DefaultTextStyle.merge(
           style: TextStyle(
             fontFamily: c.useGoogleSans ? 'GoogleSans' : null,
@@ -126,10 +186,10 @@ class _PracticeOverlayState extends State<PracticeOverlay> {
               // Header Bar
               Container(
                 padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
-                decoration: const BoxDecoration(
-                  color: Color(0xFF09090B),
+                decoration: BoxDecoration(
+                  color: deckBg,
                   border: Border(
-                    bottom: BorderSide(color: Color(0xFF27272A)),
+                    bottom: BorderSide(color: scheme.outlineVariant),
                   ),
                 ),
                 child: LayoutBuilder(
@@ -179,9 +239,9 @@ class _PracticeOverlayState extends State<PracticeOverlay> {
                                             c.isPlaying &&
                                                 c.currentBeatInBar == b
                                             ? (b == 1
-                                                  ? const Color(0xFF38BDF8)
-                                                  : const Color(0xFF22D3EE))
-                                            : const Color(0xFF27272A),
+                                                  ? scheme.primary
+                                                  : scheme.tertiary)
+                                            : scheme.outlineVariant,
                                       ),
                                     ),
                                     if (b < c.project.meta.beatsPerBar)
@@ -199,7 +259,7 @@ class _PracticeOverlayState extends State<PracticeOverlay> {
                           overflow: TextOverflow.ellipsis,
                           style: AppTextStyle.headline
                               .of(context, emphasized: true)
-                              .copyWith(color: const Color(0xFFFFFFFF)),
+                              .copyWith(color: scheme.onSurface),
                         ),
                       ],
                     );
@@ -209,71 +269,37 @@ class _PracticeOverlayState extends State<PracticeOverlay> {
                       runSpacing: 6,
                       crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
-                        TonalChip(
+                        _PracticeFilterChip(
                           label: '注音',
-                          color: c.displayLayers.showRuby
-                              ? scheme.primary
-                              : const Color(0xFF18181B),
-                          foregroundColor: c.displayLayers.showRuby
-                              ? scheme.onPrimary
-                              : const Color(0xFFA1A1AA),
+                          selected: c.displayLayers.showRuby,
                           onPressed: () => c.updateDisplayLayers(
                             showRuby: !c.displayLayers.showRuby,
                           ),
                         ),
-                        TonalChip(
+                        _PracticeFilterChip(
                           label: '罗马音',
-                          color: c.displayLayers.showRomaji
-                              ? scheme.primary
-                              : const Color(0xFF18181B),
-                          foregroundColor: c.displayLayers.showRomaji
-                              ? scheme.onPrimary
-                              : const Color(0xFFA1A1AA),
+                          selected: c.displayLayers.showRomaji,
                           onPressed: () => c.updateDisplayLayers(
                             showRomaji: !c.displayLayers.showRomaji,
                           ),
                         ),
-                        TonalChip(
+                        _PracticeFilterChip(
                           label: '翻译',
-                          color: c.displayLayers.showTranslation
-                              ? scheme.primary
-                              : const Color(0xFF18181B),
-                          foregroundColor: c.displayLayers.showTranslation
-                              ? scheme.onPrimary
-                              : const Color(0xFFA1A1AA),
+                          selected: c.displayLayers.showTranslation,
                           onPressed: () => c.updateDisplayLayers(
                             showTranslation: !c.displayLayers.showTranslation,
                           ),
                         ),
-                        GestureDetector(
-                          onTap: () => c.setPracticeMode(false),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 14,
-                              vertical: 8,
-                            ),
-                            decoration: const ShapeDecoration(
-                              color: Color(0xFF27272A),
-                              shape: AppShape.full,
-                            ),
-                            child: const Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                GlyphIcon(
-                                  Glyphs.close,
-                                  size: 16,
-                                  color: Color(0xFFFFFFFF),
-                                ),
-                                SizedBox(width: 6),
-                                Text(
-                                  '退出演练',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w700,
-                                    color: Color(0xFFFFFFFF),
-                                  ),
-                                ),
-                              ],
+                        Semantics(
+                          button: true,
+                          label: '退出演练',
+                          child: Tooltip(
+                            message: '退出演练（Esc / F）',
+                            child: TonalButton(
+                              size: TonalButtonSize.compact,
+                              glyph: Glyphs.close,
+                              label: '退出演练',
+                              onPressed: () => c.setPracticeMode(false),
                             ),
                           ),
                         ),
@@ -304,57 +330,70 @@ class _PracticeOverlayState extends State<PracticeOverlay> {
               // Scrollable Teleprompter Feed
               Expanded(
                 child: lines.isEmpty
-                    ? const Center(
+                    ? Center(
                         child: Text(
                           '当前曲目暂无歌词行',
-                          style: TextStyle(
-                            fontSize: 18,
-                            color: Color(0xFF64748B),
+                          style: AppTextStyle.headline.of(context).copyWith(
+                            color: scheme.onSurfaceVariant,
                           ),
                         ),
                       )
-                    : ListView.separated(
-                        controller: _scrollController,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 20,
-                          vertical: 28,
-                        ),
-                        itemCount: lines.length,
-                        separatorBuilder: (_, _) => const SizedBox(height: 16),
-                        itemBuilder: (context, index) {
-                          final line = lines[index];
-                          final lineAlert = c.getAlertForLine(line.id);
-                          return KeyedSubtree(
-                            key: _lineKeys.putIfAbsent(line.id, GlobalKey.new),
-                            child: Center(
-                              child: ConstrainedBox(
-                                constraints: const BoxConstraints(
-                                  maxWidth: 880,
-                                ),
-                                child: _ReactivePracticeLineCard(
-                                  controller: c,
-                                  line: line,
-                                  lineAlert: lineAlert,
-                                  presetMap: presetMap,
-                                  displayLayers: c.displayLayers,
-                                  textScale: c.textScale,
-                                  primaryColor: scheme.primary,
-                                  onTap: () => c.seek(line.startTimeMs),
-                                ),
-                              ),
+                    : Stack(
+                        children: [
+                          ListView.separated(
+                            controller: _scrollController,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 20,
+                              vertical: 28,
                             ),
-                          );
-                        },
+                            itemCount: lines.length,
+                            separatorBuilder: (_, _) =>
+                                const SizedBox(height: 16),
+                            itemBuilder: (context, index) {
+                              final line = lines[index];
+                              final lineAlert = c.getAlertForLine(line.id);
+                              return KeyedSubtree(
+                                key: _lineKeys.putIfAbsent(
+                                  line.id,
+                                  GlobalKey.new,
+                                ),
+                                child: Center(
+                                  child: ConstrainedBox(
+                                    constraints: const BoxConstraints(
+                                      maxWidth: 880,
+                                    ),
+                                    child: _ReactivePracticeLineCard(
+                                      controller: c,
+                                      line: line,
+                                      lineAlert: lineAlert,
+                                      presetMap: presetMap,
+                                      displayLayers: c.displayLayers,
+                                      textScale: c.textScale,
+                                      primaryColor: scheme.primary,
+                                      onTap: () => c.seek(line.startTimeMs),
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                          ScrollToTopButton(
+                            scrollController: _scrollController,
+                            controller: c,
+                            isCurrentLineVisible: _isFollowTargetVisible,
+                            bottomOffset: AppTokens.s16,
+                          ),
+                        ],
                       ),
               ),
 
               // Bottom Stage Transport Deck
               Container(
                 padding: EdgeInsets.fromLTRB(20, 12, 20, pad.bottom + 14),
-                decoration: const BoxDecoration(
-                  color: Color(0xFF09090B),
+                decoration: BoxDecoration(
+                  color: deckBg,
                   border: Border(
-                    top: BorderSide(color: Color(0xFF27272A)),
+                    top: BorderSide(color: scheme.outlineVariant),
                   ),
                 ),
                 child: Center(
@@ -393,15 +432,15 @@ class _PracticeOverlayState extends State<PracticeOverlay> {
                                 );
                                 return Text(
                                   '${formatMsToClock(c.currentTimeMs)} / ${formatMsToClock(safeDuration)}',
-                                  style: const TextStyle(
-                                    fontFamily: 'GoogleSans',
-                                    fontFeatures: [
-                                      FontFeature.tabularFigures(),
-                                    ],
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                    color: Color(0xFFD4D4D8),
-                                  ),
+                                  style: AppTextStyle.footnote
+                                      .of(context, emphasized: true)
+                                      .copyWith(
+                                        fontFamily: 'GoogleSans',
+                                        fontFeatures: const [
+                                          FontFeature.tabularFigures(),
+                                        ],
+                                        color: scheme.onSurfaceVariant,
+                                      ),
                                 );
                               },
                             );
@@ -411,12 +450,15 @@ class _PracticeOverlayState extends State<PracticeOverlay> {
                                 Semantics(
                                   label: '快退 2 秒',
                                   button: true,
-                                  child: TonalChip(
-                                    label: '-2s',
-                                    color: const Color(0xFF27272A),
-                                    foregroundColor: const Color(0xFFFFFFFF),
-                                    onPressed: () =>
-                                        c.seek(c.currentTimeMs - 2000),
+                                  child: Tooltip(
+                                    message: '快退 2 秒（←）',
+                                    child: TonalChip(
+                                      label: '-2s',
+                                      color: scheme.surfaceContainerHigh,
+                                      foregroundColor: scheme.onSurface,
+                                      onPressed: () =>
+                                          c.seek(c.currentTimeMs - 2000),
+                                    ),
                                   ),
                                 ),
                                 const SizedBox(width: 12),
@@ -432,35 +474,32 @@ class _PracticeOverlayState extends State<PracticeOverlay> {
                                 Semantics(
                                   label: '快进 2 秒',
                                   button: true,
-                                  child: TonalChip(
-                                    label: '+2s',
-                                    color: const Color(0xFF27272A),
-                                    foregroundColor: const Color(0xFFFFFFFF),
-                                    onPressed: () =>
-                                        c.seek(c.currentTimeMs + 2000),
+                                  child: Tooltip(
+                                    message: '快进 2 秒（→）',
+                                    child: TonalChip(
+                                      label: '+2s',
+                                      color: scheme.surfaceContainerHigh,
+                                      foregroundColor: scheme.onSurface,
+                                      onPressed: () =>
+                                          c.seek(c.currentTimeMs + 2000),
+                                    ),
                                   ),
                                 ),
                               ],
                             );
                             final speedChips = ListenableBuilder(
                               listenable: c.playbackListenable,
-                              builder: (context, _) => Wrap(
-                                spacing: 6,
-                                runSpacing: 6,
-                                children: [
-                                  for (final rate in const [0.75, 1.0, 1.25])
-                                    TonalChip(
-                                      label: '${rate}x',
-                                      color: (c.playbackRate - rate).abs() < 0.01
-                                          ? scheme.primary
-                                          : const Color(0xFF18181B),
-                                      foregroundColor:
-                                          (c.playbackRate - rate).abs() < 0.01
-                                          ? scheme.onPrimary
-                                          : const Color(0xFFD4D4D8),
-                                      onPressed: () => c.setPlaybackRate(rate),
-                                    ),
-                                ],
+                              builder: (context, _) => SizedBox(
+                                width: 174,
+                                child: SegmentedControl<double>(
+                                  segments: const [
+                                    (0.75, '0.75x'),
+                                    (1.0, '1.0x'),
+                                    (1.25, '1.25x'),
+                                  ],
+                                  value: c.playbackRate,
+                                  onChanged: c.setPlaybackRate,
+                                ),
                               ),
                             );
 
@@ -622,6 +661,7 @@ class _PracticeLineCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = context.colorScheme;
     final gtNote = (lineAlert?.note ?? '').trim();
     final isSec = line.kind.isSection;
     final shout = isSec ? line.customShout.trim() : getUnalignedCustomShout(line);
@@ -632,205 +672,270 @@ class _PracticeLineCard extends StatelessWidget {
     List<BoxShadow> shadows = const [];
 
     if (isPlaying && lineAlert != null) {
-      borderColor = const Color(0xFFF59E0B);
-      bgColor = const Color(0xFF1F1608);
+      borderColor = scheme.warning;
+      bgColor = Color.alphaBlend(
+        scheme.warningContainer.withValues(alpha: 0.55),
+        scheme.surfaceContainer,
+      );
       opacity = 1.0;
-      shadows = const [
+      shadows = [
         BoxShadow(
-          color: Color(0x40F59E0B),
+          color: scheme.warning.withValues(alpha: 0.25),
           blurRadius: 24,
         ),
       ];
     } else if (isPlaying) {
-      borderColor = primaryColor;
-      bgColor = const Color(0xFF12151C);
+      borderColor = scheme.primary;
+      bgColor = Color.alphaBlend(
+        scheme.primaryContainer.withValues(alpha: 0.38),
+        scheme.surfaceContainer,
+      );
       opacity = 1.0;
       shadows = [
         BoxShadow(
-          color: primaryColor.withValues(alpha: 0.24),
+          color: scheme.primary.withValues(alpha: 0.24),
           blurRadius: 26,
         ),
       ];
     } else if (isUpcoming) {
-      borderColor = primaryColor.withValues(alpha: 0.72);
-      bgColor = const Color(0xFF10131A);
+      borderColor = scheme.tertiary.withValues(alpha: 0.72);
+      bgColor = Color.alphaBlend(
+        scheme.tertiaryContainer.withValues(alpha: 0.28),
+        scheme.surfaceContainer,
+      );
       opacity = 0.92;
     } else if (lineAlert != null) {
-      borderColor = const Color(0xFFB45309);
-      bgColor = const Color(0xFF1A1307);
+      borderColor = scheme.warning.withValues(alpha: 0.8);
+      bgColor = Color.alphaBlend(
+        scheme.warningContainer.withValues(alpha: 0.32),
+        scheme.surfaceContainer,
+      );
       opacity = 0.88;
     } else {
-      borderColor = const Color(0xFF27272A);
-      bgColor = const Color(0xFF09090B);
-      opacity = 0.62;
+      borderColor = scheme.outlineVariant;
+      bgColor = scheme.surfaceContainer;
+      opacity = 0.68;
     }
 
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
+    return Semantics(
+      button: true,
+      selected: isPlaying,
+      label: line.text.original.isNotEmpty
+          ? '跳转到 ${line.text.original}'
+          : '跳转到歌词行',
       child: Opacity(
         opacity: opacity,
-        child: AnimatedContainer(
-          duration: AppMotion.d(context, AppMotion.effectsDefault),
-          curve: AppMotion.curveEffects,
-          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 18),
-          decoration: BoxDecoration(
-            color: bgColor,
-            borderRadius: BorderRadius.circular(AppTokens.radiusCard),
-            border: Border.all(
+        child: DecoratedBox(
+          decoration: ShapeDecoration(
+            shape: AppShape.all(AppTokens.radiusCard),
+            shadows: shadows,
+          ),
+          child: PressSurface(
+            fill: bgColor,
+            shape: AppShape.all(AppTokens.radiusCard),
+            side: BorderSide(
               color: borderColor,
               width: isPlaying ? 1.8 : 1.0,
             ),
-            boxShadow: shadows,
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Wrap(
-                spacing: 8,
-                runSpacing: 6,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  Text(
-                    formatMsToClock(line.startTimeMs),
-                    style: const TextStyle(
-                      fontFamily: 'GoogleSans',
-                      fontFeatures: [FontFeature.tabularFigures()],
-                      fontSize: 12,
-                      color: Color(0xFFA1A1AA),
-                    ),
-                  ),
-                  if (isUpcoming)
-                    TonalChip(
-                      label: upcomingLabel,
-                      color: primaryColor.withValues(alpha: 0.22),
-                      foregroundColor: const Color(0xFFFFFFFF),
-                    ),
-                  if (line.kind.isSection)
-                    TonalChip(
-                      label:
-                          '${line.kind.zhLabel} · ${formatGapSec(math.max(1000, line.endTimeMs - line.startTimeMs))}',
-                      color: const Color(0xFF6366F1),
-                      foregroundColor: const Color(0xFFFFFFFF),
-                    ),
-                  if (lineAlert != null)
-                    const TonalChip(
-                      label: 'GT 警报',
-                      color: Color(0xFFF59E0B),
-                      foregroundColor: Color(0xFF000000),
-                    ),
-                  if (lineAlert != null && gtNote.isNotEmpty)
+            padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 18),
+            tapTarget: AppTokens.minTapTargetSize,
+            selected: isPlaying,
+            onPressed: onTap,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
                     Text(
-                      gtNote,
-                      style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        color: Color(0xFFFCD34D),
+                      formatMsToClock(line.startTimeMs),
+                      style: AppTextStyle.caption1.of(context).copyWith(
+                        fontFamily: 'GoogleSans',
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                        color: scheme.onSurfaceVariant,
                       ),
                     ),
-                  for (final tag in line.calls)
-                    if (presetMap[tag.presetId] case final CallPreset p?)
-                      CallBadgePill(
-                        preset: p,
-                        suffix: tag.suffix,
+                    if (isUpcoming)
+                      TonalChip(
+                        label: upcomingLabel,
+                        color: scheme.tertiaryContainer,
+                        foregroundColor: scheme.onTertiaryContainer,
                       ),
-                  if (shout.isNotEmpty)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 4,
+                    if (line.kind.isSection)
+                      TonalChip(
+                        label:
+                            '${line.kind.zhLabel} · ${formatGapSec(math.max(1000, line.endTimeMs - line.startTimeMs))}',
+                        color: scheme.secondaryContainer,
+                        foregroundColor: scheme.onSecondaryContainer,
                       ),
-                      decoration: const ShapeDecoration(
-                        color: Color(0xFFE11D48),
-                        shape: AppShape.full,
-                      ),
-                      child: Text(
-                        shout,
-                        softWrap: false,
-                        maxLines: 1,
-                        overflow: TextOverflow.visible,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w800,
-                          color: Color(0xFFFFFFFF),
+                    if (lineAlert != null)
+                      TonalChip(
+                        label: 'GT 警报',
+                        color: scheme.warning,
+                        foregroundColor: CallBadgePill.contrastForegroundFor(
+                          scheme.warning,
                         ),
                       ),
-                    ),
-                  if (line.tailUpdraft)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 4,
+                    if (lineAlert != null && gtNote.isNotEmpty)
+                      Text(
+                        gtNote,
+                        style: AppTextStyle.footnote
+                            .of(context, emphasized: true)
+                            .copyWith(color: scheme.warning),
                       ),
-                      decoration: const ShapeDecoration(
-                        color: Color(0xFF0284C7),
-                        shape: AppShape.full,
-                      ),
-                      child: const Text(
-                        '尾句上升气流',
-                        softWrap: false,
-                        maxLines: 1,
-                        overflow: TextOverflow.visible,
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w800,
-                          color: Color(0xFFFFFFFF),
+                    for (final tag in line.calls)
+                      if (presetMap[tag.presetId] case final CallPreset p?)
+                        CallBadgePill(
+                          preset: p,
+                          suffix: tag.suffix,
+                        ),
+                    if (shout.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 4,
+                        ),
+                        decoration: ShapeDecoration(
+                          color: scheme.tertiaryContainer,
+                          shape: AppShape.full,
+                        ),
+                        child: Text(
+                          shout,
+                          softWrap: false,
+                          maxLines: 1,
+                          overflow: TextOverflow.visible,
+                          style: AppTextStyle.caption1
+                              .of(context, emphasized: true)
+                              .copyWith(color: scheme.onTertiaryContainer),
                         ),
                       ),
+                    if (line.tailUpdraft)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 4,
+                        ),
+                        decoration: ShapeDecoration(
+                          color: scheme.tertiary,
+                          shape: AppShape.full,
+                        ),
+                        child: Text(
+                          '尾句上升气流',
+                          softWrap: false,
+                          maxLines: 1,
+                          overflow: TextOverflow.visible,
+                          style: AppTextStyle.caption1
+                              .of(context, emphasized: true)
+                              .copyWith(color: scheme.onTertiary),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                RubyLyricText(
+                  original: line.text.original,
+                  rubyHtml: line.text.ruby,
+                  showRuby: displayLayers.showRuby,
+                  alignedCalls: isSec ? const [] : line.alignedCalls,
+                  customShout: isSec ? '' : line.customShout,
+                  pillBackground: scheme.tertiaryContainer,
+                  pillForeground: scheme.onTertiaryContainer,
+                  pillBorderColor: scheme.outlineVariant,
+                  underlineColor: scheme.tertiary,
+                  baseStyle: TextStyle(
+                    fontSize: (isPlaying ? 32 : 22) * textScale,
+                    fontWeight: FontWeight.w800,
+                    height: 1.32,
+                    color: scheme.onSurface,
+                  ),
+                  rtStyle: TextStyle(
+                    fontSize: (isPlaying ? 15 : 11) * textScale,
+                    fontWeight: FontWeight.w600,
+                    color: scheme.primary,
+                  ),
+                ),
+                if (displayLayers.showRomaji &&
+                    line.text.romaji != null &&
+                    line.text.romaji!.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    line.text.romaji!,
+                    style: TextStyle(
+                      fontFamily: 'GoogleSans',
+                      fontSize: isPlaying ? 16 : 13,
+                      color: scheme.tertiary,
                     ),
+                  ),
                 ],
-              ),
-              const SizedBox(height: 12),
-              RubyLyricText(
-                original: line.text.original,
-                rubyHtml: line.text.ruby,
-                showRuby: displayLayers.showRuby,
-                alignedCalls: isSec ? const [] : line.alignedCalls,
-                customShout: isSec ? '' : line.customShout,
-                pillBackground: const Color(0xFFE11D48),
-                pillForeground: const Color(0xFFFFFFFF),
-                pillBorderColor: const Color(0xFFFB7185),
-                underlineColor: const Color(0xFFF43F5E),
-                baseStyle: TextStyle(
-                  fontSize: (isPlaying ? 32 : 22) * textScale,
-                  fontWeight: FontWeight.w800,
-                  height: 1.32,
-                  color: const Color(0xFFFFFFFF),
-                ),
-                rtStyle: TextStyle(
-                  fontSize: (isPlaying ? 15 : 11) * textScale,
-                  fontWeight: FontWeight.w600,
-                  color: const Color(0xFF38BDF8),
-                ),
-              ),
-              if (displayLayers.showRomaji &&
-                  line.text.romaji != null &&
-                  line.text.romaji!.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Text(
-                  line.text.romaji!,
-                  style: TextStyle(
-                    fontFamily: 'GoogleSans',
-                    fontSize: isPlaying ? 16 : 13,
-                    color: const Color(0xFF7DD3FC),
+                if (displayLayers.showTranslation &&
+                    line.text.translation != null &&
+                    line.text.translation!.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    line.text.translation!,
+                    style: TextStyle(
+                      fontSize: isPlaying ? 18 : 14,
+                      fontWeight: FontWeight.w500,
+                      color: scheme.onSurfaceVariant,
+                    ),
                   ),
-                ),
+                ],
               ],
-              if (displayLayers.showTranslation &&
-                  line.text.translation != null &&
-                  line.text.translation!.isNotEmpty) ...[
-                const SizedBox(height: 6),
-                Text(
-                  line.text.translation!,
-                  style: TextStyle(
-                    fontSize: isPlaying ? 18 : 14,
-                    fontWeight: FontWeight.w500,
-                    color: const Color(0xFFD4D4D8),
-                  ),
-                ),
-              ],
-            ],
+            ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PracticeFilterChip extends StatelessWidget {
+  const _PracticeFilterChip({
+    required this.label,
+    required this.selected,
+    required this.onPressed,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = context.colorScheme;
+    final bg = selected ? scheme.primary : scheme.surfaceContainerHigh;
+    final fg = selected ? scheme.onPrimary : scheme.onSurfaceVariant;
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: label,
+      child: PressSurface(
+        fill: bg,
+        shape: AppShape.full,
+        foreground: fg,
+        inkColor: fg,
+        selected: selected,
+        tapTarget: AppTokens.minTapTargetSize,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        onPressed: onPressed,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (selected) ...[
+              GlyphIcon(Glyphs.check, size: 13, color: fg),
+              const SizedBox(width: 4),
+            ],
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: AppTextStyle.caption1
+                  .of(context, emphasized: selected)
+                  .copyWith(color: fg),
+            ),
+          ],
         ),
       ),
     );

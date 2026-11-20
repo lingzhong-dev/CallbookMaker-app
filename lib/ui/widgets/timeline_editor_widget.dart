@@ -12,6 +12,7 @@ import '../../utils/section_detector.dart';
 import '../../utils/shortcut_validator.dart';
 import '../theme/app_motion.dart';
 import '../theme/app_tokens.dart';
+import 'app_dialog.dart';
 import 'call_badge_pill.dart';
 import 'call_preset_dialogs.dart';
 import 'callbook_glyphs.dart';
@@ -32,9 +33,9 @@ int? _parseClockText(String raw) {
 }
 
 Color _sectionAccentColor(ColorScheme scheme, LyricLineKind kind) => switch (kind) {
-  LyricLineKind.intro => const Color(0xFF0EA5E9),
-  LyricLineKind.interlude => scheme.primary,
-  LyricLineKind.outro => const Color(0xFF8B5CF6),
+  LyricLineKind.intro => scheme.tertiary,
+  LyricLineKind.interlude => scheme.secondary,
+  LyricLineKind.outro => scheme.tertiary,
   LyricLineKind.lyric => scheme.primary,
 };
 
@@ -49,21 +50,39 @@ class TimelineEditorWidget extends StatefulWidget {
   final bool compact;
 
   @override
-  State<TimelineEditorWidget> createState() => _TimelineEditorWidgetState();
+  State<TimelineEditorWidget> createState() => TimelineEditorWidgetState();
 }
 
-class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
+class TimelineEditorWidgetState extends State<TimelineEditorWidget> {
   final ScrollController _scrollController = ScrollController();
   final Map<String, GlobalKey> _lineKeys = {};
   String? _lastActiveLineId;
   String? _lastLineListSignature;
   String? _pendingScrollLineId;
   bool _showSectionPanel = false;
-  bool _showShortcuts = false;
+  late bool _showShortcuts = widget.controller.shortcutsVisibleNotifier.value;
 
   String _computeLineListSignature(List<TimelineLineItem> items) {
     if (items.isEmpty) return '';
     return '${items.length}:${items.first.line.id}:${items.last.line.id}';
+  }
+
+  /// Reports whether the active/upcoming playback line is currently visible in
+  /// the enclosing scrollable viewport.
+  bool isFollowTargetVisible() {
+    final targetId = widget.controller.followTargetLineId;
+    if (targetId == null) return false;
+    final ctx = _lineKeys[targetId]?.currentContext;
+    if (ctx == null) return false;
+    final ro = ctx.findRenderObject();
+    if (ro is! RenderBox || !ro.attached || !ro.hasSize) return false;
+    final scrollable = Scrollable.maybeOf(ctx);
+    if (scrollable == null) return true;
+    final scrollBox = scrollable.context.findRenderObject();
+    if (scrollBox is! RenderBox || !scrollBox.hasSize) return false;
+    final topLeft = ro.localToGlobal(Offset.zero, ancestor: scrollBox);
+    final rect = topLeft & ro.size;
+    return rect.bottom > 0 && rect.top < scrollBox.size.height;
   }
 
   @override
@@ -75,6 +94,10 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
     );
     widget.controller.projectListenable.addListener(_handleProjectChanged);
     widget.controller.playbackSyncListenable.addListener(_handlePlaybackSync);
+    widget.controller.jumpToCurrentLineSignal.addListener(_handleJumpToCurrent);
+    widget.controller.shortcutsVisibleNotifier.addListener(
+      _handleShortcutsChanged,
+    );
   }
 
   @override
@@ -87,12 +110,40 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
       oldWidget.controller.playbackSyncListenable.removeListener(
         _handlePlaybackSync,
       );
+      oldWidget.controller.jumpToCurrentLineSignal.removeListener(
+        _handleJumpToCurrent,
+      );
+      oldWidget.controller.shortcutsVisibleNotifier.removeListener(
+        _handleShortcutsChanged,
+      );
       _lastActiveLineId = widget.controller.activeLineId;
       _lastLineListSignature = _computeLineListSignature(
         widget.controller.timelineItems,
       );
+      _showShortcuts = widget.controller.shortcutsVisibleNotifier.value;
       widget.controller.projectListenable.addListener(_handleProjectChanged);
       widget.controller.playbackSyncListenable.addListener(_handlePlaybackSync);
+      widget.controller.jumpToCurrentLineSignal.addListener(
+        _handleJumpToCurrent,
+      );
+      widget.controller.shortcutsVisibleNotifier.addListener(
+        _handleShortcutsChanged,
+      );
+    }
+  }
+
+  void _handleShortcutsChanged() {
+    final next = widget.controller.shortcutsVisibleNotifier.value;
+    if (next != _showShortcuts && mounted) {
+      setState(() => _showShortcuts = next);
+    }
+  }
+
+  void _handleJumpToCurrent() {
+    final targetId = widget.controller.followTargetLineId;
+    if (targetId != null) {
+      _pendingScrollLineId = null;
+      _scheduleScrollToLine(targetId);
     }
   }
 
@@ -152,12 +203,18 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
     widget.controller.playbackSyncListenable.removeListener(
       _handlePlaybackSync,
     );
+    widget.controller.jumpToCurrentLineSignal.removeListener(
+      _handleJumpToCurrent,
+    );
+    widget.controller.shortcutsVisibleNotifier.removeListener(
+      _handleShortcutsChanged,
+    );
     _scrollController.dispose();
     super.dispose();
   }
 
   Future<void> _openCreatePresetDialog(BuildContext context) async {
-    final result = await showGeneralDialog<
+    final result = await showAppDialog<
         ({
           String label,
           String colorHex,
@@ -165,13 +222,8 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
           String shortcut,
         })>(
       context: context,
-      barrierDismissible: true,
-      barrierLabel: '关闭',
-      barrierColor: const Color(0x66000000),
-      pageBuilder: (ctx, _, _) => Center(
-        child: _CreatePresetDialog(
-          existingPresets: widget.controller.allPresets,
-        ),
+      builder: (ctx) => _CreatePresetDialog(
+        existingPresets: widget.controller.allPresets,
       ),
     );
 
@@ -190,7 +242,7 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
     LyricLine line, {
     bool autofocusOriginal = false,
   }) async {
-    final result = await showGeneralDialog<
+    final result = await showAppAdaptiveSheetOrDialog<
         ({
           String action,
           int startTimeMs,
@@ -201,14 +253,14 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
           String customShout,
         })>(
       context: context,
-      barrierDismissible: true,
-      barrierLabel: '关闭',
-      barrierColor: const Color(0x66000000),
-      pageBuilder: (ctx, _, _) => Center(
-        child: _EditLineDialog(
-          line: line,
-          autofocusOriginal: autofocusOriginal,
-        ),
+      dialogBuilder: (ctx) => _EditLineDialog(
+        line: line,
+        autofocusOriginal: autofocusOriginal,
+      ),
+      sheetBuilder: (sheetCtx, scrollController) => _EditLineSheet(
+        line: line,
+        autofocusOriginal: autofocusOriginal,
+        scrollController: scrollController,
       ),
     );
 
@@ -248,16 +300,11 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
       widget.controller.setStatus('至少需要 2 个字符的非段落歌词才能按字拆分');
       return;
     }
-    final result = await showGeneralDialog<({List<int> splits, List<int> times})>(
+    final result = await showAppDialog<({List<int> splits, List<int> times})>(
       context: context,
-      barrierDismissible: true,
-      barrierLabel: '关闭',
-      barrierColor: const Color(0x66000000),
-      pageBuilder: (ctx, _, _) => Center(
-        child: _SplitLyricDialog(
-          controller: widget.controller,
-          line: line,
-        ),
+      builder: (ctx) => _SplitLyricDialog(
+        controller: widget.controller,
+        line: line,
       ),
     );
     if (result == null) return;
@@ -273,27 +320,22 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
     LyricLineKind initialKind = LyricLineKind.interlude,
     String? afterLineId,
   }) async {
-    await showGeneralDialog<void>(
+    await showAppDialog<void>(
       context: context,
-      barrierDismissible: true,
-      barrierLabel: '关闭',
-      barrierColor: const Color(0x66000000),
-      pageBuilder: (ctx, _, _) => Center(
-        child: AlertDialog(
-          title: '添加前奏 / 间奏 / 尾奏',
-          hasFields: true,
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('关闭'),
-            ),
-          ],
-          child: _ManualSectionForm(
-            controller: widget.controller,
-            initialKind: initialKind,
-            afterLineId: afterLineId,
-            onAdded: () => Navigator.of(ctx).pop(),
+      builder: (ctx) => AlertDialog(
+        title: '添加前奏 / 间奏 / 尾奏',
+        hasFields: true,
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('关闭'),
           ),
+        ],
+        child: _ManualSectionForm(
+          controller: widget.controller,
+          initialKind: initialKind,
+          afterLineId: afterLineId,
+          onAdded: () => Navigator.of(ctx).pop(),
         ),
       ),
     );
@@ -306,17 +348,12 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
     CallPreset preset,
   ) async {
     final isSingAlong = preset.id == singAlongPresetId;
-    final result = await showGeneralDialog<({bool removed, String suffix})>(
+    final result = await showAppDialog<({bool removed, String suffix})>(
       context: context,
-      barrierDismissible: true,
-      barrierLabel: '关闭',
-      barrierColor: const Color(0x66000000),
-      pageBuilder: (ctx, _, _) => Center(
-        child: _EditSuffixDialog(
-          preset: preset,
-          initialSuffix: tag.suffix ?? '',
-          isSingAlong: isSingAlong,
-        ),
+      builder: (ctx) => _EditSuffixDialog(
+        preset: preset,
+        initialSuffix: tag.suffix ?? '',
+        isSingAlong: isSingAlong,
       ),
     );
     if (result == null) return;
@@ -375,17 +412,18 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
                       Semantics(
                         label: '键盘快捷键说明',
                         button: true,
-                        child: TonalChip(
-                          label: '?',
-                          color: _showShortcuts
-                              ? scheme.primaryContainer
-                              : scheme.surfaceContainerHigh,
-                          foregroundColor: _showShortcuts
-                              ? scheme.onPrimaryContainer
-                              : scheme.onSurfaceVariant,
-                          onPressed: () => setState(() {
-                            _showShortcuts = !_showShortcuts;
-                          }),
+                        child: Tooltip(
+                          message: '键盘快捷键说明（?）',
+                          child: TonalChip(
+                            label: '?',
+                            color: _showShortcuts
+                                ? scheme.primaryContainer
+                                : scheme.surfaceContainerHigh,
+                            foregroundColor: _showShortcuts
+                                ? scheme.onPrimaryContainer
+                                : scheme.onSurfaceVariant,
+                            onPressed: c.toggleShortcutsPanel,
+                          ),
                         ),
                       ),
                     ],
@@ -417,11 +455,16 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
                         onChanged: c.setAutoAdvanceOnTag,
                         semanticLabel: '打标后自动跳转下一句',
                       ),
-                      TonalButton(
-                        size: TonalButtonSize.compact,
-                        label: activeLineHasGt ? '取消 GT 警报' : 'GT 警报',
-                        onPressed:
-                            items.isEmpty ? null : () => c.insertGtAlert(),
+                      Tooltip(
+                        message: activeLineHasGt
+                            ? '取消当前行 GT 警报（G）'
+                            : '插入当前行 GT 警报（G）',
+                        child: TonalButton(
+                          size: TonalButtonSize.compact,
+                          label: activeLineHasGt ? '取消 GT 警报' : 'GT 警报',
+                          onPressed:
+                              items.isEmpty ? null : () => c.insertGtAlert(),
+                        ),
                       ),
                       TonalButton(
                         size: TonalButtonSize.compact,
@@ -485,7 +528,7 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
                     shape: AppShape.lg,
                   ),
                   child: Text(
-                    'Space 播放/暂停 · 1~0 切换军 Call · G 切换当前行 GT 警报 · ↑/↓ 切行 · ←/→ 跳 2s · F 现场演练',
+                    'Space 播放/暂停 · 1~0 切换军 Call · G 切换当前行 GT 警报 · ↑/↓ 切行 · ←/→ 跳 2s · F 现场演练 · Ctrl+Z 撤销 · Ctrl+Home 回到顶部 · ? 收起/展开',
                     style: AppTextStyle.caption1.of(context).copyWith(
                       fontFamily: 'GoogleSans',
                       color: scheme.onSurfaceVariant,
@@ -514,13 +557,12 @@ class _TimelineEditorWidgetState extends State<TimelineEditorWidget> {
                         controller: c,
                         presetId: preset.id,
                       ),
-                      onContextAction: preset.builtIn
+                      menuItems: preset.builtIn
                           ? null
-                          : (pos) => showCustomPresetContextMenu(
+                          : buildCustomPresetMenuItems(
                               context,
                               controller: c,
                               preset: preset,
-                              globalPosition: pos,
                             ),
                     ),
                   ValueListenableBuilder<String?>(
@@ -850,15 +892,20 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard> {
                   foregroundColor: scheme.onSurface,
                   onPressed: widget.onEditLine,
                 ),
-                GestureDetector(
-                  onTap: () => c.deleteLine(line.id),
-                  child: Padding(
-                    padding: const EdgeInsets.all(4),
-                    child: GlyphIcon(
+                Semantics(
+                  button: true,
+                  label: '删除歌词行',
+                  child: IconButton(
+                    tooltip: '删除此行',
+                    icon: GlyphIcon(
                       CallbookGlyphs.trash,
                       size: 17,
                       color: scheme.error,
                     ),
+                    style: const ButtonStyle(
+                      minimumSize: AppTokens.minTapTargetSize,
+                    ),
+                    onPressed: () => c.deleteLine(line.id),
                   ),
                 ),
               ],
@@ -897,13 +944,12 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard> {
                     suffix: tag.suffix,
                     compact: true,
                     onTap: () => widget.onOpenSuffix(tag, preset),
-                    onContextAction: preset.builtIn
+                    menuItems: preset.builtIn
                         ? null
-                        : (pos) => showCustomPresetContextMenu(
+                        : buildCustomPresetMenuItems(
                             context,
                             controller: c,
                             preset: preset,
-                            globalPosition: pos,
                           ),
                   ),
               if (unalignedShout.isNotEmpty)
@@ -1024,13 +1070,12 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard> {
                       presetId: preset.id,
                       lineId: line.id,
                     ),
-                    onContextAction: preset.builtIn
+                    menuItems: preset.builtIn
                         ? null
-                        : (pos) => showCustomPresetContextMenu(
+                        : buildCustomPresetMenuItems(
                             context,
                             controller: c,
                             preset: preset,
-                            globalPosition: pos,
                           ),
                   ),
                   const SizedBox(width: 6),
@@ -1085,30 +1130,25 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard> {
     );
 
     if (gtAlert != null) {
-      return GestureDetector(
-        behavior: HitTestBehavior.deferToChild,
-        onTap: _handleCardTap,
-        child: AnimatedContainer(
-          duration: AppMotion.d(context, AppMotion.effectsDefault),
-          curve: AppMotion.curveEffects,
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: Color.alphaBlend(
-              scheme.warningContainer.withValues(alpha: highlighted ? 0.46 : 0.34),
-              scheme.surfaceContainerLow,
-            ),
-            borderRadius: BorderRadius.circular(AppTokens.radiusSection),
-            border: Border.all(
-              color: scheme.warning,
-              width: highlighted ? 1.8 : 1.4,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: scheme.warning.withValues(alpha: highlighted ? 0.24 : 0.16),
-                blurRadius: highlighted ? 14 : 10,
-              ),
-            ],
+      return Semantics(
+        selected: highlighted,
+        label: line.text.original.isNotEmpty
+            ? '歌词行：${line.text.original}'
+            : '空白歌词行',
+        child: PressSurface(
+          fill: Color.alphaBlend(
+            scheme.warningContainer.withValues(alpha: highlighted ? 0.46 : 0.34),
+            scheme.surfaceContainerLow,
           ),
+          shape: AppShape.all(AppTokens.radiusSection),
+          side: BorderSide(
+            color: scheme.warning,
+            width: highlighted ? 1.8 : 1.4,
+          ),
+          padding: const EdgeInsets.all(14),
+          tapTarget: AppTokens.minTapTargetSize,
+          selected: highlighted,
+          onPressed: _handleCardTap,
           child: body,
         ),
       );
@@ -1634,29 +1674,28 @@ class _TailUpdraftToggleChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = context.colorScheme;
-    final bg = enabled ? const Color(0xFF0284C7) : scheme.surfaceContainerHigh;
-    final fg = enabled ? const Color(0xFFFFFFFF) : scheme.onSurface;
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
+    final bg = enabled ? scheme.tertiary : scheme.surfaceContainerHigh;
+    final fg = enabled ? scheme.onTertiary : scheme.onSurface;
+    return Semantics(
+      button: true,
+      selected: enabled,
+      label: enabled ? '取消尾句上升气流' : '标记尾句上升气流',
       child: Opacity(
         opacity: onTap == null ? 0.45 : 1.0,
-        child: Container(
+        child: PressSurface(
+          fill: bg,
+          shape: AppShape.full,
+          side: BorderSide(
+            color: enabled ? scheme.tertiary : scheme.outlineVariant,
+          ),
+          foreground: fg,
+          inkColor: fg,
+          tapTarget: AppTokens.minTapTargetSize,
           padding: EdgeInsets.symmetric(
             horizontal: compact ? 9 : 11,
             vertical: compact ? 5 : 7,
           ),
-          decoration: ShapeDecoration(
-            color: bg,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(999),
-              side: BorderSide(
-                color: enabled
-                    ? const Color(0xFF0284C7)
-                    : scheme.outlineVariant,
-              ),
-            ),
-          ),
+          onPressed: onTap,
           child: Text(
             enabled ? '✓ 尾句上升气流' : '+ 尾句上升气流',
             softWrap: false,
@@ -1677,14 +1716,12 @@ class _TailUpdraftTagBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = context.colorScheme;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: ShapeDecoration(
-        color: const Color(0xFFE0F2FE),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(999),
-          side: const BorderSide(color: Color(0xFF38BDF8)),
-        ),
+        color: scheme.tertiaryContainer,
+        shape: AppShape.full,
       ),
       child: Text(
         '尾句上升气流',
@@ -1694,7 +1731,7 @@ class _TailUpdraftTagBadge extends StatelessWidget {
         style: AppTextStyle.caption2
             .of(context, emphasized: true)
             .copyWith(
-              color: const Color(0xFF0369A1),
+              color: scheme.onTertiaryContainer,
               height: 1.15,
             ),
       ),
@@ -1712,16 +1749,11 @@ class _InlineAlignedCallsBar extends StatelessWidget {
   final CallbookController controller;
 
   Future<void> _openPicker(BuildContext context, [AlignedCallCue? editing]) async {
-    final res = await showGeneralDialog<_AlignedCallFormResult>(
+    final res = await showAppDialog<_AlignedCallFormResult>(
       context: context,
-      barrierDismissible: true,
-      barrierLabel: '关闭',
-      barrierColor: const Color(0x66000000),
-      pageBuilder: (ctx, _, _) => Center(
-        child: _AlignedCallPickerDialog(
-          original: line.text.original,
-          initialCue: editing,
-        ),
+      builder: (ctx) => _AlignedCallPickerDialog(
+        original: line.text.original,
+        initialCue: editing,
       ),
     );
     if (res == null) return;
@@ -1835,10 +1867,17 @@ class _AlignedCueChip extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          GestureDetector(
-            onTap: onEdit,
-            child: Padding(
+          Semantics(
+            button: true,
+            label: '编辑对位喊声 ${cue.text}',
+            child: PressSurface(
+              fill: const Color(0x00000000),
+              shape: AppShape.full,
+              foreground: fg,
+              inkColor: fg,
+              tapTarget: AppTokens.minTapTargetSize,
               padding: const EdgeInsets.fromLTRB(9, 4, 4, 4),
+              onPressed: onEdit,
               child: Text(
                 '${cue.text} → $targetSnippet',
                 style: AppTextStyle.caption1
@@ -1847,11 +1886,17 @@ class _AlignedCueChip extends StatelessWidget {
               ),
             ),
           ),
-          GestureDetector(
-            onTap: onRemove,
-            behavior: HitTestBehavior.opaque,
-            child: Padding(
+          Semantics(
+            button: true,
+            label: '移除对位喊声 ${cue.text}',
+            child: PressSurface(
+              fill: const Color(0x00000000),
+              shape: AppShape.circle,
+              foreground: fg,
+              inkColor: fg,
+              tapTarget: AppTokens.minTapTargetSize,
               padding: const EdgeInsets.fromLTRB(2, 4, 8, 4),
+              onPressed: onRemove,
               child: GlyphIcon(
                 Glyphs.close,
                 size: 13,
@@ -2009,19 +2054,25 @@ class _AlignedCallPickerDialogState extends State<_AlignedCallPickerDialog> {
             runSpacing: 4,
             children: [
               for (final span in _chars)
-                GestureDetector(
-                  onTap: () => _onTapChar(span),
-                  child: Container(
+                Semantics(
+                  button: true,
+                  selected: span.start >= _start && span.end <= _end,
+                  label: span.text == ' ' ? '空格' : span.text,
+                  child: PressSurface(
+                    fill: (span.start >= _start && span.end <= _end)
+                        ? scheme.primary
+                        : scheme.surfaceContainerHigh,
+                    shape: AppShape.sm,
+                    foreground: (span.start >= _start && span.end <= _end)
+                        ? scheme.onPrimary
+                        : scheme.onSurface,
+                    tapTarget: AppTokens.minTapTargetSize,
+                    selected: span.start >= _start && span.end <= _end,
                     padding: const EdgeInsets.symmetric(
                       horizontal: 7,
                       vertical: 5,
                     ),
-                    decoration: ShapeDecoration(
-                      color: (span.start >= _start && span.end <= _end)
-                          ? scheme.primary
-                          : scheme.surfaceContainerHigh,
-                      shape: AppShape.sm,
-                    ),
+                    onPressed: () => _onTapChar(span),
                     child: Text(
                       span.text == ' ' ? '␣' : span.text,
                       style: AppTextStyle.subheadline
@@ -2052,50 +2103,49 @@ class _AlignedCallPickerDialogState extends State<_AlignedCallPickerDialog> {
             runSpacing: 8,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              GestureDetector(
-                onTap: () => setState(() => _colorHex = null),
-                child: Container(
+              Semantics(
+                button: true,
+                selected: _colorHex == null,
+                label: '默认配色',
+                child: PressSurface(
+                  fill: scheme.secondaryContainer,
+                  shape: AppShape.full,
+                  side: _colorHex == null
+                      ? BorderSide(color: scheme.onSurface, width: 2)
+                      : BorderSide(color: scheme.outlineVariant),
+                  foreground: scheme.onSecondaryContainer,
+                  tapTarget: AppTokens.minTapTargetSize,
+                  selected: _colorHex == null,
                   padding: const EdgeInsets.symmetric(
                     horizontal: 8,
                     vertical: 4,
                   ),
-                  decoration: ShapeDecoration(
-                    color: const Color(0xFFE0E7FF),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(999),
-                      side: _colorHex == null
-                          ? BorderSide(color: scheme.onSurface, width: 2)
-                          : const BorderSide(color: Color(0xFFC7D2FE)),
-                    ),
-                  ),
-                  child: const Text(
-                    '默认靛蓝',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      color: Color(0xFF3730A3),
-                    ),
+                  onPressed: () => setState(() => _colorHex = null),
+                  child: Text(
+                    '默认配色',
+                    style: AppTextStyle.caption2
+                        .of(context, emphasized: true)
+                        .copyWith(color: scheme.onSecondaryContainer),
                   ),
                 ),
               ),
               for (final hex in customPresetColorPalette)
-                GestureDetector(
-                  onTap: () => setState(() => _colorHex = hex),
-                  child: Container(
-                    width: 24,
-                    height: 24,
-                    decoration: BoxDecoration(
-                      color: Color(
-                        int.parse('FF${hex.substring(1)}', radix: 16),
-                      ),
-                      shape: BoxShape.circle,
-                      border: _colorHex == hex
-                          ? Border.all(
-                              color: scheme.onSurface,
-                              width: 2.5,
-                            )
-                          : null,
+                Semantics(
+                  button: true,
+                  selected: _colorHex == hex,
+                  label: '颜色 $hex',
+                  child: PressSurface(
+                    fill: Color(
+                      int.parse('FF${hex.substring(1)}', radix: 16),
                     ),
+                    shape: AppShape.circle,
+                    side: _colorHex == hex
+                        ? BorderSide(color: scheme.onSurface, width: 2.5)
+                        : BorderSide.none,
+                    tapTarget: AppTokens.minTapTargetSize,
+                    selected: _colorHex == hex,
+                    onPressed: () => setState(() => _colorHex = hex),
+                    child: const SizedBox(width: 24, height: 24),
                   ),
                 ),
             ],
@@ -2390,32 +2440,32 @@ class _SplitLyricDialogState extends State<_SplitLyricDialog> {
                     Semantics(
                       label: '在第 ${i + 1} 字后拆分',
                       button: true,
-                      toggled: _splitIndices.contains(i + 1),
+                      selected: _splitIndices.contains(i + 1),
                       excludeSemantics: true,
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: () => _toggleSplitAt(i + 1),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 5,
-                            vertical: 4,
-                          ),
-                          decoration: ShapeDecoration(
-                            color: _splitIndices.contains(i + 1)
-                                ? scheme.primary
-                                : scheme.surfaceContainerHigh,
-                            shape: AppShape.sm,
-                          ),
-                          child: Text(
-                            _splitIndices.contains(i + 1) ? '✂' : '⋮',
-                            style: AppTextStyle.caption1
-                                .of(context, emphasized: true)
-                                .copyWith(
-                                  color: _splitIndices.contains(i + 1)
-                                      ? scheme.onPrimary
-                                      : scheme.onSurfaceVariant,
-                                ),
-                          ),
+                      child: PressSurface(
+                        fill: _splitIndices.contains(i + 1)
+                            ? scheme.primary
+                            : scheme.surfaceContainerHigh,
+                        shape: AppShape.sm,
+                        foreground: _splitIndices.contains(i + 1)
+                            ? scheme.onPrimary
+                            : scheme.onSurfaceVariant,
+                        tapTarget: AppTokens.minTapTargetSize,
+                        selected: _splitIndices.contains(i + 1),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 5,
+                          vertical: 4,
+                        ),
+                        onPressed: () => _toggleSplitAt(i + 1),
+                        child: Text(
+                          _splitIndices.contains(i + 1) ? '✂' : '⋮',
+                          style: AppTextStyle.caption1
+                              .of(context, emphasized: true)
+                              .copyWith(
+                                color: _splitIndices.contains(i + 1)
+                                    ? scheme.onPrimary
+                                    : scheme.onSurfaceVariant,
+                              ),
                         ),
                       ),
                     ),
@@ -2639,23 +2689,22 @@ class _CreatePresetDialogState extends State<_CreatePresetDialog> {
             runSpacing: 8,
             children: [
               for (final hex in _palette)
-                GestureDetector(
-                  onTap: () => setState(() => _colorHex = hex),
-                  child: Container(
-                    width: 28,
-                    height: 28,
-                    decoration: BoxDecoration(
-                      color: Color(
-                        int.parse('FF${hex.substring(1)}', radix: 16),
-                      ),
-                      shape: BoxShape.circle,
-                      border: _colorHex == hex
-                          ? Border.all(
-                              color: scheme.onSurface,
-                              width: 2.5,
-                            )
-                          : null,
+                Semantics(
+                  button: true,
+                  selected: _colorHex == hex,
+                  label: '颜色 $hex',
+                  child: PressSurface(
+                    fill: Color(
+                      int.parse('FF${hex.substring(1)}', radix: 16),
                     ),
+                    shape: AppShape.circle,
+                    side: _colorHex == hex
+                        ? BorderSide(color: scheme.onSurface, width: 2.5)
+                        : BorderSide.none,
+                    tapTarget: AppTokens.minTapTargetSize,
+                    selected: _colorHex == hex,
+                    onPressed: () => setState(() => _colorHex = hex),
+                    child: const SizedBox(width: 28, height: 28),
                   ),
                 ),
             ],
@@ -2829,6 +2878,204 @@ class _EditLineDialogState extends State<_EditLineDialog> {
           ],
         ],
       ),
+    );
+  }
+}
+
+class _EditLineSheet extends StatefulWidget {
+  const _EditLineSheet({
+    required this.line,
+    this.autofocusOriginal = false,
+    this.scrollController,
+  });
+
+  final LyricLine line;
+  final bool autofocusOriginal;
+  final ScrollController? scrollController;
+
+  @override
+  State<_EditLineSheet> createState() => _EditLineSheetState();
+}
+
+class _EditLineSheetState extends State<_EditLineSheet> {
+  late final TextEditingController _originalCtrl = TextEditingController(
+    text: widget.line.text.original,
+  );
+  late final TextEditingController _transCtrl = TextEditingController(
+    text: widget.line.text.translation ?? '',
+  );
+  late final TextEditingController _shoutCtrl = TextEditingController(
+    text: widget.line.customShout,
+  );
+  late final TextEditingController _startCtrl = TextEditingController(
+    text: formatMsToClock(widget.line.startTimeMs),
+  );
+  late final TextEditingController _endCtrl = TextEditingController(
+    text: formatMsToClock(widget.line.endTimeMs),
+  );
+  late LyricLineKind _selectedKind = widget.line.kind;
+
+  @override
+  void dispose() {
+    _originalCtrl.dispose();
+    _transCtrl.dispose();
+    _shoutCtrl.dispose();
+    _startCtrl.dispose();
+    _endCtrl.dispose();
+    super.dispose();
+  }
+
+  void _closeWithAction(String action) {
+    final parsedStart =
+        _parseClockText(_startCtrl.text) ?? widget.line.startTimeMs;
+    final parsedEnd = _parseClockText(_endCtrl.text) ?? widget.line.endTimeMs;
+    Navigator.of(context).pop((
+      action: action,
+      startTimeMs: parsedStart,
+      endTimeMs: math.max(parsedStart + 500, parsedEnd),
+      kind: _selectedKind,
+      original: _originalCtrl.text,
+      translation: _transCtrl.text,
+      customShout: _shoutCtrl.text,
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = context.colorScheme;
+    final canSplitEdited =
+        !_selectedKind.isSection && _originalCtrl.text.runes.length >= 2;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const SheetDragHandle(),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '编辑歌词与段落',
+                  style: AppTextStyle.headline
+                      .of(context, emphasized: true)
+                      .copyWith(color: scheme.onSurface),
+                ),
+              ),
+              Semantics(
+                button: true,
+                label: '关闭编辑面板',
+                child: IconButton(
+                  tooltip: '关闭',
+                  icon: const GlyphIcon(Glyphs.close, size: 18),
+                  style: const ButtonStyle(
+                    minimumSize: AppTokens.minTapTargetSize,
+                  ),
+                  onPressed: () => Navigator.of(context).pop(null),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: ListView(
+            controller: widget.scrollController,
+            padding: const EdgeInsets.all(AppTokens.s16),
+            children: [
+              SegmentedControl<LyricLineKind>(
+                segments: const [
+                  (LyricLineKind.lyric, '歌词'),
+                  (LyricLineKind.intro, '前奏'),
+                  (LyricLineKind.interlude, '间奏'),
+                  (LyricLineKind.outro, '尾奏'),
+                ],
+                value: _selectedKind,
+                onChanged: (v) {
+                  setState(() {
+                    _selectedKind = v;
+                    if (v.isSection &&
+                        (_originalCtrl.text.trim().isEmpty ||
+                            _originalCtrl.text.trim().startsWith('【'))) {
+                      _originalCtrl.text = v.bracketTitle;
+                    }
+                  });
+                },
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _startCtrl,
+                      decoration: const InputDecoration(
+                        hintText: '开始 mm:ss.ms',
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TextField(
+                      controller: _endCtrl,
+                      decoration: const InputDecoration(
+                        hintText: '结束 mm:ss.ms',
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _originalCtrl,
+                autofocus: widget.autofocusOriginal,
+                decoration: const InputDecoration(
+                  hintText: '歌词原文 / 段落标题',
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _transCtrl,
+                decoration: const InputDecoration(hintText: '中文翻译 / 段落说明'),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _shoutCtrl,
+                decoration: const InputDecoration(hintText: '自定义口上 / Mix'),
+              ),
+              if (canSplitEdited) ...[
+                const SizedBox(height: 10),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TonalChip(
+                    label: '按字拆分此句',
+                    color: scheme.primaryContainer,
+                    foregroundColor: scheme.onPrimaryContainer,
+                    onPressed: () => _closeWithAction('split'),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+        const Divider(height: 1),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(null),
+                child: const Text('取消'),
+              ),
+              const SizedBox(width: 8),
+              FilledButton(
+                onPressed: () => _closeWithAction('save'),
+                child: const Text('保存'),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
