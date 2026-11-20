@@ -115,7 +115,7 @@ class _ArchiveViewState extends State<ArchiveView> {
   Widget build(BuildContext context) {
     final c = widget.controller;
     return AnimatedBuilder(
-      animation: c,
+      animation: Listenable.merge([c.archiveListenable, c.projectListenable]),
       builder: (ctx, _) {
         final scheme = ctx.colorScheme;
         final bottomInset = BottomInsetScope.of(ctx);

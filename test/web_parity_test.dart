@@ -387,8 +387,11 @@ void main() {
             tailUpdraftBefore,
           );
 
-          // AppBar dedicated theme toggle works cleanly on Mobile
-          await tester.tap(find.bySemanticsLabel('切换深色主题'));
+          // AppBar dedicated theme toggle cycles system -> light -> dark on Mobile
+          await tester.tap(find.bySemanticsLabel('主题：跟随系统（点击切换浅色）'));
+          await tester.pump();
+          expect(controller.themeMode, prism.ThemeMode.light);
+          await tester.tap(find.bySemanticsLabel('主题：浅色（点击切换深色）'));
           await tester.pump();
           expect(controller.themeMode, prism.ThemeMode.dark);
           expect(captured, isEmpty);

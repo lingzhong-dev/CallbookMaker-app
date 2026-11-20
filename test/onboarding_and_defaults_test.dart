@@ -513,6 +513,7 @@ void main() {
             find.text('格式无效：支持 #RRGGBB、#RGB 或 RGB (如 102, 204, 255)'),
             findsNothing,
           );
+          await tester.pump(const Duration(milliseconds: 350));
           expect(controller.seedColor, const Color(0xFF39C5BB));
 
           // Change ThemeMode inside Step 5

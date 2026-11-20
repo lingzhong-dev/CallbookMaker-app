@@ -25,17 +25,16 @@ class PracticeOverlay extends StatefulWidget {
 class _PracticeOverlayState extends State<PracticeOverlay> {
   final ScrollController _scrollController = ScrollController();
   final Map<String, GlobalKey> _lineKeys = {};
-  String? _lastPlayingLineId;
+  String? _pendingScrollLineId;
 
   @override
   void initState() {
     super.initState();
-    _lastPlayingLineId = widget.controller.playingLineId;
-    widget.controller.playingLineIdListenable.addListener(
-      _handlePlayingLineChanged,
-    );
+    widget.controller.playbackSyncListenable.addListener(_handlePlaybackSync);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _scrollToLine(_lastPlayingLineId ?? widget.controller.activeLineId);
+      _scrollToLine(
+        widget.controller.followTargetLineId ?? widget.controller.activeLineId,
+      );
     });
   }
 
@@ -43,32 +42,30 @@ class _PracticeOverlayState extends State<PracticeOverlay> {
   void didUpdateWidget(covariant PracticeOverlay oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.controller != widget.controller) {
-      oldWidget.controller.playingLineIdListenable.removeListener(
-        _handlePlayingLineChanged,
+      oldWidget.controller.playbackSyncListenable.removeListener(
+        _handlePlaybackSync,
       );
-      _lastPlayingLineId = widget.controller.playingLineId;
-      widget.controller.playingLineIdListenable.addListener(
-        _handlePlayingLineChanged,
-      );
+      widget.controller.playbackSyncListenable.addListener(_handlePlaybackSync);
     }
   }
 
-  void _handlePlayingLineChanged() {
+  void _handlePlaybackSync() {
     final c = widget.controller;
-    final nextPlaying = c.playingLineId;
-    if (nextPlaying != null && nextPlaying != _lastPlayingLineId) {
-      _lastPlayingLineId = nextPlaying;
-      if (c.isPracticeMode) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _scrollToLine(nextPlaying);
-        });
-      }
-    } else {
-      _lastPlayingLineId = nextPlaying;
+    if (!c.isPracticeMode) return;
+    final targetId = c.followTargetLineId ?? c.activeLineId;
+    if (targetId == null) return;
+    final wasScheduled = _pendingScrollLineId != null;
+    _pendingScrollLineId = targetId;
+    if (!wasScheduled) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final scheduledId = _pendingScrollLineId;
+        _pendingScrollLineId = null;
+        _scrollToLine(scheduledId);
+      });
     }
   }
 
-  void _scrollToLine(String? lineId) {
+  void _scrollToLine(String? lineId, {bool allowEstimateFallback = true}) {
     if (!mounted || lineId == null) return;
     final ctx = _lineKeys[lineId]?.currentContext;
     if (ctx != null) {
@@ -78,13 +75,26 @@ class _PracticeOverlayState extends State<PracticeOverlay> {
         curve: Curves.easeOutCubic,
         alignment: 0.42,
       );
+      return;
     }
+    if (!allowEstimateFallback || !_scrollController.hasClients) return;
+    final lines = widget.controller.sortedLines;
+    final idx = lines.indexWhere((l) => l.id == lineId);
+    if (idx < 0 || lines.isEmpty) return;
+    final maxExtent = _scrollController.position.maxScrollExtent;
+    final estimated = lines.length <= 1
+        ? 0.0
+        : (maxExtent * (idx / (lines.length - 1))).clamp(0.0, maxExtent);
+    _scrollController.jumpTo(estimated);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollToLine(lineId, allowEstimateFallback: false);
+    });
   }
 
   @override
   void dispose() {
-    widget.controller.playingLineIdListenable.removeListener(
-      _handlePlayingLineChanged,
+    widget.controller.playbackSyncListenable.removeListener(
+      _handlePlaybackSync,
     );
     _scrollController.dispose();
     super.dispose();
@@ -95,7 +105,7 @@ class _PracticeOverlayState extends State<PracticeOverlay> {
     final c = widget.controller;
     final scheme = context.colorScheme;
     final lines = c.sortedLines;
-    final presetMap = {for (final p in c.allPresets) p.id: p};
+    final presetMap = c.presetMap;
     final pad = MediaQuery.paddingOf(context);
 
     // Pure OLED black stage without any screen-edge flashing borders.
@@ -406,10 +416,13 @@ class _PracticeOverlayState extends State<PracticeOverlay> {
                                   ),
                                 ),
                                 const SizedBox(width: 12),
-                                ScallopedOrbButton(
-                                  running: c.isPlaying,
-                                  size: 54,
-                                  onToggle: c.togglePlay,
+                                ListenableBuilder(
+                                  listenable: c.playbackListenable,
+                                  builder: (context, _) => ScallopedOrbButton(
+                                    running: c.isPlaying,
+                                    size: 54,
+                                    onToggle: c.togglePlay,
+                                  ),
                                 ),
                                 const SizedBox(width: 12),
                                 Semantics(
@@ -425,23 +438,26 @@ class _PracticeOverlayState extends State<PracticeOverlay> {
                                 ),
                               ],
                             );
-                            final speedChips = Wrap(
-                              spacing: 6,
-                              runSpacing: 6,
-                              children: [
-                                for (final rate in const [0.75, 1.0, 1.25])
-                                  TonalChip(
-                                    label: '${rate}x',
-                                    color: (c.playbackRate - rate).abs() < 0.01
-                                        ? scheme.primary
-                                        : const Color(0xFF18181B),
-                                    foregroundColor:
-                                        (c.playbackRate - rate).abs() < 0.01
-                                        ? scheme.onPrimary
-                                        : const Color(0xFFD4D4D8),
-                                    onPressed: () => c.setPlaybackRate(rate),
-                                  ),
-                              ],
+                            final speedChips = ListenableBuilder(
+                              listenable: c.playbackListenable,
+                              builder: (context, _) => Wrap(
+                                spacing: 6,
+                                runSpacing: 6,
+                                children: [
+                                  for (final rate in const [0.75, 1.0, 1.25])
+                                    TonalChip(
+                                      label: '${rate}x',
+                                      color: (c.playbackRate - rate).abs() < 0.01
+                                          ? scheme.primary
+                                          : const Color(0xFF18181B),
+                                      foregroundColor:
+                                          (c.playbackRate - rate).abs() < 0.01
+                                          ? scheme.onPrimary
+                                          : const Color(0xFFD4D4D8),
+                                      onPressed: () => c.setPlaybackRate(rate),
+                                    ),
+                                ],
+                              ),
                             );
 
                             if (constraints.maxWidth < 540) {
@@ -510,12 +526,15 @@ class _ReactivePracticeLineCard extends StatefulWidget {
 
 class _ReactivePracticeLineCardState extends State<_ReactivePracticeLineCard> {
   late bool _isPlaying;
+  late bool _isUpcoming;
 
   @override
   void initState() {
     super.initState();
     _isPlaying = widget.controller.playingLineId == widget.line.id;
+    _isUpcoming = widget.controller.upcomingLineId == widget.line.id;
     widget.controller.playingLineIdListenable.addListener(_onPlaybackChanged);
+    widget.controller.upcomingLineIdListenable.addListener(_onPlaybackChanged);
   }
 
   @override
@@ -524,16 +543,24 @@ class _ReactivePracticeLineCardState extends State<_ReactivePracticeLineCard> {
     if (oldWidget.controller != widget.controller) {
       oldWidget.controller.playingLineIdListenable
           .removeListener(_onPlaybackChanged);
+      oldWidget.controller.upcomingLineIdListenable
+          .removeListener(_onPlaybackChanged);
       widget.controller.playingLineIdListenable.addListener(_onPlaybackChanged);
+      widget.controller.upcomingLineIdListenable.addListener(
+        _onPlaybackChanged,
+      );
     }
     _isPlaying = widget.controller.playingLineId == widget.line.id;
+    _isUpcoming = widget.controller.upcomingLineId == widget.line.id;
   }
 
   void _onPlaybackChanged() {
     final nextPlaying = widget.controller.playingLineId == widget.line.id;
-    if (nextPlaying != _isPlaying) {
+    final nextUpcoming = widget.controller.upcomingLineId == widget.line.id;
+    if (nextPlaying != _isPlaying || nextUpcoming != _isUpcoming) {
       setState(() {
         _isPlaying = nextPlaying;
+        _isUpcoming = nextUpcoming;
       });
     }
   }
@@ -541,6 +568,8 @@ class _ReactivePracticeLineCardState extends State<_ReactivePracticeLineCard> {
   @override
   void dispose() {
     widget.controller.playingLineIdListenable
+        .removeListener(_onPlaybackChanged);
+    widget.controller.upcomingLineIdListenable
         .removeListener(_onPlaybackChanged);
     super.dispose();
   }
@@ -555,6 +584,8 @@ class _ReactivePracticeLineCardState extends State<_ReactivePracticeLineCard> {
       textScale: widget.textScale,
       primaryColor: widget.primaryColor,
       isPlaying: _isPlaying,
+      isUpcoming: _isUpcoming && !_isPlaying,
+      upcomingLabel: widget.controller.siteText('即将演唱'),
       onTap: widget.onTap,
     );
   }
@@ -569,6 +600,8 @@ class _PracticeLineCard extends StatelessWidget {
     required this.textScale,
     required this.primaryColor,
     required this.isPlaying,
+    required this.isUpcoming,
+    required this.upcomingLabel,
     required this.onTap,
   });
 
@@ -579,6 +612,8 @@ class _PracticeLineCard extends StatelessWidget {
   final double textScale;
   final Color primaryColor;
   final bool isPlaying;
+  final bool isUpcoming;
+  final String upcomingLabel;
   final VoidCallback onTap;
 
   @override
@@ -612,6 +647,10 @@ class _PracticeLineCard extends StatelessWidget {
           blurRadius: 26,
         ),
       ];
+    } else if (isUpcoming) {
+      borderColor = primaryColor.withValues(alpha: 0.72);
+      bgColor = const Color(0xFF10131A);
+      opacity = 0.92;
     } else if (lineAlert != null) {
       borderColor = const Color(0xFFB45309);
       bgColor = const Color(0xFF1A1307);
@@ -656,6 +695,12 @@ class _PracticeLineCard extends StatelessWidget {
                       color: Color(0xFFA1A1AA),
                     ),
                   ),
+                  if (isUpcoming)
+                    TonalChip(
+                      label: upcomingLabel,
+                      color: primaryColor.withValues(alpha: 0.22),
+                      foregroundColor: const Color(0xFFFFFFFF),
+                    ),
                   if (line.kind.isSection)
                     TonalChip(
                       label:

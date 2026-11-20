@@ -1,11 +1,12 @@
 import 'dart:async';
-import 'dart:io' show Platform, Process, ProcessResult;
+import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:prism_ui/icons/icons.dart';
 import 'package:prism_ui/prism_ui.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../constants/app_info.dart';
 import '../state/callbook_controller.dart';
@@ -58,41 +59,10 @@ class _MoreViewState extends State<MoreView> {
     if (kIsWeb || isWidgetTest) return;
 
     try {
-      if (Platform.isLinux) {
-        unawaited(
-          Process.run('xdg-open', const [kDeveloperGithubUrl]).catchError(
-            (_) => ProcessResult(0, 1, '', ''),
-          ),
-        );
-      } else if (Platform.isMacOS) {
-        unawaited(
-          Process.run('open', const [kDeveloperGithubUrl]).catchError(
-            (_) => ProcessResult(0, 1, '', ''),
-          ),
-        );
-      } else if (Platform.isWindows) {
-        unawaited(
-          Process.run(
-            'cmd',
-            const ['/c', 'start', '', kDeveloperGithubUrl],
-          ).catchError((_) => ProcessResult(0, 1, '', '')),
-        );
-      } else if (Platform.isAndroid || Platform.isIOS) {
-        const channel = MethodChannel('plugins.flutter.io/url_launcher');
-        unawaited(
-          channel
-              .invokeMethod<bool>('launch', <String, Object>{
-                'url': kDeveloperGithubUrl,
-                'useSafariVC': false,
-                'useWebView': false,
-                'enableJavaScript': false,
-                'enableDomStorage': false,
-                'universalLinksOnly': false,
-                'headers': <String, String>{},
-              })
-              .catchError((_) => false),
-        );
-      }
+      await launchUrl(
+        Uri.parse(kDeveloperGithubUrl),
+        mode: LaunchMode.externalApplication,
+      );
     } catch (_) {
       // Clipboard copy above already notified the user.
     }

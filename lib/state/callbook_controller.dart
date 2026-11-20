@@ -17,6 +17,7 @@ import '../services/project_storage.dart';
 import '../utils/aligned_calls.dart';
 import '../utils/lrc_ruby_parser.dart';
 import '../utils/section_detector.dart';
+import '../utils/shortcut_validator.dart';
 
 enum StudioRoute { dashboard, export, archive, more }
 
@@ -165,9 +166,15 @@ class CallbookController extends ChangeNotifier {
   // Scoped sub-notifiers to keep high-frequency playback/status updates from
   // rebuilding PrismApp, ThemeCrossFade, HomeShell, or the timeline card list.
   final ChangeNotifier _themeNotifier = ChangeNotifier();
+  final ChangeNotifier _routeNotifier = ChangeNotifier();
+  final ChangeNotifier _projectNotifier = ChangeNotifier();
+  final ChangeNotifier _archiveNotifier = ChangeNotifier();
+  final ChangeNotifier _gatewayNotifier = ChangeNotifier();
   final ChangeNotifier _playbackNotifier = ChangeNotifier();
+  final ChangeNotifier _playbackSyncNotifier = ChangeNotifier();
   final ChangeNotifier _beatNotifier = ChangeNotifier();
   final ValueNotifier<String?> _playingLineIdNotifier = ValueNotifier<String?>(null);
+  final ValueNotifier<String?> _upcomingLineIdNotifier = ValueNotifier<String?>(null);
   final ValueNotifier<String> _statusNotifier =
       ValueNotifier<String>('已就绪 · CallbookMaker');
 
@@ -179,8 +186,15 @@ class CallbookController extends ChangeNotifier {
   Map<String, GtAlert> _alertByLineIdCache = const {};
   List<TimelineLineItem> _timelineItemsCache = const [];
   String? _playingLineIdCache;
+  String? _upcomingLineIdCache;
 
   List<CallPreset> _customPresets = const [];
+  List<CallPreset> _allPresetsCache = List<CallPreset>.unmodifiable(
+    defaultCallPresets,
+  );
+  Map<String, CallPreset> _presetMapCache = Map<String, CallPreset>.unmodifiable({
+    for (final p in defaultCallPresets) p.id: p,
+  });
   DisplayLayers _displayLayers = const DisplayLayers();
   String? _activeLineId;
   StudioRoute _route = StudioRoute.dashboard;
@@ -244,9 +258,15 @@ class CallbookController extends ChangeNotifier {
 
   // Scoped listenables
   Listenable get themeListenable => _themeNotifier;
+  Listenable get routeListenable => _routeNotifier;
+  Listenable get projectListenable => _projectNotifier;
+  Listenable get archiveListenable => _archiveNotifier;
+  Listenable get gatewayListenable => _gatewayNotifier;
   Listenable get playbackListenable => _playbackNotifier;
+  Listenable get playbackSyncListenable => _playbackSyncNotifier;
   Listenable get beatListenable => _beatNotifier;
   ValueListenable<String?> get playingLineIdListenable => _playingLineIdNotifier;
+  ValueListenable<String?> get upcomingLineIdListenable => _upcomingLineIdNotifier;
   ValueListenable<String> get statusListenable => _statusNotifier;
 
   // Getters
@@ -275,7 +295,8 @@ class CallbookController extends ChangeNotifier {
   bool get needsSavePromptBeforeSwitch => _activeArchiveId != null
       ? _hasUnsavedChanges
       : (_hasFetchedExternalLyrics || _hasUnsavedChanges);
-  List<CallPreset> get allPresets => [...defaultCallPresets, ..._customPresets];
+  List<CallPreset> get allPresets => _allPresetsCache;
+  Map<String, CallPreset> get presetMap => _presetMapCache;
   List<CallPreset> get customPresets => _customPresets;
   DisplayLayers get displayLayers => _displayLayers;
   String? get activeLineId => _activeLineId;
@@ -349,6 +370,10 @@ class CallbookController extends ChangeNotifier {
 
   String? get playingLineId => _playingLineIdCache;
 
+  String? get upcomingLineId => _upcomingLineIdCache;
+
+  String? get followTargetLineId => _playingLineIdCache ?? _upcomingLineIdCache;
+
   int get taggedLineCount => _project.lines
       .where(
         (l) =>
@@ -395,7 +420,15 @@ class CallbookController extends ChangeNotifier {
     _recomputePlaybackDerivedStates();
   }
 
-  void _recomputePlaybackDerivedStates() {
+  void _rebuildPresetCaches() {
+    final merged = <CallPreset>[...defaultCallPresets, ..._customPresets];
+    _allPresetsCache = List<CallPreset>.unmodifiable(merged);
+    _presetMapCache = Map<String, CallPreset>.unmodifiable({
+      for (final p in merged) p.id: p,
+    });
+  }
+
+  void _recomputePlaybackDerivedStates({bool forceNotify = false}) {
     final t = _currentTimeMs;
     String? nextPlayingId;
     for (final line in _sortedLinesCache) {
@@ -404,9 +437,65 @@ class CallbookController extends ChangeNotifier {
         break;
       }
     }
+    String? nextUpcomingId;
+    if (nextPlayingId == null &&
+        _sortedLinesCache.isNotEmpty &&
+        t < _sortedLinesCache.first.startTimeMs) {
+      nextUpcomingId = _sortedLinesCache.first.id;
+    }
+
+    final playingChanged = _playingLineIdCache != nextPlayingId;
+    final upcomingChanged = _upcomingLineIdCache != nextUpcomingId;
     _playingLineIdCache = nextPlayingId;
-    if (!_disposed && _playingLineIdNotifier.value != nextPlayingId) {
-      _playingLineIdNotifier.value = nextPlayingId;
+    _upcomingLineIdCache = nextUpcomingId;
+
+    if (!_disposed) {
+      if (_playingLineIdNotifier.value != nextPlayingId) {
+        _playingLineIdNotifier.value = nextPlayingId;
+      }
+      if (_upcomingLineIdNotifier.value != nextUpcomingId) {
+        _upcomingLineIdNotifier.value = nextUpcomingId;
+      }
+      if (forceNotify || playingChanged || upcomingChanged) {
+        _playbackSyncNotifier.notifyListeners();
+      }
+    }
+  }
+
+  /// Recomputes playback-derived line targets from the current clock position
+  /// and forces a sync notification even when the resolved line id is unchanged.
+  void syncPlaybackState({bool forceNotify = true}) {
+    _recomputePlaybackDerivedStates(forceNotify: forceNotify);
+    if (!_disposed) {
+      _playbackNotifier.notifyListeners();
+    }
+  }
+
+  void _notifyRouteChanged() {
+    if (!_disposed) {
+      _routeNotifier.notifyListeners();
+      notifyListeners();
+    }
+  }
+
+  void _notifyProjectChanged() {
+    if (!_disposed) {
+      _projectNotifier.notifyListeners();
+      notifyListeners();
+    }
+  }
+
+  void _notifyArchiveChanged() {
+    if (!_disposed) {
+      _archiveNotifier.notifyListeners();
+      notifyListeners();
+    }
+  }
+
+  void _notifyGatewayChanged() {
+    if (!_disposed) {
+      _gatewayNotifier.notifyListeners();
+      notifyListeners();
     }
   }
 
@@ -667,6 +756,7 @@ class CallbookController extends ChangeNotifier {
     final hasRawSavedProject = await _storage.hasSavedProjectKey();
     final savedProj = await _storage.loadProject();
     _customPresets = await _storage.loadCustomPresets();
+    _rebuildPresetCaches();
     _displayLayers = await _storage.loadDisplayLayers();
     _archives = await _storage.loadArchives();
     final onboardingCompleted = await _storage.loadOnboardingCompleted();
@@ -733,10 +823,14 @@ class CallbookController extends ChangeNotifier {
     if (sortedLines.isNotEmpty) {
       _activeLineId = sortedLines.first.id;
     }
-    _recomputePlaybackDerivedStates();
+    _recomputePlaybackDerivedStates(forceNotify: true);
     _refreshCallDensitySeries();
     _syncEngine();
     _themeNotifier.notifyListeners();
+    _routeNotifier.notifyListeners();
+    _projectNotifier.notifyListeners();
+    _archiveNotifier.notifyListeners();
+    _gatewayNotifier.notifyListeners();
     notifyListeners();
 
     final initSeq = ++_sourceSwitchSeq;
@@ -813,7 +907,7 @@ class CallbookController extends ChangeNotifier {
       );
       _setStatusInternal('纯 Dart 直连模式 · 免 Node/后端直接搜歌演练');
     }
-    notifyListeners();
+    _notifyGatewayChanged();
   }
 
   Future<bool> _verifyDirectNetease({
@@ -835,7 +929,8 @@ class CallbookController extends ChangeNotifier {
       neteaseAccount: probe.nickname,
       message: probe.message,
     );
-    setStatus(probe.message);
+    _setStatusInternal(probe.message);
+    _notifyGatewayChanged();
     return probe.reachable;
   }
 
@@ -850,22 +945,21 @@ class CallbookController extends ChangeNotifier {
         cookie: _savedNeteaseCookie,
         cleanUrl: _savedGatewayUrl,
       );
-      notifyListeners();
     }
   }
 
   Future<void> launchLocalBackendOnDesktop() async {
     if (_isLaunchingBackend) return;
     _isLaunchingBackend = true;
-    setStatus('正在启动可选 FastAPI 后端 (${_api.baseUrl})...');
-    notifyListeners();
+    _setStatusInternal('正在启动可选 FastAPI 后端 (${_api.baseUrl})...');
+    _notifyGatewayChanged();
     try {
       final res = await _desktopLauncher.ensureBackendRunning(_api.baseUrl);
-      setStatus(res.message);
+      _setStatusInternal(res.message);
       await checkBackendHealth();
     } finally {
       _isLaunchingBackend = false;
-      notifyListeners();
+      _notifyGatewayChanged();
     }
   }
 
@@ -888,12 +982,12 @@ class CallbookController extends ChangeNotifier {
       await _storage.saveNeteaseCookie('');
     }
     await _storage.saveGatewayUrl(cleanUrl);
-    setStatus(
+    _setStatusInternal(
       _backendOnline
           ? '正在写入网易云 Cookie 并配置服务...'
           : '正在保存 Cookie 并验证网易云纯 Dart 直连...',
     );
-    notifyListeners();
+    _notifyGatewayChanged();
 
     try {
       if (_backendOnline) {
@@ -906,7 +1000,7 @@ class CallbookController extends ChangeNotifier {
         await checkBackendHealth();
         if (status.gatewayOnline) {
           if (status.message.isNotEmpty) {
-            setStatus(status.message);
+            _setStatusInternal(status.message);
           }
           return true;
         }
@@ -918,7 +1012,7 @@ class CallbookController extends ChangeNotifier {
           );
         }
         if (status.message.isNotEmpty) {
-          setStatus(status.message);
+          _setStatusInternal(status.message);
         }
         return false;
       }
@@ -929,11 +1023,11 @@ class CallbookController extends ChangeNotifier {
         cleanUrl: cleanUrl,
       );
     } catch (err) {
-      setStatus('配置网易云直连失败：$err');
+      _setStatusInternal('配置网易云直连失败：$err');
       return false;
     } finally {
       _isConfiguringGateway = false;
-      notifyListeners();
+      _notifyGatewayChanged();
     }
   }
 
@@ -942,10 +1036,11 @@ class CallbookController extends ChangeNotifier {
     try {
       final status = await _api.stopGateway();
       _gatewayStatus = status;
-      setStatus(status.message);
-      notifyListeners();
+      _setStatusInternal(status.message);
+      _notifyGatewayChanged();
     } catch (err) {
-      setStatus('停止网关失败：$err');
+      _setStatusInternal('停止网关失败：$err');
+      _notifyGatewayChanged();
     }
   }
 
@@ -955,29 +1050,32 @@ class CallbookController extends ChangeNotifier {
     if (next == StudioRoute.more) {
       _moreRootResetNonce++;
     }
-    notifyListeners();
+    _notifyRouteChanged();
   }
 
   void toggleSidebarExpanded() {
     _sidebarExpanded = !_sidebarExpanded;
-    notifyListeners();
+    _notifyRouteChanged();
   }
 
   void setPracticeMode(bool value) {
     _isPracticeMode = value;
-    notifyListeners();
+    if (value) {
+      syncPlaybackState(forceNotify: true);
+    }
+    _notifyRouteChanged();
   }
 
   void setFollowPlayback(bool value) {
     _followPlayback = value;
-    notifyListeners();
+    _notifyProjectChanged();
   }
 
   void setAutoAdvanceOnTag(bool value) {
     if (_autoAdvanceOnTag == value) return;
     _autoAdvanceOnTag = value;
     _saveThemePrefs();
-    notifyListeners();
+    _notifyProjectChanged();
   }
 
   // Theme setters
@@ -1014,7 +1112,7 @@ class CallbookController extends ChangeNotifier {
   void setFloatingNavDock(bool v) {
     _floatingNavDock = v;
     _saveThemePrefs();
-    notifyListeners();
+    _notifyRouteChanged();
   }
 
   void setUseGoogleSans(bool v) {
@@ -1075,14 +1173,17 @@ class CallbookController extends ChangeNotifier {
       if (_isPlaying) {
         await _audio.pause();
         _isPlaying = false;
+        _playbackNotifier.notifyListeners();
       } else {
         final started = await _audio.play();
         _isPlaying = started;
         if (!started) {
           _setStatusInternal('音频播放失败，请检查音源或系统音频设备');
+          _playbackNotifier.notifyListeners();
+        } else {
+          syncPlaybackState(forceNotify: true);
         }
       }
-      _playbackNotifier.notifyListeners();
       notifyListeners();
     } finally {
       _togglePlayInFlight = false;
@@ -1091,6 +1192,9 @@ class CallbookController extends ChangeNotifier {
 
   Future<void> seek(int ms) async {
     await _audio.seek(ms);
+    if (!_disposed) {
+      syncPlaybackState(forceNotify: true);
+    }
   }
 
   void setBpm(int bpm) {
@@ -1099,7 +1203,7 @@ class CallbookController extends ChangeNotifier {
     _syncEngine();
     schedulePersist();
     _playbackNotifier.notifyListeners();
-    notifyListeners();
+    _notifyProjectChanged();
   }
 
   void setTimeSignature(String sig) {
@@ -1112,7 +1216,7 @@ class CallbookController extends ChangeNotifier {
     _syncEngine();
     schedulePersist();
     _playbackNotifier.notifyListeners();
-    notifyListeners();
+    _notifyProjectChanged();
   }
 
   void adjustOffset(int deltaMs) {
@@ -1124,7 +1228,7 @@ class CallbookController extends ChangeNotifier {
     _syncEngine();
     schedulePersist();
     _playbackNotifier.notifyListeners();
-    notifyListeners();
+    _notifyProjectChanged();
   }
 
   void setOffset(int ms) {
@@ -1132,7 +1236,7 @@ class CallbookController extends ChangeNotifier {
     _syncEngine();
     schedulePersist();
     _playbackNotifier.notifyListeners();
-    notifyListeners();
+    _notifyProjectChanged();
   }
 
   void setPlaybackRate(double rate) {
@@ -1145,13 +1249,13 @@ class CallbookController extends ChangeNotifier {
   void setMetronomeEnabled(bool enabled) {
     _metronomeEnabled = enabled;
     _syncEngine();
-    notifyListeners();
+    _notifyProjectChanged();
   }
 
   void setMetronomeVolume(double volume) {
     _metronomeVolume = volume.clamp(0.2, 1.5);
     _syncEngine();
-    notifyListeners();
+    _notifyProjectChanged();
   }
 
   Future<void> testMetronomeClick() async {
@@ -1196,7 +1300,7 @@ class CallbookController extends ChangeNotifier {
       ),
     );
     schedulePersist();
-    notifyListeners();
+    _notifyProjectChanged();
   }
 
   void updateDisplayLayers({
@@ -1210,7 +1314,7 @@ class CallbookController extends ChangeNotifier {
       showTranslation: showTranslation,
     );
     unawaited(_storage.saveDisplayLayers(_displayLayers));
-    notifyListeners();
+    _notifyProjectChanged();
   }
 
   // Timeline editing
@@ -1219,10 +1323,10 @@ class CallbookController extends ChangeNotifier {
     if (seekToLine) {
       final found = _project.lines.where((l) => l.id == id);
       if (found.isNotEmpty) {
-        unawaited(_audio.seek(found.first.startTimeMs));
+        unawaited(seek(found.first.startTimeMs));
       }
     }
-    notifyListeners();
+    _notifyProjectChanged();
   }
 
   void stepActiveLine(int delta) {
@@ -1233,7 +1337,7 @@ class CallbookController extends ChangeNotifier {
         ? 0
         : (idx + delta).clamp(0, ordered.length - 1);
     _activeLineId = ordered[nextIdx].id;
-    notifyListeners();
+    _notifyProjectChanged();
   }
 
   LyricLine? resolveLineForQuickTag() {
@@ -1269,7 +1373,7 @@ class CallbookController extends ChangeNotifier {
     _setProject(_project.copyWith(lines: lines));
     _refreshCallDensitySeries();
     schedulePersist();
-    notifyListeners();
+    _notifyProjectChanged();
     return !exists;
   }
 
@@ -1292,11 +1396,12 @@ class CallbookController extends ChangeNotifier {
     _setProject(_project.copyWith(lines: lines));
     _refreshCallDensitySeries();
     schedulePersist();
-    setStatus(
+    _setStatusInternal(
       enabled
           ? '已标记尾句上升气流 · ${lines[idx].text.original}'
           : '已取消尾句上升气流 · ${lines[idx].text.original}',
     );
+    _notifyProjectChanged();
   }
 
   bool quickTagActiveLine(
@@ -1335,7 +1440,7 @@ class CallbookController extends ChangeNotifier {
     lines[idx] = line.copyWith(calls: nextCalls);
     _setProject(_project.copyWith(lines: lines));
     schedulePersist();
-    notifyListeners();
+    _notifyProjectChanged();
   }
 
   void updateLineDetails({
@@ -1388,7 +1493,7 @@ class CallbookController extends ChangeNotifier {
     }
     schedulePersist();
     _playbackNotifier.notifyListeners();
-    notifyListeners();
+    _notifyProjectChanged();
   }
 
   void _clearUndoHistory() {
@@ -1428,7 +1533,7 @@ class CallbookController extends ChangeNotifier {
     schedulePersist();
     _setStatusInternal('已撤销「${entry.label}」');
     _playbackNotifier.notifyListeners();
-    notifyListeners();
+    _notifyProjectChanged();
     return true;
   }
 
@@ -1493,7 +1598,7 @@ class CallbookController extends ChangeNotifier {
     schedulePersist();
     _setStatusInternal('已合并相邻两句歌词（可点击「撤销」恢复）');
     _playbackNotifier.notifyListeners();
-    notifyListeners();
+    _notifyProjectChanged();
     return true;
   }
 
@@ -1570,7 +1675,7 @@ class CallbookController extends ChangeNotifier {
       '已将歌词拆分为 ${chunks.length} 句（可点击「撤销」恢复）',
     );
     _playbackNotifier.notifyListeners();
-    notifyListeners();
+    _notifyProjectChanged();
     return true;
   }
 
@@ -1612,7 +1717,7 @@ class CallbookController extends ChangeNotifier {
     _setProject(_project.copyWith(lines: lines));
     _refreshCallDensitySeries();
     schedulePersist();
-    notifyListeners();
+    _notifyProjectChanged();
   }
 
   void removeAlignedCall(String lineId, String cueId) {
@@ -1629,7 +1734,7 @@ class CallbookController extends ChangeNotifier {
     _setProject(_project.copyWith(lines: lines));
     _refreshCallDensitySeries();
     schedulePersist();
-    notifyListeners();
+    _notifyProjectChanged();
   }
 
   void snapLineToCurrentTime(String lineId) {
@@ -1665,7 +1770,7 @@ class CallbookController extends ChangeNotifier {
     schedulePersist();
     _setStatusInternal('已对齐当前时间 ${formatMsToClock(_currentTimeMs)}（可点击「撤销」恢复）');
     _playbackNotifier.notifyListeners();
-    notifyListeners();
+    _notifyProjectChanged();
   }
 
   void addEmptyLine() {
@@ -1680,7 +1785,7 @@ class CallbookController extends ChangeNotifier {
     _activeLineId = newLine.id;
     _refreshCallDensitySeries();
     schedulePersist();
-    notifyListeners();
+    _notifyProjectChanged();
   }
 
   Set<String> _getProtectedSectionLineIds() {
@@ -1744,7 +1849,7 @@ class CallbookController extends ChangeNotifier {
         '段落识别完成：前奏 ${result.stats.intro} / 间奏 ${result.stats.interlude} / 尾奏 ${result.stats.outro}',
       );
     }
-    notifyListeners();
+    _notifyProjectChanged();
     return result.stats;
   }
 
@@ -1760,7 +1865,7 @@ class CallbookController extends ChangeNotifier {
     if (redetect) {
       detectSections();
     } else {
-      notifyListeners();
+      _notifyProjectChanged();
     }
   }
 
@@ -1814,7 +1919,7 @@ class CallbookController extends ChangeNotifier {
     _syncEngine();
     schedulePersist();
     _setStatusInternal('已添加${safeKind.zhLabel}段落（${formatGapSec(gap)}）');
-    notifyListeners();
+    _notifyProjectChanged();
   }
 
   void deleteLine(String lineId) {
@@ -1833,7 +1938,7 @@ class CallbookController extends ChangeNotifier {
     _refreshCallDensitySeries();
     _syncEngine();
     schedulePersist();
-    notifyListeners();
+    _notifyProjectChanged();
   }
 
   String? _pickTargetLineForGt() {
@@ -1888,7 +1993,7 @@ class CallbookController extends ChangeNotifier {
       schedulePersist();
       _setStatusInternal('已取消该句的 GT 警报');
       _playbackNotifier.notifyListeners();
-      notifyListeners();
+      _notifyProjectChanged();
       return;
     }
 
@@ -1903,7 +2008,7 @@ class CallbookController extends ChangeNotifier {
     schedulePersist();
     _setStatusInternal('已为歌词行开启 GT 警报 · ${targetLine.text.original}');
     _playbackNotifier.notifyListeners();
-    notifyListeners();
+    _notifyProjectChanged();
   }
 
   void updateLineGtAlert(
@@ -1933,21 +2038,29 @@ class CallbookController extends ChangeNotifier {
     _syncEngine();
     schedulePersist();
     _playbackNotifier.notifyListeners();
-    notifyListeners();
+    _notifyProjectChanged();
   }
 
   void insertGtAlert({String? lineId}) {
     toggleLineGtAlert(lineId: lineId);
   }
 
-  void addCustomPreset({
+  bool addCustomPreset({
     required String label,
     required String colorHex,
     CallCategory category = CallCategory.compound,
     String shortcut = '',
   }) {
     final clean = label.trim();
-    if (clean.isEmpty) return;
+    if (clean.isEmpty) return false;
+    final shortcutCheck = validatePresetShortcut(
+      shortcut,
+      existingPresets: _allPresetsCache,
+    );
+    if (!shortcutCheck.isValid) {
+      setStatus(shortcutCheck.errorMessage ?? '快捷键冲突，请更换其他按键');
+      return false;
+    }
     final normalizedColor =
         RegExp(r'^#[0-9A-Fa-f]{6}$').hasMatch(colorHex.trim())
             ? colorHex.trim().toUpperCase()
@@ -1957,13 +2070,15 @@ class CallbookController extends ChangeNotifier {
       label: clean,
       colorHex: normalizedColor,
       category: category,
-      shortcut: shortcut.trim().toUpperCase(),
+      shortcut: shortcutCheck.normalized,
     );
     _customPresets = [..._customPresets, preset];
+    _rebuildPresetCaches();
     unawaited(_storage.saveCustomPresets(_customPresets));
     _setStatusInternal('已添加自定义 Call 标签：$clean');
     schedulePersist();
-    notifyListeners();
+    _notifyProjectChanged();
+    return true;
   }
 
   bool updateCustomPreset({
@@ -1978,6 +2093,19 @@ class CallbookController extends ChangeNotifier {
     if (idx < 0) return false;
     final cleanLabel = label.trim();
     if (cleanLabel.isEmpty) return false;
+    String? validatedShortcut;
+    if (shortcut != null) {
+      final shortcutCheck = validatePresetShortcut(
+        shortcut,
+        existingPresets: _allPresetsCache,
+        ignorePresetId: presetId,
+      );
+      if (!shortcutCheck.isValid) {
+        setStatus(shortcutCheck.errorMessage ?? '快捷键冲突，请更换其他按键');
+        return false;
+      }
+      validatedShortcut = shortcutCheck.normalized;
+    }
     final current = _customPresets[idx];
     final normalizedColor =
         RegExp(r'^#[0-9A-Fa-f]{6}$').hasMatch(colorHex.trim())
@@ -1987,16 +2115,17 @@ class CallbookController extends ChangeNotifier {
       label: cleanLabel,
       colorHex: normalizedColor,
       category: category,
-      shortcut: shortcut?.trim().toUpperCase(),
+      shortcut: validatedShortcut,
       builtIn: false,
     );
     final nextPresets = [..._customPresets];
     nextPresets[idx] = updated;
     _customPresets = nextPresets;
+    _rebuildPresetCaches();
     unawaited(_storage.saveCustomPresets(_customPresets));
     _setStatusInternal('已更新自定义标签：${updated.label}');
     schedulePersist();
-    notifyListeners();
+    _notifyProjectChanged();
     return true;
   }
 
@@ -2009,6 +2138,7 @@ class CallbookController extends ChangeNotifier {
       for (final p in _customPresets)
         if (p.id != presetId) p,
     ];
+    _rebuildPresetCaches();
     unawaited(_storage.saveCustomPresets(_customPresets));
 
     var linesChanged = false;
@@ -2030,7 +2160,7 @@ class CallbookController extends ChangeNotifier {
     }
     _setStatusInternal('已删除自定义标签：${removed.label}');
     schedulePersist();
-    notifyListeners();
+    _notifyProjectChanged();
     return true;
   }
 
@@ -2257,7 +2387,7 @@ class CallbookController extends ChangeNotifier {
         knownAudioDurationMs: _knownAudioDurationMs,
       );
       _setProject(nextProject);
-      _recomputePlaybackDerivedStates();
+      syncPlaybackState(forceNotify: true);
       _activeLineId = sortedLines.isNotEmpty ? sortedLines.first.id : null;
       _activeArchiveId = null;
       _hasFetchedExternalLyrics = true;
@@ -2266,8 +2396,8 @@ class CallbookController extends ChangeNotifier {
       _syncEngine();
       _persistArchiveSession();
       schedulePersist(markDirty: false);
-      _playbackNotifier.notifyListeners();
-      notifyListeners();
+      _archiveNotifier.notifyListeners();
+      _notifyProjectChanged();
 
       var audioFallbackNote = '';
       try {
@@ -2351,7 +2481,7 @@ class CallbookController extends ChangeNotifier {
       knownAudioDurationMs: _knownAudioDurationMs,
     );
     _setProject(nextProject);
-    _recomputePlaybackDerivedStates();
+    syncPlaybackState(forceNotify: true);
     _activeLineId = sortedLines.isNotEmpty ? sortedLines.first.id : null;
     _activeArchiveId = null;
     _hasFetchedExternalLyrics = true;
@@ -2369,8 +2499,8 @@ class CallbookController extends ChangeNotifier {
           ? '已解析 ${lines.length} 行 LRC · 自动识别前奏 ${detected.stats.intro} / 间奏 ${detected.stats.interlude}${detected.stats.outro > 0 ? ' / 尾奏 ${detected.stats.outro}' : ''}'
           : '已解析 ${lines.length} 行 LRC 歌词（未触发前/间/尾奏空档阈值）',
     );
-    _playbackNotifier.notifyListeners();
-    notifyListeners();
+    _archiveNotifier.notifyListeners();
+    _notifyProjectChanged();
   }
 
   Future<void> loadLocalAudioFile(String filePath, String fileName) async {
@@ -2398,11 +2528,10 @@ class CallbookController extends ChangeNotifier {
         ),
       ),
     );
-    _recomputePlaybackDerivedStates();
+    syncPlaybackState(forceNotify: true);
     schedulePersist();
     _setStatusInternal('已载入本地音频：$fileName');
-    _playbackNotifier.notifyListeners();
-    notifyListeners();
+    _notifyProjectChanged();
   }
 
   Future<void> loadDefaultSong(
@@ -2438,6 +2567,7 @@ class CallbookController extends ChangeNotifier {
         for (final p in matchingArchive.customPresets)
           CallPreset.fromJson(p.toJson()),
       ];
+      _rebuildPresetCaches();
       _activeArchiveId = matchingArchive.id;
     } else {
       nextProject = spec.buildCleanProject();
@@ -2452,7 +2582,7 @@ class CallbookController extends ChangeNotifier {
     _currentTimeMs = 0;
     _isPlaying = false;
     _setProject(nextProject);
-    _recomputePlaybackDerivedStates();
+    syncPlaybackState(forceNotify: true);
     _activeLineId = sortedLines.isNotEmpty ? sortedLines.first.id : null;
     _hasFetchedExternalLyrics = false;
     _hasUnsavedChanges = false;
@@ -2463,8 +2593,8 @@ class CallbookController extends ChangeNotifier {
     if (!silent) {
       _setStatusInternal('已载入默认曲目：${nextProject.meta.title}');
     }
-    _playbackNotifier.notifyListeners();
-    notifyListeners();
+    _archiveNotifier.notifyListeners();
+    _notifyProjectChanged();
 
     await _restoreAudioSourceForProject(
       nextProject,
@@ -2474,7 +2604,7 @@ class CallbookController extends ChangeNotifier {
     );
     if (_disposed || switchSeq != _sourceSwitchSeq) return;
     _playbackNotifier.notifyListeners();
-    notifyListeners();
+    _notifyProjectChanged();
   }
 
   void reopenOnboarding() {
@@ -2484,14 +2614,14 @@ class CallbookController extends ChangeNotifier {
     }
     _showOnboarding = true;
     _onboardingReopened = true;
-    notifyListeners();
+    _notifyRouteChanged();
   }
 
   Future<void> skipOnboarding() async {
     _showOnboarding = false;
     _onboardingReopened = false;
     await _storage.saveOnboardingCompleted(true);
-    notifyListeners();
+    _notifyRouteChanged();
   }
 
   Future<void> completeOnboarding({
@@ -2510,11 +2640,12 @@ class CallbookController extends ChangeNotifier {
           ? (userExplicitlyPickedSong && currentSpec?.id != targetId)
           : (currentSpec?.id != targetId);
       if (shouldSwitch) {
+        _routeNotifier.notifyListeners();
         await loadDefaultSong(targetId, preferArchive: !wasReopened);
         return;
       }
     }
-    notifyListeners();
+    _notifyRouteChanged();
   }
 
   String exportProjectJsonString() {
@@ -2562,6 +2693,7 @@ class CallbookController extends ChangeNotifier {
           }
         }
         _customPresets = existingById.values.toList();
+        _rebuildPresetCaches();
         unawaited(_storage.saveCustomPresets(_customPresets));
       }
 
@@ -2576,7 +2708,7 @@ class CallbookController extends ChangeNotifier {
       );
       _currentTimeMs = 0;
       _isPlaying = false;
-      _recomputePlaybackDerivedStates();
+      syncPlaybackState(forceNotify: true);
 
       _activeLineId = sortedLines.isNotEmpty ? sortedLines.first.id : null;
       _activeArchiveId = null;
@@ -2590,8 +2722,8 @@ class CallbookController extends ChangeNotifier {
           ? ' ($sourceName)'
           : '';
       _setStatusInternal('已导入工程：${normalized.meta.title}$suffix');
-      _playbackNotifier.notifyListeners();
-      notifyListeners();
+      _archiveNotifier.notifyListeners();
+      _notifyProjectChanged();
 
       await _restoreAudioSourceForProject(
         normalized,
@@ -2601,7 +2733,7 @@ class CallbookController extends ChangeNotifier {
       );
       if (!_disposed && switchSeq == _sourceSwitchSeq) {
         _playbackNotifier.notifyListeners();
-        notifyListeners();
+        _notifyProjectChanged();
       }
       return true;
     } catch (err) {
@@ -2673,7 +2805,7 @@ class CallbookController extends ChangeNotifier {
           ? '已更新存档「${entry.name}」'
           : '已保存至 Call 本存档「${entry.name}」',
     );
-    notifyListeners();
+    _notifyArchiveChanged();
     return entry;
   }
 
@@ -2698,6 +2830,7 @@ class CallbookController extends ChangeNotifier {
     _customPresets = [
       for (final p in found.customPresets) CallPreset.fromJson(p.toJson()),
     ];
+    _rebuildPresetCaches();
     _knownAudioDurationMs = _resolveKnownDurationMs(restored);
     _durationMs = _computeProjectDurationMs(
       restored,
@@ -2707,7 +2840,7 @@ class CallbookController extends ChangeNotifier {
     _isPlaying = false;
 
     _setProject(restored);
-    _recomputePlaybackDerivedStates();
+    syncPlaybackState(forceNotify: true);
     _activeLineId = sortedLines.isNotEmpty ? sortedLines.first.id : null;
     _activeArchiveId = found.id;
     _hasUnsavedChanges = false;
@@ -2717,8 +2850,8 @@ class CallbookController extends ChangeNotifier {
     _persistArchiveSession();
     schedulePersist(markDirty: false);
     _setStatusInternal('已切换至存档「${found.name}」');
-    _playbackNotifier.notifyListeners();
-    notifyListeners();
+    _archiveNotifier.notifyListeners();
+    _notifyProjectChanged();
 
     await _restoreAudioSourceForProject(
       restored,
@@ -2730,7 +2863,7 @@ class CallbookController extends ChangeNotifier {
       return false;
     }
     _playbackNotifier.notifyListeners();
-    notifyListeners();
+    _notifyProjectChanged();
     return true;
   }
 
@@ -2752,7 +2885,7 @@ class CallbookController extends ChangeNotifier {
     if (!updated) return false;
     unawaited(_storage.saveArchives(_archives));
     _setStatusInternal('已将存档重命名为「$trimmed」');
-    notifyListeners();
+    _notifyArchiveChanged();
     return true;
   }
 
@@ -2776,7 +2909,7 @@ class CallbookController extends ChangeNotifier {
     }
     unawaited(_storage.saveArchives(_archives));
     _setStatusInternal('已删除存档「${target.name}」');
-    notifyListeners();
+    _notifyArchiveChanged();
     return true;
   }
 
@@ -2811,6 +2944,9 @@ class CallbookController extends ChangeNotifier {
     if (markDirty && !_hasUnsavedChanges) {
       _hasUnsavedChanges = true;
       _persistArchiveSession();
+      if (!_disposed) {
+        _archiveNotifier.notifyListeners();
+      }
     }
     _persistTimer?.cancel();
     _persistTimer = Timer(const Duration(milliseconds: 350), () {
@@ -2882,9 +3018,15 @@ class CallbookController extends ChangeNotifier {
     _neteaseDirect.dispose();
     _lrclibDirect.dispose();
     _themeNotifier.dispose();
+    _routeNotifier.dispose();
+    _projectNotifier.dispose();
+    _archiveNotifier.dispose();
+    _gatewayNotifier.dispose();
     _playbackNotifier.dispose();
+    _playbackSyncNotifier.dispose();
     _beatNotifier.dispose();
     _playingLineIdNotifier.dispose();
+    _upcomingLineIdNotifier.dispose();
     _statusNotifier.dispose();
     super.dispose();
   }
