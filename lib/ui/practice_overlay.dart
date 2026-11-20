@@ -9,6 +9,8 @@ import '../state/callbook_controller.dart';
 import '../utils/aligned_calls.dart';
 import '../utils/lrc_ruby_parser.dart';
 import '../utils/section_detector.dart';
+import 'theme/app_motion.dart';
+import 'theme/app_tokens.dart';
 import 'widgets/call_badge_pill.dart';
 import 'widgets/ruby_lyric_text.dart';
 import 'widgets/scalloped_orb_button.dart';
@@ -71,8 +73,8 @@ class _PracticeOverlayState extends State<PracticeOverlay> {
     if (ctx != null) {
       Scrollable.ensureVisible(
         ctx,
-        duration: const Duration(milliseconds: 260),
-        curve: Curves.easeOutCubic,
+        duration: AppMotion.d(context, AppMotion.effectsDefault),
+        curve: AppMotion.curveEffects,
         alignment: 0.42,
       );
       return;
@@ -164,9 +166,11 @@ class _PracticeOverlayState extends State<PracticeOverlay> {
                                     b++
                                   ) ...[
                                     AnimatedContainer(
-                                      duration: const Duration(
-                                        milliseconds: 90,
+                                      duration: AppMotion.d(
+                                        context,
+                                        AppMotion.effectsFast,
                                       ),
+                                      curve: AppMotion.curveEffects,
                                       width: b == 1 ? 10 : 8,
                                       height: b == 1 ? 10 : 8,
                                       decoration: BoxDecoration(
@@ -667,11 +671,12 @@ class _PracticeLineCard extends StatelessWidget {
       child: Opacity(
         opacity: opacity,
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
+          duration: AppMotion.d(context, AppMotion.effectsDefault),
+          curve: AppMotion.curveEffects,
           padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 18),
           decoration: BoxDecoration(
             color: bgColor,
-            borderRadius: BorderRadius.circular(24),
+            borderRadius: BorderRadius.circular(AppTokens.radiusCard),
             border: Border.all(
               color: borderColor,
               width: isPlaying ? 1.8 : 1.0,

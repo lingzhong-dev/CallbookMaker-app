@@ -18,6 +18,7 @@ import '../utils/aligned_calls.dart';
 import '../utils/file_export_helper.dart';
 import '../utils/lrc_ruby_parser.dart';
 import '../utils/xlsx_export.dart';
+import 'theme/app_tokens.dart';
 import 'widgets/archive_switcher_dialog.dart';
 import 'widgets/call_badge_pill.dart';
 import 'widgets/callbook_glyphs.dart';
@@ -409,8 +410,8 @@ class _ExportViewState extends State<ExportView> {
         children: [
           Card(
             inert: true,
-            radius: 22,
-            padding: const EdgeInsets.all(16),
+            radius: AppTokens.radiusCard,
+            padding: const EdgeInsets.all(AppTokens.s16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [

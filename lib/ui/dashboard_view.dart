@@ -7,6 +7,8 @@ import 'package:prism_ui/prism_ui.dart';
 
 import '../state/callbook_controller.dart';
 import '../utils/lrc_ruby_parser.dart';
+import 'theme/app_motion.dart';
+import 'theme/app_tokens.dart';
 import 'widgets/audio_source_panel.dart';
 import 'widgets/callbook_glyphs.dart';
 import 'widgets/line_sparkline.dart';
@@ -238,8 +240,8 @@ class _DashboardViewState extends State<DashboardView> {
     if (ctx != null) {
       Scrollable.ensureVisible(
         ctx,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOutCubic,
+        duration: AppMotion.d(context, AppMotion.effectsSlow),
+        curve: AppMotion.curveEffects,
       );
     }
   }
@@ -327,8 +329,8 @@ class _DashboardViewState extends State<DashboardView> {
 
     return Card(
       inert: true,
-      radius: 26,
-      padding: const EdgeInsets.all(16),
+      radius: AppTokens.radiusCard,
+      padding: const EdgeInsets.all(AppTokens.s16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -372,7 +374,8 @@ class _DashboardViewState extends State<DashboardView> {
                   children: [
                     for (var b = 1; b <= beats; b++) ...[
                       AnimatedContainer(
-                        duration: const Duration(milliseconds: 110),
+                        duration: AppMotion.d(context, AppMotion.effectsFast),
+                        curve: AppMotion.curveEffects,
                         width: 9,
                         height: 9,
                         decoration: BoxDecoration(
@@ -674,7 +677,7 @@ class _DashboardViewState extends State<DashboardView> {
     final showTuner = c.project.meta.showTuner;
     return Card(
       inert: true,
-      radius: 22,
+      radius: AppTokens.radiusCard,
       padding: const EdgeInsets.all(14),
       child: FilledInputTheme(
         borderRadius: AppRadius.md,
@@ -817,7 +820,7 @@ class _DashboardViewState extends State<DashboardView> {
   ) {
     return Card(
       inert: true,
-      radius: 22,
+      radius: AppTokens.radiusCard,
       padding: const EdgeInsets.all(14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -945,7 +948,7 @@ class _DashboardViewState extends State<DashboardView> {
   ) {
     return Card(
       inert: true,
-      radius: 22,
+      radius: AppTokens.radiusCard,
       padding: EdgeInsets.zero,
       child: ClipRRect(
         borderRadius: AppRadius.xl,
@@ -1068,7 +1071,7 @@ class _DashboardViewState extends State<DashboardView> {
   ) {
     return Card(
       inert: true,
-      radius: 22,
+      radius: AppTokens.radiusCard,
       padding: EdgeInsets.zero,
       child: ClipRRect(
         borderRadius: AppRadius.xl,
@@ -1160,8 +1163,8 @@ class _DashboardViewState extends State<DashboardView> {
       child: ElasticPress(
         child: Card(
           inert: true,
-          radius: 22,
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          radius: AppTokens.radiusCard,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: AppTokens.s12),
           child: Row(
             children: [
               Container(

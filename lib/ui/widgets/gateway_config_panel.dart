@@ -3,6 +3,7 @@ import 'package:flutter/widgets.dart';
 import 'package:prism_ui/prism_ui.dart';
 
 import '../../state/callbook_controller.dart';
+import '../theme/app_tokens.dart';
 
 class GatewayConfigPanel extends StatefulWidget {
   const GatewayConfigPanel({
@@ -137,7 +138,7 @@ class _GatewayConfigPanelState extends State<GatewayConfigPanel> {
 
         return Card(
       inert: true,
-      radius: 22,
+      radius: AppTokens.radiusCard,
       padding: const EdgeInsets.all(14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
