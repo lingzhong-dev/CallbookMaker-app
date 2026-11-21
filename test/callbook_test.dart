@@ -88,7 +88,7 @@ void main() {
       expect(decoded.meta.showTuner, isTrue);
       expect(decoded.alerts, isEmpty);
       expect(decoded.lines.length, primary.lines.length);
-      expect(decoded.lines.any((l) => l.kind == LyricLineKind.intro), isTrue);
+      expect(decoded.lines.any((l) => l.kind == LyricLineKind.interlude), isTrue);
       expect(decoded.lines.any((l) => l.kind == LyricLineKind.outro), isTrue);
       expect(
         decoded.lines.every(

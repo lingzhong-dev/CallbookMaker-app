@@ -36,8 +36,11 @@ Uint8List buildCallBookXlsxBytes(
   final hasTuner = meta.showTuner || meta.tuner.trim().isNotEmpty;
   final composerDisplay = meta.composer.trim();
   final lyricistDisplay = meta.lyricist.trim();
+  final arrangerDisplay = meta.arranger.trim();
+  final mixerDisplay = meta.mixer.trim();
   final tunerDisplay = hasTuner ? meta.tuner.trim() : '';
   final vocalistDisplay = _fallbackTrim(meta.vocalist, meta.artist);
+  final supportColorDisplay = meta.supportColor.trim();
 
   final sheet1Payloads = <_ExcelRowPayload>[];
   final sheet2Payloads = <_ExcelRowPayload>[];
@@ -90,8 +93,11 @@ Uint8List buildCallBookXlsxBytes(
     var maxD = [
       composerDisplay,
       lyricistDisplay,
+      arrangerDisplay,
+      mixerDisplay,
       tunerDisplay,
       vocalistDisplay,
+      supportColorDisplay,
     ].map(_measureExcelMaxLineWidth).fold<double>(0.0, (a, b) => a > b ? a : b);
 
     for (final item in payloads) {
@@ -134,6 +140,17 @@ Uint8List buildCallBookXlsxBytes(
     return [wA, wB, wC, wD];
   }
 
+  final rightCreditRows = <(String label, String value)>[
+    ('作曲：', composerDisplay),
+    ('作词：', lyricistDisplay),
+    ('编曲：', arrangerDisplay),
+    ('混音：', mixerDisplay),
+    if (hasTuner) ('调校：', tunerDisplay),
+    ('演唱：', vocalistDisplay),
+    ('应援色：', supportColorDisplay),
+  ];
+  final lastHeaderRow = 1 + rightCreditRows.length;
+
   List<_XlsxRow> buildHeaderRows(List<double> widths) {
     final wA = widths[0];
     final wB = widths[1];
@@ -153,16 +170,20 @@ Uint8List buildCallBookXlsxBytes(
 
     final r2Height = _computeRowHeightPt([
       _WidthEntry(editorText, wA + wB),
-      _WidthEntry(composerDisplay, wD),
+      _WidthEntry(rightCreditRows[0].$2, wD),
     ]);
-    final h3 = _computeRowHeightPt([_WidthEntry(lyricistDisplay, wD)]);
-    final h4 = _computeRowHeightPt([_WidthEntry(tunerDisplay, wD)]);
-    final h5 = _computeRowHeightPt([_WidthEntry(vocalistDisplay, wD)]);
+    final tailCredits = rightCreditRows.sublist(1);
+    final tailHeights = [
+      for (final credit in tailCredits)
+        _computeRowHeightPt([_WidthEntry(credit.$2, wD)]),
+    ];
     final noteLines = _estimateWrappedLines(noteText, wA + wB);
     final noteNeeded =
         (noteLines * 20.0 + 12.0) < 75.0 ? 75.0 : (noteLines * 20.0 + 12.0);
-    final sum345 = h3 + h4 + h5;
-    final extra = sum345 < noteNeeded ? ((noteNeeded - sum345) / 3.0).ceilToDouble() : 0.0;
+    final sumTail = tailHeights.fold<double>(0.0, (a, b) => a + b);
+    final extra = sumTail < noteNeeded
+        ? ((noteNeeded - sumTail) / tailCredits.length).ceilToDouble()
+        : 0.0;
 
     return [
       _XlsxRow(
@@ -181,40 +202,24 @@ Uint8List buildCallBookXlsxBytes(
         cells: [
           _XlsxCell.text('A', 2, editorText),
           const _XlsxCell.empty('B', 2),
-          const _XlsxCell.text('C', 3, '作曲：'),
-          _XlsxCell.text('D', 2, composerDisplay),
+          _XlsxCell.text('C', 3, rightCreditRows[0].$1),
+          _XlsxCell.text('D', 2, rightCreditRows[0].$2),
         ],
       ),
-      _XlsxRow(
-        rowNumber: 3,
-        heightPt: h3 + extra,
-        cells: [
-          _XlsxCell.text('A', 2, noteText),
-          const _XlsxCell.empty('B', 2),
-          const _XlsxCell.text('C', 3, '作词：'),
-          _XlsxCell.text('D', 2, lyricistDisplay),
-        ],
-      ),
-      _XlsxRow(
-        rowNumber: 4,
-        heightPt: h4 + extra,
-        cells: [
-          const _XlsxCell.empty('A', 2),
-          const _XlsxCell.empty('B', 2),
-          _XlsxCell.text('C', 3, hasTuner ? '调校：' : ''),
-          _XlsxCell.text('D', 2, tunerDisplay),
-        ],
-      ),
-      _XlsxRow(
-        rowNumber: 5,
-        heightPt: h5 + extra,
-        cells: [
-          const _XlsxCell.empty('A', 2),
-          const _XlsxCell.empty('B', 2),
-          const _XlsxCell.text('C', 3, '演唱：'),
-          _XlsxCell.text('D', 2, vocalistDisplay),
-        ],
-      ),
+      for (var i = 0; i < tailCredits.length; i++)
+        _XlsxRow(
+          rowNumber: 3 + i,
+          heightPt: tailHeights[i] + extra,
+          cells: [
+            if (i == 0)
+              _XlsxCell.text('A', 2, noteText)
+            else
+              const _XlsxCell.empty('A', 2),
+            const _XlsxCell.empty('B', 2),
+            _XlsxCell.text('C', 3, tailCredits[i].$1),
+            _XlsxCell.text('D', 2, tailCredits[i].$2),
+          ],
+        ),
     ];
   }
 
@@ -224,7 +229,7 @@ Uint8List buildCallBookXlsxBytes(
     bool detailed,
   ) {
     final rows = <_XlsxRow>[];
-    var rowNum = 6;
+    var rowNum = lastHeaderRow + 1;
     for (final item in payloads) {
       final heightPt = _computeRowHeightPt([
         _WidthEntry(item.colA, widths[0]),
@@ -264,6 +269,7 @@ Uint8List buildCallBookXlsxBytes(
     rows: sheet1Rows,
     colWidths: sheet1Widths,
     maxColLetter: 'D',
+    lastHeaderRow: lastHeaderRow,
     selected: true,
     pool: pool,
   );
@@ -271,6 +277,7 @@ Uint8List buildCallBookXlsxBytes(
     rows: sheet2Rows,
     colWidths: sheet2Widths,
     maxColLetter: 'D',
+    lastHeaderRow: lastHeaderRow,
     selected: false,
     pool: pool,
   );
@@ -514,10 +521,11 @@ String _buildWorksheetXml({
   required List<_XlsxRow> rows,
   required List<double> colWidths,
   required String maxColLetter,
+  required int lastHeaderRow,
   required bool selected,
   required _SharedStringPool pool,
 }) {
-  final lastRow = rows.isEmpty ? 5 : rows.last.rowNumber;
+  final lastRow = rows.isEmpty ? lastHeaderRow : rows.last.rowNumber;
   final buf = StringBuffer()
     ..write('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>')
     ..write(
@@ -566,7 +574,7 @@ String _buildWorksheetXml({
     ..write('<mergeCells count="3">')
     ..write('<mergeCell ref="A1:D1"/>')
     ..write('<mergeCell ref="A2:B2"/>')
-    ..write('<mergeCell ref="A3:B5"/>')
+    ..write('<mergeCell ref="A3:B$lastHeaderRow"/>')
     ..write('</mergeCells>')
     ..write('</worksheet>');
   return buf.toString();

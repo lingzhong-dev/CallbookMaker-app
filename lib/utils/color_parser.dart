@@ -63,3 +63,25 @@ String formatRgbColor(Color color) {
   final b = argb & 0xFF;
   return '$r, $g, $b';
 }
+
+/// Extracts a preview/theme [Color] from a flexible idol support-color string
+/// such as `#66CCFF`, `39C5BB`, `天依蓝 #66CCFF`, or a well-known preset name.
+Color? extractSupportColor(String input) {
+  final direct = parseSupportColor(input);
+  if (direct != null) return direct;
+  final trimmed = input.trim();
+  if (trimmed.isEmpty) return null;
+
+  final embeddedHex = RegExp(
+    r'#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{3})(?![0-9A-Fa-f])',
+  ).firstMatch(trimmed);
+  if (embeddedHex != null) {
+    return parseSupportColor(embeddedHex.group(0)!);
+  }
+
+  final lower = trimmed.toLowerCase();
+  if (lower.contains('天依蓝')) return const Color(0xFF66CCFF);
+  if (lower.contains('初音绿')) return const Color(0xFF39C5BB);
+  if (lower.contains('香澄红')) return const Color(0xFFFF5522);
+  return null;
+}

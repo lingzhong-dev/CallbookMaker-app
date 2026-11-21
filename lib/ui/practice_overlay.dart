@@ -991,7 +991,7 @@ class _PracticeLineCard extends StatelessWidget {
                           shape: AppShape.full,
                         ),
                         child: Text(
-                          '尾句上升气流',
+                          '',
                           softWrap: false,
                           maxLines: 1,
                           overflow: TextOverflow.visible,

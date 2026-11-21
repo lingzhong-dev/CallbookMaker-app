@@ -184,7 +184,8 @@ void main() {
         enableAudioOutput: false,
       );
       try {
-        // Case 1: first line starts at 0ms (default primary song has intro 0..12000ms).
+        // Case 1: load Kizuna Music whose first line is an intro starting at 0ms.
+        await controller.loadDefaultSong('default-kizuna-music');
         var syncCount = 0;
         controller.playbackSyncListenable.addListener(() => syncCount++);
 

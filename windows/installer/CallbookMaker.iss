@@ -7,7 +7,7 @@
 #define MyAppName "CallbookMaker"
 #define MyAppPublisher "Lingzhong-dev"
 #define MyAppURL "https://github.com/lingzhong-dev/CallbookMaker-app"
-#define MyAppExeName "live_call_studio.exe"
+#define MyAppExeName "CallbookMaker.exe"
 
 [Setup]
 AppId={{B4A8D2F0-7E3A-4E1B-9F72-41C98C5E7B10}
@@ -43,6 +43,9 @@ Source: "{#ReleaseDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+
+[InstallDelete]
+Type: files; Name: "{app}\live_call_studio.exe"
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent

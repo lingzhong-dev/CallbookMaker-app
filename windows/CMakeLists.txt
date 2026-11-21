@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.14)
 project(live_call_studio LANGUAGES CXX)
 
-set(BINARY_NAME "live_call_studio")
+set(BINARY_NAME "CallbookMaker")
 
 cmake_policy(VERSION 3.14...3.25)
 

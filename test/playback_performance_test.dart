@@ -68,14 +68,14 @@ void main() {
 
         try {
           // Run 40 continuous playback frames (~640ms) inside the first timeline line
-          // (lines[0] is intro 0..12000ms in primary default song, so start at 600ms).
-          audioHarness.mockMusicPositionMs = 600;
-          await controller.seek(600);
+          // (lines[0] is van-1 782..6208ms in primary default song, so start at 800ms).
+          audioHarness.mockMusicPositionMs = 800;
+          await controller.seek(800);
           await tester.pump();
           rebuildCounts.clear();
 
           for (var i = 0; i < 40; i++) {
-            audioHarness.mockMusicPositionMs = 600 + (i + 1) * 16;
+            audioHarness.mockMusicPositionMs = 800 + (i + 1) * 16;
             await tester.pump(const Duration(milliseconds: 16));
           }
 
@@ -88,13 +88,13 @@ void main() {
           expect(rebuildCounts['TextField'] ?? 0, 0);
 
           // Verify Hero card clock actually updated live via FramePositionUpdater
-          // (the only remaining 00:00.00 belongs to the intro section badge).
+          // (and the first lyric card timestamp badge remains at 00:00.78).
           expect(controller.currentTimeMs, greaterThan(1000));
           expect(
             find.text(formatMsToClock(controller.currentTimeMs)),
             findsAtLeastNWidgets(1),
           );
-          expect(find.text('00:00.00'), findsOneWidget);
+          expect(find.text('00:00.78'), findsOneWidget);
           expect(find.text('播放中'), findsOneWidget);
 
           // Verify ThemeCrossFade never captured an overlay snapshot during playback.

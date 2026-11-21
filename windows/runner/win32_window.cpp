@@ -39,6 +39,19 @@ void EnableFullDpiSupportIfAvailable(HWND hwnd) {
   FreeLibrary(user32_module);
 }
 
+COLORREF GetPreferredBackgroundColor() {
+  DWORD light_mode = 1;
+  DWORD light_mode_size = sizeof(light_mode);
+  LSTATUS result = RegGetValue(HKEY_CURRENT_USER, kGetPreferredBrightnessRegKey,
+                               kGetPreferredBrightnessRegValue,
+                               RRF_RT_REG_DWORD, nullptr, &light_mode,
+                               &light_mode_size);
+  if (result == ERROR_SUCCESS && light_mode == 0) {
+    return RGB(18, 19, 24);
+  }
+  return RGB(243, 244, 246);
+}
+
 }  // namespace
 
 class WindowClassRegistrar {
@@ -76,7 +89,8 @@ const wchar_t* WindowClassRegistrar::GetWindowClass() {
     window_class.hInstance = GetModuleHandle(nullptr);
     window_class.hIcon =
         LoadIcon(window_class.hInstance, MAKEINTRESOURCE(IDI_APP_ICON));
-    window_class.hbrBackground = 0;
+    window_class.hbrBackground =
+        CreateSolidBrush(GetPreferredBackgroundColor());
     window_class.lpszMenuName = nullptr;
     window_class.lpfnWndProc = Win32Window::WndProc;
     RegisterClass(&window_class);

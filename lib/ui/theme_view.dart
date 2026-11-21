@@ -4,6 +4,7 @@ import 'package:prism_ui/icons/icons.dart';
 import 'package:prism_ui/prism_ui.dart';
 
 import '../state/callbook_controller.dart';
+import '../utils/color_parser.dart';
 import 'theme/app_motion.dart';
 import 'theme/app_tokens.dart';
 import 'widgets/callbook_glyphs.dart';
@@ -114,7 +115,7 @@ class ThemeView extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'HCT 色彩调色盘 · 11 × 11 Palette Matrix',
+                            'HCT 色彩调色盘',
                             style: AppTextStyle.subheadline
                                 .of(context, emphasized: true)
                                 .copyWith(color: scheme.onSurface),
@@ -182,6 +183,8 @@ class ThemeView extends StatelessWidget {
                       ),
                   ],
                 ),
+                const SizedBox(height: 14),
+                _CustomHexSeedColorInput(controller: c),
                 const SizedBox(height: 14),
                 _HctPaletteMatrix(
                   selectedColor: c.seedColor,
@@ -423,7 +426,7 @@ class ThemeView extends StatelessWidget {
                     ),
                     const SizedBox(width: 6),
                     Text(
-                      'Live Call Stage',
+                      'Callbook Maker',
                       style: AppTextStyle.caption1
                           .of(context, emphasized: true)
                           .copyWith(color: scheme.onSurface),
@@ -507,7 +510,7 @@ class ThemeView extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            '精选色彩配方',
+            '应援色预设',
             style: AppTextStyle.subheadline
                 .of(context, emphasized: true)
                 .copyWith(color: scheme.onSurface),
@@ -819,4 +822,155 @@ class _HctPalettePainter extends CustomPainter {
   @override
   bool shouldRepaint(_HctPalettePainter oldDelegate) =>
       oldDelegate.selectedArgb != selectedArgb;
+}
+
+class _CustomHexSeedColorInput extends StatefulWidget {
+  const _CustomHexSeedColorInput({required this.controller});
+
+  final CallbookController controller;
+
+  @override
+  State<_CustomHexSeedColorInput> createState() =>
+      _CustomHexSeedColorInputState();
+}
+
+class _CustomHexSeedColorInputState extends State<_CustomHexSeedColorInput> {
+  late final TextEditingController _hexCtrl;
+  final FocusNode _hexFocus = FocusNode();
+  Color? _previewColor;
+  String? _errorText;
+
+  @override
+  void initState() {
+    super.initState();
+    _hexCtrl = TextEditingController(
+      text: formatHexColor(widget.controller.seedColor),
+    );
+    _previewColor = widget.controller.seedColor;
+    widget.controller.themeListenable.addListener(_syncFromController);
+  }
+
+  @override
+  void didUpdateWidget(covariant _CustomHexSeedColorInput oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.themeListenable.removeListener(_syncFromController);
+      widget.controller.themeListenable.addListener(_syncFromController);
+      _syncFromController();
+    }
+  }
+
+  void _syncFromController() {
+    if (!mounted || _hexFocus.hasFocus) return;
+    final formatted = formatHexColor(widget.controller.seedColor);
+    if (_hexCtrl.text != formatted) {
+      _hexCtrl.text = formatted;
+    }
+    setState(() {
+      _previewColor = widget.controller.seedColor;
+      _errorText = null;
+    });
+  }
+
+  @override
+  void dispose() {
+    widget.controller.themeListenable.removeListener(_syncFromController);
+    _hexFocus.dispose();
+    _hexCtrl.dispose();
+    super.dispose();
+  }
+
+  void _onChanged(String raw) {
+    final parsed = parseSupportColor(raw);
+    setState(() {
+      _previewColor = parsed;
+      if (parsed != null || raw.trim().isEmpty) {
+        _errorText = null;
+      }
+    });
+  }
+
+  void _applyHex() {
+    final raw = _hexCtrl.text.trim();
+    final parsed = parseSupportColor(raw);
+    if (parsed == null) {
+      setState(() {
+        _errorText = '请输入有效十六进制色值（如 #66CCFF）';
+      });
+      return;
+    }
+    final formatted = formatHexColor(parsed);
+    _hexCtrl.text = formatted;
+    setState(() {
+      _previewColor = parsed;
+      _errorText = null;
+    });
+    widget.controller.setSeedColor(parsed);
+    widget.controller.setStatus('已将主题应援色切换为 $formatted');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = context.colorScheme;
+    final preview = _previewColor ?? widget.controller.seedColor;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: ShapeDecoration(
+        color: scheme.surfaceContainerLow,
+        shape: RoundedSuperellipseBorder(
+          borderRadius: AppTokens.radiusSectionBorder,
+          side: BorderSide(color: scheme.outlineVariant),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            '自定义十六进制应援色 (#RRGGBB)',
+            style: AppTextStyle.caption1
+                .of(context, emphasized: true)
+                .copyWith(color: scheme.onSurface),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                margin: const EdgeInsets.only(top: 3),
+                decoration: BoxDecoration(
+                  color: preview,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: scheme.outlineVariant, width: 1.5),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: TextField(
+                  controller: _hexCtrl,
+                  focusNode: _hexFocus,
+                  decoration: InputDecoration(
+                    hintText: '',
+                    isDense: true,
+                    errorText: _errorText,
+                  ),
+                  onChanged: _onChanged,
+                  onSubmitted: (_) => _applyHex(),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: FilledButton(
+                  onPressed: _applyHex,
+                  child: const Text('应用'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 }

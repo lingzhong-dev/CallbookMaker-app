@@ -300,7 +300,7 @@ void main() {
         expect(clean.alerts, isEmpty);
         expect(clean.lines.any((l) => l.kind.isSection), isTrue);
         expect(clean.lines.any((l) => l.kind == LyricLineKind.outro), isTrue);
-        if (i < 2) {
+        if (i == 1) {
           expect(clean.lines.any((l) => l.kind == LyricLineKind.intro), isTrue);
         }
         expect(

@@ -61,7 +61,7 @@ const List<CuratedThemePreset> curatedThemePresets = [
   CuratedThemePreset(
     id: 'tiyi-blue',
     name: '天依蓝',
-    description: '#66CCFF · 洛天依经典应援色',
+    description: '#66CCFF · 洛天依',
     seedColor: Color(0xFF66CCFF),
     mode: prism.ThemeMode.system,
     style: prism.ColorStyle.vivid,
@@ -69,7 +69,7 @@ const List<CuratedThemePreset> curatedThemePresets = [
   CuratedThemePreset(
     id: 'miku-green',
     name: '初音绿',
-    description: '#39C5BB · 初音未来苍绿应援色',
+    description: '#39C5BB · 初音未来',
     seedColor: Color(0xFF39C5BB),
     mode: prism.ThemeMode.system,
     style: prism.ColorStyle.vivid,
@@ -77,7 +77,7 @@ const List<CuratedThemePreset> curatedThemePresets = [
   CuratedThemePreset(
     id: 'kasumi-red',
     name: '香澄红',
-    description: '#FF5522 · BanG Dream! Poppin\'Party',
+    description: '#FF5522 · 户山香澄',
     seedColor: Color(0xFFFF5522),
     mode: prism.ThemeMode.system,
     style: prism.ColorStyle.vivid,
@@ -182,6 +182,7 @@ class CallbookController extends ChangeNotifier {
   final ChangeNotifier _playbackNotifier = ChangeNotifier();
   final ChangeNotifier _playbackSyncNotifier = ChangeNotifier();
   final ChangeNotifier _beatNotifier = ChangeNotifier();
+  final ChangeNotifier _initNotifier = ChangeNotifier();
   final ValueNotifier<String?> _playingLineIdNotifier = ValueNotifier<String?>(null);
   final ValueNotifier<String?> _upcomingLineIdNotifier = ValueNotifier<String?>(null);
   final ValueNotifier<bool> _isPlayingNotifier = ValueNotifier<bool>(false);
@@ -199,6 +200,7 @@ class CallbookController extends ChangeNotifier {
   int _gtFlashSeq = 0;
 
   bool _disposed = false;
+  bool _localInitDone = false;
 
   CallProject _project = defaultPrimarySong.buildCleanProject();
   List<LyricLine> _sortedLinesCache = const [];
@@ -288,6 +290,7 @@ class CallbookController extends ChangeNotifier {
   Listenable get playbackListenable => _playbackNotifier;
   Listenable get playbackSyncListenable => _playbackSyncNotifier;
   Listenable get beatListenable => _beatNotifier;
+  Listenable get initListenable => _initNotifier;
   ValueListenable<String?> get playingLineIdListenable => _playingLineIdNotifier;
   ValueListenable<String?> get upcomingLineIdListenable => _upcomingLineIdNotifier;
   ValueListenable<bool> get isPlayingListenable => _isPlayingNotifier;
@@ -298,6 +301,7 @@ class CallbookController extends ChangeNotifier {
   ValueListenable<int> get scrollToTopSignal => _scrollToTopSignal;
 
   // Getters
+  bool get isLocalInitDone => _localInitDone;
   bool get isFetchingLyrics => _isFetchingLyrics;
   bool get followPausedByScrollTop => _followPausedByScrollTop;
   CallProject get project => _project;
@@ -461,13 +465,27 @@ class CallbookController extends ChangeNotifier {
 
   void _recomputePlaybackDerivedStates({bool forceNotify = false}) {
     final t = _currentTimeMs;
-    String? nextPlayingId;
+    LyricLine? bestMatch;
     for (final line in _sortedLinesCache) {
       if (t >= line.startTimeMs && t < line.endTimeMs) {
-        nextPlayingId = line.id;
-        break;
+        if (bestMatch == null || line.startTimeMs > bestMatch.startTimeMs) {
+          bestMatch = line;
+        } else if (line.startTimeMs == bestMatch.startTimeMs) {
+          final currentIsActive = line.id == _activeLineId;
+          final bestIsActive = bestMatch.id == _activeLineId;
+          if (currentIsActive && !bestIsActive) {
+            bestMatch = line;
+          } else if (currentIsActive == bestIsActive) {
+            final currSpan = line.endTimeMs - line.startTimeMs;
+            final bestSpan = bestMatch.endTimeMs - bestMatch.startTimeMs;
+            if (currSpan <= bestSpan) {
+              bestMatch = line;
+            }
+          }
+        }
       }
     }
+    final nextPlayingId = bestMatch?.id;
     String? nextUpcomingId;
     if (nextPlayingId == null &&
         _sortedLinesCache.isNotEmpty &&
@@ -770,7 +788,59 @@ class CallbookController extends ChangeNotifier {
     } catch (_) {}
   }
 
-  Future<void> init() async {
+  CallProject _upgradeUntouchedDefaultProject(CallProject proj) {
+    final spec = findDefaultSongByProject(proj);
+    if (spec == null) return proj;
+    final cleanSpec = spec.buildCleanProject();
+
+    var upgradedMeta = proj.meta;
+    var metaChanged = false;
+    if (upgradedMeta.arranger.trim().isEmpty &&
+        cleanSpec.meta.arranger.isNotEmpty) {
+      upgradedMeta = upgradedMeta.copyWith(arranger: cleanSpec.meta.arranger);
+      metaChanged = true;
+    }
+    if (upgradedMeta.supportColor.trim().isEmpty &&
+        cleanSpec.meta.supportColor.isNotEmpty) {
+      upgradedMeta = upgradedMeta.copyWith(
+        supportColor: cleanSpec.meta.supportColor,
+      );
+      metaChanged = true;
+    }
+
+    final untouched =
+        proj.alerts.isEmpty &&
+        proj.lines.every(
+          (l) =>
+              l.calls.isEmpty &&
+              l.customShout.trim().isEmpty &&
+              !l.tailUpdraft &&
+              l.alignedCalls.isEmpty,
+        );
+    if (!untouched) {
+      return metaChanged ? proj.copyWith(meta: upgradedMeta) : proj;
+    }
+
+    var linesDiffer = proj.lines.length != cleanSpec.lines.length;
+    if (!linesDiffer) {
+      for (var i = 0; i < proj.lines.length; i++) {
+        if (proj.lines[i].startTimeMs != cleanSpec.lines[i].startTimeMs ||
+            proj.lines[i].endTimeMs != cleanSpec.lines[i].endTimeMs ||
+            proj.lines[i].kind != cleanSpec.lines[i].kind ||
+            proj.lines[i].text.original != cleanSpec.lines[i].text.original) {
+          linesDiffer = true;
+          break;
+        }
+      }
+    }
+    if (!linesDiffer) {
+      return metaChanged ? proj.copyWith(meta: upgradedMeta) : proj;
+    }
+
+    return proj.copyWith(meta: upgradedMeta, lines: cleanSpec.lines);
+  }
+
+  Future<void> init({bool awaitBackgroundSync = true}) async {
     await _audio.init();
     final savedUrl = await _storage.loadBackendUrl();
     if (savedUrl != null && savedUrl.isNotEmpty) {
@@ -830,13 +900,47 @@ class CallbookController extends ChangeNotifier {
       }
       _showOnboarding = false;
       _onboardingReopened = false;
+
+      var archivesUpgraded = false;
+      if (_archives.isNotEmpty) {
+        final nextArchives = <CallbookArchiveEntry>[];
+        for (final entry in _archives) {
+          if (entry.taggedCount == 0 && entry.alertCount == 0) {
+            final upgradedEntryProj = _upgradeUntouchedDefaultProject(
+              entry.project,
+            );
+            if (!identical(upgradedEntryProj, entry.project)) {
+              archivesUpgraded = true;
+              nextArchives.add(
+                entry.copyWith(
+                  project: upgradedEntryProj,
+                  lineCount: upgradedEntryProj.lines.length,
+                ),
+              );
+              continue;
+            }
+          }
+          nextArchives.add(entry);
+        }
+        _archives = nextArchives;
+      }
+
       if (savedProj != null && savedProj.lines.isNotEmpty) {
-        _setProject(_normalizeProjectAlerts(savedProj));
+        final normalizedSaved = _normalizeProjectAlerts(savedProj);
+        final upgradedSaved = _upgradeUntouchedDefaultProject(normalizedSaved);
+        _setProject(upgradedSaved);
+        if (!identical(upgradedSaved, normalizedSaved)) {
+          await _storage.saveProject(upgradedSaved);
+        }
       } else {
         _setProject(
           _normalizeProjectAlerts(defaultPrimarySong.buildCleanProject()),
         );
       }
+      if (archivesUpgraded) {
+        await _storage.saveArchives(_archives);
+      }
+
       _knownAudioDurationMs = _resolveKnownDurationMs(_project);
       _durationMs = _computeProjectDurationMs(
         _project,
@@ -864,6 +968,8 @@ class CallbookController extends ChangeNotifier {
     _recomputePlaybackDerivedStates(forceNotify: true);
     _refreshCallDensitySeries();
     _syncEngine();
+    _localInitDone = true;
+    _initNotifier.notifyListeners();
     _themeNotifier.notifyListeners();
     _routeNotifier.notifyListeners();
     _projectNotifier.notifyListeners();
@@ -872,6 +978,14 @@ class CallbookController extends ChangeNotifier {
     notifyListeners();
 
     final initSeq = ++_sourceSwitchSeq;
+    if (awaitBackgroundSync) {
+      await _runPostInitNetworkSync(initSeq);
+    } else {
+      unawaited(_runPostInitNetworkSync(initSeq));
+    }
+  }
+
+  Future<void> _runPostInitNetworkSync(int initSeq) async {
     await checkBackendHealth();
     if (_disposed || initSeq != _sourceSwitchSeq) return;
     await _restoreAudioSourceForProject(
@@ -1382,7 +1496,10 @@ class CallbookController extends ChangeNotifier {
     String? artist,
     String? composer,
     String? lyricist,
+    String? arranger,
+    String? mixer,
     String? vocalist,
+    String? supportColor,
     String? tuner,
     bool? showTuner,
     String? editorName,
@@ -1395,7 +1512,10 @@ class CallbookController extends ChangeNotifier {
           artist: artist,
           composer: composer,
           lyricist: lyricist,
+          arranger: arranger,
+          mixer: mixer,
           vocalist: vocalist,
+          supportColor: supportColor,
           tuner: tuner,
           showTuner: showTuner,
           editorName: editorName,
@@ -1547,6 +1667,62 @@ class CallbookController extends ChangeNotifier {
     _notifyProjectChanged();
   }
 
+  List<LyricLine> _normalizeLinesForInsertOrEdit(
+    List<LyricLine> rawLines,
+    LyricLine target,
+  ) {
+    final next = <LyricLine>[];
+    for (final line in rawLines) {
+      if (line.id != target.id &&
+          line.startTimeMs < target.startTimeMs &&
+          line.endTimeMs > target.startTimeMs) {
+        final trimmedEnd = target.startTimeMs;
+        if (line.kind.isSection) {
+          next.add(
+            line.copyWith(
+              endTimeMs: trimmedEnd,
+              text: line.text.copyWith(
+                translation: buildSectionSummary(
+                  line.kind,
+                  trimmedEnd - line.startTimeMs,
+                ),
+              ),
+            ),
+          );
+        } else {
+          next.add(line.copyWith(endTimeMs: trimmedEnd));
+        }
+      } else {
+        next.add(line);
+      }
+    }
+    next.sort((a, b) {
+      final cmp = a.startTimeMs.compareTo(b.startTimeMs);
+      if (cmp != 0) return cmp;
+      if (a.id == target.id && b.id != target.id) return 1;
+      if (b.id == target.id && a.id != target.id) return -1;
+      return a.endTimeMs.compareTo(b.endTimeMs);
+    });
+    return next;
+  }
+
+  void _refreshTimelineAfterMutation({bool forcePlaybackSync = true}) {
+    final computedDuration = _computeProjectDurationMs(
+      _project,
+      knownAudioDurationMs: _knownAudioDurationMs,
+    );
+    if (computedDuration > _durationMs) {
+      _durationMs = computedDuration;
+    }
+    _audio.setFallbackDurationMs(_durationMs);
+    _recomputePlaybackDerivedStates(forceNotify: forcePlaybackSync);
+    _refreshCallDensitySeries();
+    _syncEngine();
+    if (!_disposed) {
+      _playbackNotifier.notifyListeners();
+    }
+  }
+
   void updateLineDetails({
     required String lineId,
     int? startTimeMs,
@@ -1562,15 +1738,19 @@ class CallbookController extends ChangeNotifier {
     if (idx < 0) return;
     final current = lines[idx];
     final effectiveStart = startTimeMs ?? current.startTimeMs;
+    final effectiveEnd = math.max(
+      effectiveStart + 400,
+      endTimeMs ?? current.endTimeMs,
+    );
     final nextOriginal = original ?? current.text.original;
     final nextAligned = original != null
         ? (nextOriginal.trim().isEmpty
             ? const <AlignedCallCue>[]
             : normalizeAlignedCalls(current.alignedCalls, nextOriginal.length))
         : current.alignedCalls;
-    lines[idx] = current.copyWith(
+    final updatedLine = current.copyWith(
       startTimeMs: startTimeMs,
-      endTimeMs: endTimeMs,
+      endTimeMs: endTimeMs != null || startTimeMs != null ? effectiveEnd : null,
       kind: kind,
       autoGenerated:
           kind != null && kind != current.kind ? false : current.autoGenerated,
@@ -1581,6 +1761,10 @@ class CallbookController extends ChangeNotifier {
         translation: translation,
       ),
     );
+    lines[idx] = updatedLine;
+    final normalizedLines = (startTimeMs != null || endTimeMs != null)
+        ? _normalizeLinesForInsertOrEdit(lines, updatedLine)
+        : lines;
     final nextAlerts = startTimeMs != null
         ? [
             for (final a in _project.alerts)
@@ -1590,13 +1774,11 @@ class CallbookController extends ChangeNotifier {
                 a,
           ]
         : _project.alerts;
-    _setProject(_project.copyWith(lines: lines, alerts: nextAlerts));
-    _refreshCallDensitySeries();
-    if (startTimeMs != null) {
-      _syncEngine();
-    }
+    _setProject(_project.copyWith(lines: normalizedLines, alerts: nextAlerts));
+    _refreshTimelineAfterMutation(
+      forcePlaybackSync: startTimeMs != null || endTimeMs != null,
+    );
     schedulePersist();
-    _playbackNotifier.notifyListeners();
     _notifyProjectChanged();
   }
 
@@ -1867,10 +2049,12 @@ class CallbookController extends ChangeNotifier {
 
     _pushUndo('校时');
     final dur = math.max(1200, current.endTimeMs - current.startTimeMs);
-    lines[idx] = current.copyWith(
+    final snappedLine = current.copyWith(
       startTimeMs: _currentTimeMs,
       endTimeMs: _currentTimeMs + dur,
     );
+    lines[idx] = snappedLine;
+    final normalizedLines = _normalizeLinesForInsertOrEdit(lines, snappedLine);
     final nextAlerts = [
       for (final a in _project.alerts)
         if (resolveGtAlertTargetLineId(a, orderedBefore) == lineId)
@@ -1878,25 +2062,36 @@ class CallbookController extends ChangeNotifier {
         else
           a,
     ];
-    _setProject(_project.copyWith(lines: lines, alerts: nextAlerts));
-    _syncEngine();
+    _setProject(_project.copyWith(lines: normalizedLines, alerts: nextAlerts));
+    _refreshTimelineAfterMutation();
     schedulePersist();
     _setStatusInternal('已对齐当前时间 ${formatMsToClock(_currentTimeMs)}（可点击「撤销」恢复）');
-    _playbackNotifier.notifyListeners();
     _notifyProjectChanged();
   }
 
   void addEmptyLine() {
-    final start = _currentTimeMs;
+    final start = math.max(0, _currentTimeMs);
+    var nextLineStart = start + 3000;
+    for (final line in sortedLines) {
+      if (line.startTimeMs > start + 400) {
+        nextLineStart = math.min(nextLineStart, line.startTimeMs);
+        break;
+      }
+    }
+    final end = math.max(start + 1000, nextLineStart);
     final newLine = LyricLine(
-      id: 'line-${DateTime.now().millisecondsSinceEpoch}',
+      id: 'line-${DateTime.now().millisecondsSinceEpoch}-${_project.lines.length}',
       startTimeMs: start,
-      endTimeMs: start + 3000,
+      endTimeMs: end,
       text: const LyricText(original: '新歌词行（点击编辑）', translation: ''),
     );
-    _setProject(_project.copyWith(lines: [..._project.lines, newLine]));
+    final normalizedLines = _normalizeLinesForInsertOrEdit(
+      [..._project.lines, newLine],
+      newLine,
+    );
     _activeLineId = newLine.id;
-    _refreshCallDensitySeries();
+    _setProject(_project.copyWith(lines: normalizedLines));
+    _refreshTimelineAfterMutation();
     schedulePersist();
     _notifyProjectChanged();
   }
@@ -2003,7 +2198,7 @@ class CallbookController extends ChangeNotifier {
             : buildSectionSummary(safeKind, gap);
 
     final newSection = LyricLine(
-      id: 'sec-manual-${safeKind.name}-${DateTime.now().millisecondsSinceEpoch}',
+      id: 'sec-manual-${safeKind.name}-${DateTime.now().millisecondsSinceEpoch}-${_project.lines.length}',
       startTimeMs: safeStart,
       endTimeMs: safeEnd,
       kind: safeKind,
@@ -2014,22 +2209,14 @@ class CallbookController extends ChangeNotifier {
       ),
     );
 
-    final nextLines = [
-      for (final line in _project.lines)
-        if (!line.kind.isSection &&
-            safeKind == LyricLineKind.interlude &&
-            line.startTimeMs < safeStart &&
-            line.endTimeMs > safeStart)
-          line.copyWith(endTimeMs: safeStart)
-        else
-          line,
+    final nextLines = _normalizeLinesForInsertOrEdit(
+      [..._project.lines, newSection],
       newSection,
-    ]..sort((a, b) => a.startTimeMs.compareTo(b.startTimeMs));
+    );
 
-    _setProject(_project.copyWith(lines: nextLines));
     _activeLineId = newSection.id;
-    _refreshCallDensitySeries();
-    _syncEngine();
+    _setProject(_project.copyWith(lines: nextLines));
+    _refreshTimelineAfterMutation();
     schedulePersist();
     _setStatusInternal('已添加${safeKind.zhLabel}段落（${formatGapSec(gap)}）');
     _notifyProjectChanged();
@@ -3160,6 +3347,7 @@ class CallbookController extends ChangeNotifier {
     _playbackNotifier.dispose();
     _playbackSyncNotifier.dispose();
     _beatNotifier.dispose();
+    _initNotifier.dispose();
     _playingLineIdNotifier.dispose();
     _upcomingLineIdNotifier.dispose();
     _isPlayingNotifier.dispose();

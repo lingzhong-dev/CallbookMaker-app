@@ -199,7 +199,7 @@ class _MoreViewState extends State<MoreView> {
                   title: c.siteText('网关配置'),
                   subtitle: c.backendOnline
                       ? '后端注音在线 · 支持直接连接'
-                      : '直接连接就绪 · Cookie 与可选后端地址',
+                      : '配置网易云网关',
                   onTap: () => _openSubPage(context, _MoreSubPage.gateway),
                 ),
                 Padding(
@@ -214,7 +214,7 @@ class _MoreViewState extends State<MoreView> {
                   iconBackground: scheme.secondaryContainer,
                   iconColor: scheme.onSecondaryContainer,
                   title: c.siteText('主题'),
-                  subtitle: 'HCT 色彩调色盘 · 深浅模式 · Prism 质感控制',
+                  subtitle: '更改主题色与其他高级设置',
                   onTap: () => _openSubPage(context, _MoreSubPage.theme),
                 ),
                 Padding(
@@ -229,8 +229,7 @@ class _MoreViewState extends State<MoreView> {
                   iconBackground: scheme.surfaceContainerHigh,
                   iconColor: scheme.primary,
                   title: c.siteText('关于'),
-                  subtitle:
-                      '$kAppDisplayName · Version $kAppVersion · $kAppLicenseName',
+                  subtitle: '关于CallbookMaker',
                   onTap: () => _openSubPage(context, _MoreSubPage.about),
                 ),
               ],
@@ -253,7 +252,7 @@ class _MoreViewState extends State<MoreView> {
             Navigator.of(context).maybePop(),
       },
       child: DecoratedBox(
-        decoration: BoxDecoration(color: scheme.surface),
+        decoration: BoxDecoration(color: SurfaceLevel.page.colorOf(scheme)),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -292,7 +291,7 @@ class _MoreViewState extends State<MoreView> {
             Navigator.of(context).maybePop(),
       },
       child: DecoratedBox(
-        decoration: BoxDecoration(color: scheme.surface),
+        decoration: BoxDecoration(color: SurfaceLevel.page.colorOf(scheme)),
         child: CustomScrollView(
           slivers: [
             SliverPadding(
@@ -497,7 +496,7 @@ class _MoreViewState extends State<MoreView> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  '© 2025-2026 $kDeveloperGithubId · $kAppDisplayName',
+                  'LingZhong · CallbookMaker',
                   textAlign: TextAlign.center,
                   style: AppTextStyle.caption2.of(context).copyWith(
                     color: scheme.onSurfaceVariant.withValues(alpha: 0.8),

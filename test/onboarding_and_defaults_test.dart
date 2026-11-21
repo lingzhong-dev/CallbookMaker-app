@@ -167,7 +167,7 @@ void main() {
           expect(line.alignedCalls, isEmpty);
         }
 
-        if (i < 2) {
+        if (i == 1) {
           final intro = clean.lines.firstWhere(
             (l) => l.kind == LyricLineKind.intro,
           );

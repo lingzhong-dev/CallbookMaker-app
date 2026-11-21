@@ -614,17 +614,17 @@ class _OnboardingOverlayState extends State<OnboardingOverlay>
       (
         glyph: CallbookGlyphs.dashboard,
         title: '全曲时间轴',
-        desc: '按毫秒与小节精确同步每句歌词与前/间/尾奏区段',
+        desc: '自动同步歌词与划分段落',
       ),
       (
         glyph: CallbookGlyphs.studio,
-        title: '专属 Call 库',
-        desc: '内置 10 项常用应援动作并支持自定义口号标签与颜色',
+        title: '快捷Call库',
+        desc: '内置 10 项常用应援动作并支持自定义标签',
       ),
       (
         glyph: CallbookGlyphs.fullscreen,
-        title: '纯黑演练',
-        desc: 'OLED 高对比大字提词舞台，跟着节拍倒数实战打 Call',
+        title: '演练模式',
+        desc: '歌词与Call标纯享版，让你专注练Call',
       ),
     ];
 
@@ -637,7 +637,7 @@ class _OnboardingOverlayState extends State<OnboardingOverlay>
           glyph: CallbookGlyphs.musicNote,
           title: '欢迎来到 Callbook Maker · 为你的偶像写下专属 Call 本',
           subtitle: '专为 Live 现场与打 Call 同好打造的创作台',
-          tags: const ['全曲时间轴', '专属 Call 库', '纯黑演练'],
+          tags: const ['全曲时间轴', '快捷Call库', '演练模式'],
         ),
         const SizedBox(height: 18),
         if (isMobile)
@@ -938,12 +938,12 @@ class _OnboardingOverlayState extends State<OnboardingOverlay>
       (
         glyph: CallbookGlyphs.fullscreen,
         title: '大屏跟拍演练（快捷键 F）',
-        desc: '纯黑高对比全屏提词，实时节拍器点阵 + GT 警报高亮与备注',
+        desc: '全屏歌词滚动，纯享版练Call',
       ),
       (
         glyph: CallbookGlyphs.exportCard,
         title: 'PNG 长图 & Excel (.xlsx)',
-        desc: '自动排版日文假名注音、颜色图例与逐句清单，直接发群或打印携带',
+        desc: '自动排版日文假名注音、颜色图例与逐句清单，直接发群或打印在现场分发',
       ),
       (
         glyph: CallbookGlyphs.archive,

@@ -25,11 +25,19 @@ enum SurfaceLevel {
   Color colorOf(ColorScheme colorScheme) {
     final dark = colorScheme.brightness == Brightness.dark;
     return switch (this) {
-      page => dark ? colorScheme.surface : colorScheme.surfaceContainer,
-      card => dark ? colorScheme.surfaceContainer : colorScheme.surfaceBright,
+      page => dark
+          ? colorScheme.surface
+          : Color.lerp(
+              colorScheme.surfaceContainer,
+              colorScheme.surfaceContainerHigh,
+              0.45,
+            )!,
+      card =>
+        dark ? colorScheme.surfaceContainer : colorScheme.surfaceContainerLowest,
       block =>
-        dark ? colorScheme.surfaceContainerHigh : colorScheme.surfaceContainer,
-      inset => colorScheme.surfaceContainerHighest,
+        dark ? colorScheme.surfaceContainerHigh : colorScheme.surfaceContainerLow,
+      inset =>
+        dark ? colorScheme.surfaceContainerHighest : colorScheme.surfaceContainer,
     };
   }
 }

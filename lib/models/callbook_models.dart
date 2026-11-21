@@ -517,7 +517,10 @@ class CallProjectMeta {
     this.offsetMs = 0,
     this.composer = '',
     this.lyricist = '',
+    this.arranger = '',
+    this.mixer = '',
     this.vocalist = '',
+    this.supportColor = '',
     this.tuner = '',
     this.showTuner = false,
     this.editorName = '',
@@ -534,7 +537,10 @@ class CallProjectMeta {
   final int offsetMs;
   final String composer;
   final String lyricist;
+  final String arranger;
+  final String mixer;
   final String vocalist;
+  final String supportColor;
   final String tuner;
   final bool showTuner;
   final String editorName;
@@ -553,7 +559,10 @@ class CallProjectMeta {
     int? offsetMs,
     String? composer,
     String? lyricist,
+    String? arranger,
+    String? mixer,
     String? vocalist,
+    String? supportColor,
     String? tuner,
     bool? showTuner,
     String? editorName,
@@ -569,7 +578,10 @@ class CallProjectMeta {
     offsetMs: offsetMs ?? this.offsetMs,
     composer: composer ?? this.composer,
     lyricist: lyricist ?? this.lyricist,
+    arranger: arranger ?? this.arranger,
+    mixer: mixer ?? this.mixer,
     vocalist: vocalist ?? this.vocalist,
+    supportColor: supportColor ?? this.supportColor,
     tuner: tuner ?? this.tuner,
     showTuner: showTuner ?? this.showTuner,
     editorName: editorName ?? this.editorName,
@@ -587,7 +599,10 @@ class CallProjectMeta {
     'offsetMs': offsetMs,
     'composer': composer,
     'lyricist': lyricist,
+    'arranger': arranger,
+    'mixer': mixer,
     'vocalist': vocalist,
+    'supportColor': supportColor,
     'tuner': tuner,
     'showTuner': showTuner,
     'editorName': editorName,
@@ -605,7 +620,10 @@ class CallProjectMeta {
     offsetMs: (json['offsetMs'] as num?)?.round() ?? 0,
     composer: json['composer']?.toString() ?? '',
     lyricist: json['lyricist']?.toString() ?? '',
+    arranger: json['arranger']?.toString() ?? '',
+    mixer: json['mixer']?.toString() ?? '',
     vocalist: json['vocalist']?.toString() ?? '',
+    supportColor: json['supportColor']?.toString() ?? '',
     tuner: json['tuner']?.toString() ?? '',
     showTuner: json['showTuner'] == true,
     editorName: json['editorName']?.toString() ?? '',

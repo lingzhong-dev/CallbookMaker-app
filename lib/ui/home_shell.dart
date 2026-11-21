@@ -523,7 +523,9 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
               );
 
               final mainColumn = DecoratedBox(
-                decoration: BoxDecoration(color: scheme.surface),
+                decoration: BoxDecoration(
+                  color: SurfaceLevel.page.colorOf(scheme),
+                ),
                 child: Column(
                   children: [
                     appBar,
@@ -604,7 +606,7 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
                                         .copyWith(color: scheme.onSurface),
                                   ),
                                   Text(
-                                    'By 澪终',
+                                    'Made with ❤ by 澪终',
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                     style: AppTextStyle.caption2

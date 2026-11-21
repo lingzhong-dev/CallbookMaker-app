@@ -7,6 +7,7 @@ import 'package:prism_ui/icons/icons.dart';
 import 'package:prism_ui/prism_ui.dart';
 
 import '../state/callbook_controller.dart';
+import '../utils/color_parser.dart';
 import '../utils/lrc_ruby_parser.dart';
 import 'theme/app_motion.dart';
 import 'theme/app_tokens.dart';
@@ -47,7 +48,10 @@ class _DashboardViewState extends State<DashboardView> {
   late final TextEditingController _bpmCtrl;
   late final TextEditingController _composerCtrl;
   late final TextEditingController _lyricistCtrl;
+  late final TextEditingController _arrangerCtrl;
+  late final TextEditingController _mixerCtrl;
   late final TextEditingController _vocalistCtrl;
+  late final TextEditingController _supportColorCtrl;
   late final TextEditingController _tunerCtrl;
   late final TextEditingController _editorNameCtrl;
   late final TextEditingController _editorNoteCtrl;
@@ -57,7 +61,10 @@ class _DashboardViewState extends State<DashboardView> {
   final FocusNode _bpmFocus = FocusNode();
   final FocusNode _composerFocus = FocusNode();
   final FocusNode _lyricistFocus = FocusNode();
+  final FocusNode _arrangerFocus = FocusNode();
+  final FocusNode _mixerFocus = FocusNode();
   final FocusNode _vocalistFocus = FocusNode();
+  final FocusNode _supportColorFocus = FocusNode();
   final FocusNode _tunerFocus = FocusNode();
   final FocusNode _editorNameFocus = FocusNode();
   final FocusNode _editorNoteFocus = FocusNode();
@@ -73,7 +80,10 @@ class _DashboardViewState extends State<DashboardView> {
     _bpmCtrl = TextEditingController(text: '${meta.bpm}');
     _composerCtrl = TextEditingController(text: meta.composer);
     _lyricistCtrl = TextEditingController(text: meta.lyricist);
+    _arrangerCtrl = TextEditingController(text: meta.arranger);
+    _mixerCtrl = TextEditingController(text: meta.mixer);
     _vocalistCtrl = TextEditingController(text: meta.vocalist);
+    _supportColorCtrl = TextEditingController(text: meta.supportColor);
     _tunerCtrl = TextEditingController(text: meta.tuner);
     _editorNameCtrl = TextEditingController(text: meta.editorName);
     _editorNoteCtrl = TextEditingController(text: meta.editorNote);
@@ -82,7 +92,10 @@ class _DashboardViewState extends State<DashboardView> {
     _bpmFocus.addListener(_onBpmFocusChanged);
     _composerFocus.addListener(_onComposerFocusChanged);
     _lyricistFocus.addListener(_onLyricistFocusChanged);
+    _arrangerFocus.addListener(_onArrangerFocusChanged);
+    _mixerFocus.addListener(_onMixerFocusChanged);
     _vocalistFocus.addListener(_onVocalistFocusChanged);
+    _supportColorFocus.addListener(_onSupportColorFocusChanged);
     _tunerFocus.addListener(_onTunerFocusChanged);
     _editorNameFocus.addListener(_onEditorNameFocusChanged);
     _editorNoteFocus.addListener(_onEditorNoteFocusChanged);
@@ -144,10 +157,36 @@ class _DashboardViewState extends State<DashboardView> {
     }
   }
 
+  void _commitArranger() {
+    final next = _arrangerCtrl.text;
+    if (next != widget.controller.project.meta.arranger) {
+      widget.controller.updateMeta(arranger: next);
+    }
+  }
+
+  void _commitMixer() {
+    final next = _mixerCtrl.text;
+    if (next != widget.controller.project.meta.mixer) {
+      widget.controller.updateMeta(mixer: next);
+    }
+  }
+
   void _commitVocalist() {
     final next = _vocalistCtrl.text;
     if (next != widget.controller.project.meta.vocalist) {
       widget.controller.updateMeta(vocalist: next);
+    }
+  }
+
+  void _commitSupportColor() {
+    final raw = _supportColorCtrl.text;
+    final parsed = parseSupportColor(raw);
+    final normalized = parsed != null ? formatHexColor(parsed) : raw;
+    if (normalized != _supportColorCtrl.text) {
+      _supportColorCtrl.text = normalized;
+    }
+    if (normalized != widget.controller.project.meta.supportColor) {
+      widget.controller.updateMeta(supportColor: normalized);
     }
   }
 
@@ -194,8 +233,20 @@ class _DashboardViewState extends State<DashboardView> {
     if (!_lyricistFocus.hasFocus && mounted) _commitLyricist();
   }
 
+  void _onArrangerFocusChanged() {
+    if (!_arrangerFocus.hasFocus && mounted) _commitArranger();
+  }
+
+  void _onMixerFocusChanged() {
+    if (!_mixerFocus.hasFocus && mounted) _commitMixer();
+  }
+
   void _onVocalistFocusChanged() {
     if (!_vocalistFocus.hasFocus && mounted) _commitVocalist();
+  }
+
+  void _onSupportColorFocusChanged() {
+    if (!_supportColorFocus.hasFocus && mounted) _commitSupportColor();
   }
 
   void _onTunerFocusChanged() {
@@ -258,7 +309,10 @@ class _DashboardViewState extends State<DashboardView> {
     _syncFieldIfIdle(_bpmCtrl, _bpmFocus, '${meta.bpm}');
     _syncFieldIfIdle(_composerCtrl, _composerFocus, meta.composer);
     _syncFieldIfIdle(_lyricistCtrl, _lyricistFocus, meta.lyricist);
+    _syncFieldIfIdle(_arrangerCtrl, _arrangerFocus, meta.arranger);
+    _syncFieldIfIdle(_mixerCtrl, _mixerFocus, meta.mixer);
     _syncFieldIfIdle(_vocalistCtrl, _vocalistFocus, meta.vocalist);
+    _syncFieldIfIdle(_supportColorCtrl, _supportColorFocus, meta.supportColor);
     _syncFieldIfIdle(_tunerCtrl, _tunerFocus, meta.tuner);
     _syncFieldIfIdle(_editorNameCtrl, _editorNameFocus, meta.editorName);
     _syncFieldIfIdle(_editorNoteCtrl, _editorNoteFocus, meta.editorNote);
@@ -280,7 +334,10 @@ class _DashboardViewState extends State<DashboardView> {
     _bpmFocus.removeListener(_onBpmFocusChanged);
     _composerFocus.removeListener(_onComposerFocusChanged);
     _lyricistFocus.removeListener(_onLyricistFocusChanged);
+    _arrangerFocus.removeListener(_onArrangerFocusChanged);
+    _mixerFocus.removeListener(_onMixerFocusChanged);
     _vocalistFocus.removeListener(_onVocalistFocusChanged);
+    _supportColorFocus.removeListener(_onSupportColorFocusChanged);
     _tunerFocus.removeListener(_onTunerFocusChanged);
     _editorNameFocus.removeListener(_onEditorNameFocusChanged);
     _editorNoteFocus.removeListener(_onEditorNoteFocusChanged);
@@ -289,7 +346,10 @@ class _DashboardViewState extends State<DashboardView> {
     _bpmCtrl.dispose();
     _composerCtrl.dispose();
     _lyricistCtrl.dispose();
+    _arrangerCtrl.dispose();
+    _mixerCtrl.dispose();
     _vocalistCtrl.dispose();
+    _supportColorCtrl.dispose();
     _tunerCtrl.dispose();
     _editorNameCtrl.dispose();
     _editorNoteCtrl.dispose();
@@ -298,7 +358,10 @@ class _DashboardViewState extends State<DashboardView> {
     _bpmFocus.dispose();
     _composerFocus.dispose();
     _lyricistFocus.dispose();
+    _arrangerFocus.dispose();
+    _mixerFocus.dispose();
     _vocalistFocus.dispose();
+    _supportColorFocus.dispose();
     _tunerFocus.dispose();
     _editorNameFocus.dispose();
     _editorNoteFocus.dispose();
@@ -1032,7 +1095,7 @@ class _DashboardViewState extends State<DashboardView> {
                     context,
                     scheme,
                     label: '作曲',
-                    hint: '如：litterzy',
+                    hint: '',
                     controller: _composerCtrl,
                     focusNode: _composerFocus,
                     onSubmitted: _commitComposer,
@@ -1044,7 +1107,7 @@ class _DashboardViewState extends State<DashboardView> {
                     context,
                     scheme,
                     label: '作词',
-                    hint: '如：冥凰',
+                    hint: '',
                     controller: _lyricistCtrl,
                     focusNode: _lyricistFocus,
                     onSubmitted: _commitLyricist,
@@ -1059,10 +1122,38 @@ class _DashboardViewState extends State<DashboardView> {
                   child: _buildMetaInputField(
                     context,
                     scheme,
+                    label: '编曲',
+                    hint: '',
+                    controller: _arrangerCtrl,
+                    focusNode: _arrangerFocus,
+                    onSubmitted: _commitArranger,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _buildMetaInputField(
+                    context,
+                    scheme,
+                    label: '混音',
+                    hint: '',
+                    controller: _mixerCtrl,
+                    focusNode: _mixerFocus,
+                    onSubmitted: _commitMixer,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: _buildMetaInputField(
+                    context,
+                    scheme,
                     label: '演唱',
                     hint: c.project.meta.artist.isNotEmpty
                         ? c.project.meta.artist
-                        : '如：初音ミク',
+                        : '',
                     controller: _vocalistCtrl,
                     focusNode: _vocalistFocus,
                     onSubmitted: _commitVocalist,
@@ -1075,7 +1166,7 @@ class _DashboardViewState extends State<DashboardView> {
                       context,
                       scheme,
                       label: '调教',
-                      hint: '调教师 / 调声',
+                      hint: '',
                       controller: _tunerCtrl,
                       focusNode: _tunerFocus,
                       onSubmitted: _commitTuner,
@@ -1083,6 +1174,116 @@ class _DashboardViewState extends State<DashboardView> {
                   ),
                 ],
               ],
+            ),
+            const SizedBox(height: 8),
+            Builder(
+              builder: (context) {
+                final parsedSupport = extractSupportColor(_supportColorCtrl.text);
+                final themeHex = formatHexColor(c.seedColor);
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      '应援色',
+                      style: AppTextStyle.caption2
+                          .of(context, emphasized: true)
+                          .copyWith(color: scheme.onSurfaceVariant),
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Container(
+                          width: 24,
+                          height: 24,
+                          decoration: BoxDecoration(
+                            color: parsedSupport ?? const Color(0x00000000),
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: scheme.outlineVariant,
+                              width: 1.5,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: TextField(
+                            controller: _supportColorCtrl,
+                            focusNode: _supportColorFocus,
+                            decoration: const InputDecoration(
+                              hintText: '',
+                              isDense: true,
+                            ),
+                            onChanged: (_) => setState(() {}),
+                            onSubmitted: (_) => _commitSupportColor(),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        for (final preset in curatedThemePresets)
+                          Tooltip(
+                            message:
+                                '${preset.name} ${formatHexColor(preset.seedColor)}',
+                            child: Semantics(
+                              button: true,
+                              label: '使用 ${preset.name} 应援色',
+                              child: PressSurface(
+                                fill: scheme.surfaceContainerLow,
+                                shape: AppShape.full,
+                                side: BorderSide(color: scheme.outlineVariant),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 4,
+                                ),
+                                onPressed: () {
+                                  final hex = formatHexColor(preset.seedColor);
+                                  _supportColorCtrl.text = hex;
+                                  setState(() {});
+                                  c.updateMeta(supportColor: hex);
+                                },
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Container(
+                                      width: 10,
+                                      height: 10,
+                                      decoration: BoxDecoration(
+                                        color: preset.seedColor,
+                                        shape: BoxShape.circle,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      preset.name,
+                                      style: AppTextStyle.caption2
+                                          .of(context)
+                                          .copyWith(color: scheme.onSurface),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        TonalChip(
+                          label: '同步主题色',
+                          color: scheme.primaryContainer,
+                          foregroundColor: scheme.onPrimaryContainer,
+                          onPressed: () {
+                            _supportColorCtrl.text = themeHex;
+                            setState(() {});
+                            c.updateMeta(supportColor: themeHex);
+                          },
+                        ),
+                      ],
+                    ),
+                  ],
+                );
+              },
             ),
             const SizedBox(height: 10),
             const Divider(height: 1),
@@ -1229,7 +1430,7 @@ class _DashboardViewState extends State<DashboardView> {
                           .copyWith(color: scheme.onSurface),
                     ),
                     Text(
-                      c.followPlayback ? '自动居中高亮句' : '手动自由滚动',
+                      c.followPlayback ? '自动居中当前播放歌词' : '手动自由滚动',
                       style: AppTextStyle.caption2
                           .of(context)
                           .copyWith(color: scheme.onSurfaceVariant),

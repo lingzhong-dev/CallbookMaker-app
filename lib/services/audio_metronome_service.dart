@@ -236,6 +236,11 @@ class AudioMetronomeService {
     _alerts = alerts;
   }
 
+  void setFallbackDurationMs(int durationMs) {
+    if (_disposed || _hasExternalAudio || durationMs <= 1000) return;
+    _durationMs = durationMs;
+  }
+
   Future<void> setAudioSource({
     String? url,
     String? localPath,

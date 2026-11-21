@@ -495,6 +495,7 @@ class TimelineEditorWidgetState extends State<TimelineEditorWidget>
     final nextSig = _computeLineListSignature(items);
     if (nextSig != _lastLineListSignature) {
       _lastLineListSignature = nextSig;
+      _lastFollowedLineId = null;
       final validIds = {for (final item in _displayedItems) item.line.id};
       _lineKeys.removeWhere((id, _) => !validIds.contains(id));
     }
@@ -1738,7 +1739,14 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard>
                         color: sectionAccent.withValues(alpha: 0.42),
                         width: 1.2,
                       )
-                    : BorderSide.none),
+                    : (scheme.brightness == Brightness.light
+                          ? BorderSide(
+                              color: scheme.outlineVariant.withValues(
+                                alpha: 0.45,
+                              ),
+                              width: 1.0,
+                            )
+                          : BorderSide.none)),
         ),
         onPressed: _handleCardTap,
         child: body,
@@ -2292,7 +2300,7 @@ class _TailUpdraftTagBadge extends StatelessWidget {
         shape: AppShape.full,
       ),
       child: Text(
-        '尾句上升气流',
+        '',
         softWrap: false,
         maxLines: 1,
         overflow: TextOverflow.visible,
