@@ -1,6 +1,9 @@
 #ifndef MyAppVersion
   #define MyAppVersion "1.0.0"
 #endif
+#ifndef MyAppVersionTag
+  #define MyAppVersionTag "v" + MyAppVersion
+#endif
 #ifndef ReleaseDir
   #define ReleaseDir "..\..\build\windows\x64\runner\Release"
 #endif
@@ -21,7 +24,7 @@ DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 LicenseFile=..\..\LICENSE
 OutputDir=..\..\dist\windows
-OutputBaseFilename=CallbookMaker-v{#MyAppVersion}-windows-x64-setup
+OutputBaseFilename=CallbookMaker-{#MyAppVersionTag}-windows-x64-setup
 SetupIconFile=..\runner\resources\app_icon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2

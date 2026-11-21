@@ -17,57 +17,142 @@ jobs:
       version: ${{ steps.semver.outputs.version }}
       build_number: ${{ steps.semver.outputs.build_number }}
       tag_name: ${{ steps.semver.outputs.tag_name }}
+      app_version: ${{ steps.semver.outputs.app_version }}
+      prerelease: ${{ steps.semver.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      - name: Migrate legacy beta tags & releases to beta-v* prefix
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+
+          declare -A LEGACY_BETA_SHAS=(
+            ["v1.0.0"]="f5ac828c08c8fbae8275ac836b83835bde18a66b"
+            ["v1.0.1"]="ce960b2840a33951fd6b0ca23eb5878dc775f623"
+            ["v1.0.2"]="4734850a383f275d7b138b71ea2722a931c1d11e"
+            ["v1.0.3"]="910f8aee3b9d1989435b99d352b3f3278c78514d"
+            ["v1.0.4"]="c75d99e0fc3cd8c71a56f0c6cbf0e98c2b59c6e4"
+            ["v1.0.5"]="e4b4f8fd72875d806ed0174f76e5617bf0d14ad2"
+            ["v1.0.6"]="4a3c406fd7397d8a686d49c5661efb9878dd27d5"
+            ["v1.0.7"]="1e7c38d74f040af598defa40b75bfc344d91f5c0"
+            ["v1.0.8"]="b77ae49db5ddea72d3da71965ad017e30b0c7750"
+            ["v1.0.9"]="b4ba7997d812f9c8e1cc01750166580da20661e4"
+            ["v1.0.10"]="66d73315f15c6eb7afc3862275192287b1de818c"
+            ["v1.0.11"]="42d710bb87973abde63a3915f757abfacb8dc372"
+            ["v1.0.12"]="8770a69f413600f9f89e517957b6b1ee5e7b5555"
+          )
+
+          for LEGACY_TAG in v1.0.0 v1.0.1 v1.0.2 v1.0.3 v1.0.4 v1.0.5 v1.0.6 v1.0.7 v1.0.8 v1.0.9 v1.0.10 v1.0.11 v1.0.12; do
+            if ! git rev-parse -q --verify "refs/tags/${LEGACY_TAG}" >/dev/null 2>&1; then
+              continue
+            fi
+            ACTUAL_SHA=$(git rev-list -n 1 "${LEGACY_TAG}")
+            EXPECTED_SHA="${LEGACY_BETA_SHAS[$LEGACY_TAG]}"
+            if [ "${ACTUAL_SHA}" != "${EXPECTED_SHA}" ]; then
+              continue
+            fi
+
+            NEW_TAG="beta-${LEGACY_TAG}"
+            echo "Migrating legacy beta ${LEGACY_TAG} (${ACTUAL_SHA}) -> ${NEW_TAG}"
+            if ! git rev-parse -q --verify "refs/tags/${NEW_TAG}" >/dev/null 2>&1; then
+              git tag "${NEW_TAG}" "${ACTUAL_SHA}"
+              git push origin "refs/tags/${NEW_TAG}"
+            fi
+
+            REL_JSON=$(curl -sS -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${LEGACY_TAG}" || true)
+            REL_ID=$(echo "${REL_JSON}" | jq -r '.id // empty')
+            if [ -n "${REL_ID}" ]; then
+              echo "Updating GitHub Release #${REL_ID} -> ${NEW_TAG} (prerelease=true)"
+              curl -fsSL -X PATCH \
+                -H "Authorization: Bearer ${GH_TOKEN}" \
+                -H "Accept: application/vnd.github+json" \
+                -d "{\"tag_name\":\"${NEW_TAG}\",\"name\":\"${NEW_TAG}\",\"prerelease\":true}" \
+                "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/${REL_ID}" >/dev/null
+            fi
+
+            git push origin ":refs/tags/${LEGACY_TAG}" || true
+            git tag -d "${LEGACY_TAG}" || true
+          done
+
       - name: Compute next semantic version
         id: semver
         run: |
-          git fetch --tags --force
+          git fetch --prune --prune-tags --tags --force
           PUB_LINE=$(grep '^version:' pubspec.yaml | head -n 1 | awk '{print $2}')
           PUB_VER=$(echo "$PUB_LINE" | cut -d'+' -f1)
           PUB_BUILD=$(echo "$PUB_LINE" | cut -s -d'+' -f2)
           PUB_VER=${PUB_VER:-1.0.0}
-          PUB_BUILD=${PUB_BUILD:-1}
+          PUB_BUILD=${PUB_BUILD:-100}
 
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             TAG_NAME="${GITHUB_REF#refs/tags/}"
             VERSION="${TAG_NAME#v}"
-            TAG_COUNT=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | wc -l | tr -d ' ')
-            BUILD_NUM=$(( PUB_BUILD > TAG_COUNT ? PUB_BUILD : TAG_COUNT + 1 ))
+            APP_VERSION="$VERSION"
+            PRERELEASE="false"
+            if [[ "$TAG_NAME" == *-* ]]; then
+              PRERELEASE="true"
+            fi
+            MAIN_TAG_COUNT=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | wc -l | tr -d ' ')
+            BUILD_NUM=$(( PUB_BUILD + MAIN_TAG_COUNT ))
+          elif [[ "$GITHUB_REF" == "refs/heads/beta" ]]; then
+            LATEST_BETA=$(git tag -l 'beta-v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)
+            if [ -z "$LATEST_BETA" ]; then
+              VERSION="$PUB_VER"
+            else
+              BASE_VER="${LATEST_BETA#beta-v}"
+              MAJOR=$(echo "$BASE_VER" | cut -d'.' -f1)
+              MINOR=$(echo "$BASE_VER" | cut -d'.' -f2)
+              PATCH=$(echo "$BASE_VER" | cut -d'.' -f3)
+              NEXT_PATCH=$(( PATCH + 1 ))
+              while git rev-parse "refs/tags/beta-v${MAJOR}.${MINOR}.${NEXT_PATCH}" >/dev/null 2>&1; do
+                NEXT_PATCH=$(( NEXT_PATCH + 1 ))
+              done
+              VERSION="${MAJOR}.${MINOR}.${NEXT_PATCH}"
+            fi
+            TAG_NAME="beta-v${VERSION}"
+            APP_VERSION="beta-${VERSION}"
+            PRERELEASE="true"
+            TOTAL_TAG_COUNT=$(git tag -l | wc -l | tr -d ' ')
+            BUILD_NUM=$(( PUB_BUILD > TOTAL_TAG_COUNT ? PUB_BUILD + TOTAL_TAG_COUNT : TOTAL_TAG_COUNT + 1 ))
           else
             LATEST_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)
+            MAIN_TAG_COUNT=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | wc -l | tr -d ' ')
             if [ -z "$LATEST_TAG" ]; then
               VERSION="$PUB_VER"
               BUILD_NUM="$PUB_BUILD"
-            elif ! git rev-parse "v${PUB_VER}" >/dev/null 2>&1; then
+            elif ! git rev-parse "refs/tags/v${PUB_VER}" >/dev/null 2>&1; then
               VERSION="$PUB_VER"
-              TAG_COUNT=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | wc -l | tr -d ' ')
-              NEXT_BUILD=$(( TAG_COUNT + 1 ))
-              BUILD_NUM=$(( PUB_BUILD > NEXT_BUILD ? PUB_BUILD : NEXT_BUILD ))
+              BUILD_NUM=$(( PUB_BUILD + MAIN_TAG_COUNT ))
             else
               BASE_VER="${LATEST_TAG#v}"
               MAJOR=$(echo "$BASE_VER" | cut -d'.' -f1)
               MINOR=$(echo "$BASE_VER" | cut -d'.' -f2)
               PATCH=$(echo "$BASE_VER" | cut -d'.' -f3)
               NEXT_PATCH=$(( PATCH + 1 ))
-              while git rev-parse "v${MAJOR}.${MINOR}.${NEXT_PATCH}" >/dev/null 2>&1; do
+              while git rev-parse "refs/tags/v${MAJOR}.${MINOR}.${NEXT_PATCH}" >/dev/null 2>&1; do
                 NEXT_PATCH=$(( NEXT_PATCH + 1 ))
               done
               VERSION="${MAJOR}.${MINOR}.${NEXT_PATCH}"
-              TAG_COUNT=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | wc -l | tr -d ' ')
-              NEXT_BUILD=$(( TAG_COUNT + 1 ))
-              BUILD_NUM=$(( PUB_BUILD >= NEXT_BUILD ? PUB_BUILD + 1 : NEXT_BUILD ))
+              BUILD_NUM=$(( PUB_BUILD + MAIN_TAG_COUNT ))
             fi
             TAG_NAME="v${VERSION}"
+            APP_VERSION="$VERSION"
+            PRERELEASE="false"
           fi
 
-          echo "Resolved version=${VERSION}, build_number=${BUILD_NUM}, tag_name=${TAG_NAME}"
+          echo "Resolved version=${VERSION}, build_number=${BUILD_NUM}, tag_name=${TAG_NAME}, app_version=${APP_VERSION}, prerelease=${PRERELEASE}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "build_number=${BUILD_NUM}" >> "$GITHUB_OUTPUT"
           echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+          echo "app_version=${APP_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${PRERELEASE}" >> "$GITHUB_OUTPUT"
 
   build-android:
     name: Build Android APK
@@ -96,14 +181,14 @@ jobs:
 
       - name: Build universal APK
         run: |
-          flutter build apk --release --build-name="${{ needs.prepare-version.outputs.version }}" --build-number="${{ needs.prepare-version.outputs.build_number }}" --dart-define=APP_VERSION="${{ needs.prepare-version.outputs.version }}"
+          flutter build apk --release --build-name="${{ needs.prepare-version.outputs.version }}" --build-number="${{ needs.prepare-version.outputs.build_number }}" --dart-define=APP_VERSION="${{ needs.prepare-version.outputs.app_version }}"
           mkdir -p dist/android
-          cp build/app/outputs/flutter-apk/app-release.apk "dist/android/CallbookMaker-v${{ needs.prepare-version.outputs.version }}-android-universal.apk"
+          cp build/app/outputs/flutter-apk/app-release.apk "dist/android/CallbookMaker-${{ needs.prepare-version.outputs.tag_name }}-android-universal.apk"
 
       - name: Build arm64-v8a split APK
         run: |
-          flutter build apk --release --split-per-abi --build-name="${{ needs.prepare-version.outputs.version }}" --build-number="${{ needs.prepare-version.outputs.build_number }}" --dart-define=APP_VERSION="${{ needs.prepare-version.outputs.version }}"
-          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk "dist/android/CallbookMaker-v${{ needs.prepare-version.outputs.version }}-android-arm64-v8a.apk"
+          flutter build apk --release --split-per-abi --build-name="${{ needs.prepare-version.outputs.version }}" --build-number="${{ needs.prepare-version.outputs.build_number }}" --dart-define=APP_VERSION="${{ needs.prepare-version.outputs.app_version }}"
+          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk "dist/android/CallbookMaker-${{ needs.prepare-version.outputs.tag_name }}-android-arm64-v8a.apk"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -141,19 +226,20 @@ jobs:
           }
 
       - run: flutter pub get
-      - run: flutter build windows --release --build-name="${{ needs.prepare-version.outputs.version }}" --build-number="${{ needs.prepare-version.outputs.build_number }}" --dart-define=APP_VERSION="${{ needs.prepare-version.outputs.version }}"
+      - run: flutter build windows --release --build-name="${{ needs.prepare-version.outputs.version }}" --build-number="${{ needs.prepare-version.outputs.build_number }}" --dart-define=APP_VERSION="${{ needs.prepare-version.outputs.app_version }}"
 
       - name: Package Portable ZIP and Setup EXE
         shell: pwsh
         run: |
           $ver = "${{ needs.prepare-version.outputs.version }}"
+          $tagName = "${{ needs.prepare-version.outputs.tag_name }}"
           $releaseDir = @('build\windows\x64\runner\Release', 'build\windows\runner\Release') |
             Where-Object { Test-Path $_ } |
             Select-Object -First 1
           if (-not $releaseDir) { throw 'Windows release build output directory not found' }
           $releaseAbs = (Resolve-Path $releaseDir).Path
           New-Item -ItemType Directory -Force -Path 'dist\windows' | Out-Null
-          Compress-Archive -Path "$releaseAbs\*" -DestinationPath "dist\windows\CallbookMaker-v$ver-windows-x64-portable.zip" -Force
+          Compress-Archive -Path "$releaseAbs\*" -DestinationPath "dist\windows\CallbookMaker-$tagName-windows-x64-portable.zip" -Force
 
           $isccCandidates = @(
             "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
@@ -165,7 +251,7 @@ jobs:
             $iscc = $isccCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
           }
           if (-not $iscc) { throw 'Inno Setup ISCC.exe not found' }
-          & $iscc "/DMyAppVersion=$ver" "/DReleaseDir=$releaseAbs" "windows\installer\CallbookMaker.iss"
+          & $iscc "/DMyAppVersion=$ver" "/DMyAppVersionTag=$tagName" "/DReleaseDir=$releaseAbs" "windows\installer\CallbookMaker.iss"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - uses: actions/upload-artifact@v4
@@ -191,5 +277,7 @@ jobs:
           tag_name: ${{ needs.prepare-version.outputs.tag_name }}
           name: ${{ needs.prepare-version.outputs.tag_name }}
           target_commitish: ${{ github.sha }}
+          prerelease: ${{ needs.prepare-version.outputs.prerelease == 'true' }}
+          make_latest: ${{ needs.prepare-version.outputs.prerelease == 'true' && 'false' || 'true' }}
           files: release-assets/*
           generate_release_notes: true

@@ -11,6 +11,8 @@ import 'package:live_call_studio/state/callbook_controller.dart';
 import 'package:live_call_studio/ui/export_view.dart';
 import 'package:live_call_studio/ui/home_shell.dart';
 import 'package:live_call_studio/ui/theme_view.dart';
+import 'package:live_call_studio/ui/widgets/call_badge_pill.dart';
+import 'package:live_call_studio/ui/widgets/callbook_glyphs.dart';
 import 'package:live_call_studio/ui/widgets/timeline_editor_widget.dart';
 import 'package:live_call_studio/utils/color_parser.dart';
 import 'package:live_call_studio/utils/lrc_ruby_parser.dart';
@@ -166,7 +168,7 @@ void main() {
         defaultCallPresets,
       );
       final withTunerEntries = _unzipXmlEntries(withTunerBytes);
-      expect(withTunerEntries['xl/sharedStrings.xml'], contains('调校：'));
+      expect(withTunerEntries['xl/sharedStrings.xml'], contains('调教：'));
       expect(withTunerEntries['xl/worksheets/sheet1.xml'], contains('<mergeCell ref="A3:B8"/>'));
     });
 
@@ -510,6 +512,152 @@ void main() {
         expect(find.text('HCT 色彩调色盘'), findsOneWidget);
         expect(find.text('应援色预设'), findsOneWidget);
         expect(find.text('Callbook Maker'), findsWidgets);
+      } finally {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pump();
+      }
+    });
+  });
+
+  group('Hotfixes: Windows startup white screen & workbench shortcut visibility', () {
+    test('Windows startup avoids SetWindowCompositionAttribute backgroundColor and uses WS_CLIPCHILDREN + surface nudge', () {
+      final mainDart = File('lib/main.dart').readAsStringSync();
+      final win32Cpp = File('windows/runner/win32_window.cpp').readAsStringSync();
+      final flutterWinCpp =
+          File('windows/runner/flutter_window.cpp').readAsStringSync();
+
+      expect(mainDart, isNot(contains('backgroundColor:')));
+      expect(mainDart, contains('addPostFrameCallback'));
+      expect(win32Cpp, contains('window_class.hbrBackground = 0;'));
+      expect(win32Cpp, contains('WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN'));
+      expect(flutterWinCpp, isNot(contains('this->Show()')));
+      expect(flutterWinCpp, contains('WM_SHOWWINDOW'));
+      expect(flutterWinCpp, contains('kInitialSurfaceNudgeTimerId'));
+    });
+
+    testWidgets('CallBadgePill keeps shortcut digit visible when selected and showShortcut is true, but hides it by default', (tester) async {
+      final preset = defaultCallPresets.firstWhere((p) => p.shortcut == '3');
+      final controller = CallbookController();
+
+      try {
+        await tester.pumpWidget(
+          prism.PrismApp(
+            theme: controller.buildPrismTheme(Brightness.light),
+            home: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CallBadgePill(
+                  key: const ValueKey('selected-with-shortcut'),
+                  preset: preset,
+                  selected: true,
+                  showShortcut: true,
+                ),
+                CallBadgePill(
+                  key: const ValueKey('selected-default'),
+                  preset: preset,
+                  selected: true,
+                ),
+              ],
+            ),
+          ),
+        );
+        await tester.pump();
+
+        expect(
+          find.descendant(
+            of: find.byKey(const ValueKey('selected-with-shortcut')),
+            matching: find.text('3'),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: find.byKey(const ValueKey('selected-default')),
+            matching: find.text('3'),
+          ),
+          findsNothing,
+        );
+      } finally {
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pump();
+        controller.dispose();
+      }
+    });
+
+    testWidgets('Workbench preset pill retains its shortcut digit after tapping to select', (tester) async {
+      final controller = await createTestCallbookController(
+        enableAudioOutput: false,
+      );
+      tester.view.physicalSize = const Size(1280, 820);
+      tester.view.devicePixelRatio = 1.0;
+
+      try {
+        await tester.pumpWidget(LiveCallStudioApp(controller: controller));
+        await tester.pump();
+
+        final workbenchPillFinder = find.byWidgetPredicate(
+          (w) =>
+              w is CallBadgePill &&
+              w.preset.shortcut == '3' &&
+              w.showShortcut,
+        );
+        expect(workbenchPillFinder, findsOneWidget);
+        expect(
+          find.descendant(of: workbenchPillFinder, matching: find.text('3')),
+          findsOneWidget,
+        );
+
+        await tester.tap(workbenchPillFinder);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 200));
+
+        final selectedWorkbenchPillFinder = find.byWidgetPredicate(
+          (w) =>
+              w is CallBadgePill &&
+              w.preset.shortcut == '3' &&
+              w.showShortcut &&
+              w.selected,
+        );
+        expect(selectedWorkbenchPillFinder, findsOneWidget);
+        expect(
+          find.descendant(
+            of: selectedWorkbenchPillFinder,
+            matching: find.text('3'),
+          ),
+          findsOneWidget,
+        );
+      } finally {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pump();
+      }
+    });
+
+    testWidgets('Sidebar theme toggle shows Material 3 moon in light mode and sun in dark mode', (tester) async {
+      final controller = await createTestCallbookController(
+        enableAudioOutput: false,
+      );
+      controller.setThemeMode(prism.ThemeMode.light);
+      tester.view.physicalSize = const Size(1280, 820);
+      tester.view.devicePixelRatio = 1.0;
+
+      try {
+        await tester.pumpWidget(LiveCallStudioApp(controller: controller));
+        await tester.pump();
+
+        expect(find.byIcon(CallbookGlyphs.darkModeOutlined), findsOneWidget);
+        expect(find.byIcon(CallbookGlyphs.lightModeOutlined), findsNothing);
+
+        await tester.tap(find.byIcon(CallbookGlyphs.darkModeOutlined));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+
+        expect(controller.themeMode, prism.ThemeMode.dark);
+        expect(find.byIcon(CallbookGlyphs.lightModeOutlined), findsOneWidget);
+        expect(find.byIcon(CallbookGlyphs.darkModeOutlined), findsNothing);
       } finally {
         tester.view.resetPhysicalSize();
         tester.view.resetDevicePixelRatio();

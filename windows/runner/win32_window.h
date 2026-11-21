@@ -28,6 +28,7 @@ class Win32Window {
   bool Show();
   void Destroy();
   void SetChildContent(HWND content);
+  HWND GetChildContent() const;
   HWND GetHandle();
   void SetQuitOnClose(bool quit_on_close);
   RECT GetClientArea();

@@ -461,9 +461,11 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
                         excludeSemantics: true,
                         child: IconButton(
                           tooltip: _themeModeCycleLabel(c.themeMode),
-                          icon: GlyphIcon(
-                            CallbookGlyphs.theme,
-                            size: 16,
+                          icon: Icon(
+                            scheme.brightness == Brightness.dark
+                                ? CallbookGlyphs.lightModeOutlined
+                                : CallbookGlyphs.darkModeOutlined,
+                            size: 17,
                             color: scheme.onSurface,
                           ),
                           style: ButtonStyle(
@@ -1187,7 +1189,13 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
             button: true,
             child: _SidebarCompactIconBtn(
               tooltip: isDark ? '切换到浅色模式' : '切换到深色模式',
-              glyph: CallbookGlyphs.theme,
+              customIcon: Icon(
+                isDark
+                    ? CallbookGlyphs.lightModeOutlined
+                    : CallbookGlyphs.darkModeOutlined,
+                size: 18,
+                color: scheme.onSurface,
+              ),
               fill: scheme.surfaceContainerHigh,
               iconColor: scheme.onSurface,
               onTap: () => c.setThemeMode(
@@ -1269,9 +1277,11 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
               button: true,
               child: IconButton(
                 tooltip: isDark ? '切换浅色主题' : '切换深色主题',
-                icon: GlyphIcon(
-                  CallbookGlyphs.theme,
-                  size: 15,
+                icon: Icon(
+                  isDark
+                      ? CallbookGlyphs.lightModeOutlined
+                      : CallbookGlyphs.darkModeOutlined,
+                  size: 17,
                   color: scheme.onSurface,
                 ),
                 style: ButtonStyle(
@@ -1532,14 +1542,16 @@ class _SidebarFooterAction extends StatelessWidget {
 class _SidebarCompactIconBtn extends StatelessWidget {
   const _SidebarCompactIconBtn({
     required this.tooltip,
-    required this.glyph,
+    this.glyph,
+    this.customIcon,
     required this.fill,
     required this.iconColor,
     required this.onTap,
-  });
+  }) : assert(glyph != null || customIcon != null);
 
   final String tooltip;
-  final Glyph glyph;
+  final Glyph? glyph;
+  final Widget? customIcon;
   final Color fill;
   final Color iconColor;
   final VoidCallback onTap;
@@ -1551,7 +1563,7 @@ class _SidebarCompactIconBtn extends StatelessWidget {
       label: tooltip,
       child: IconButton(
         tooltip: tooltip,
-        icon: GlyphIcon(glyph, size: 16, color: iconColor),
+        icon: customIcon ?? GlyphIcon(glyph!, size: 16, color: iconColor),
         style: ButtonStyle(
           backgroundColor: WidgetStatePropertyAll(fill),
           shape: AppShape.all(10),

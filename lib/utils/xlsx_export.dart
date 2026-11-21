@@ -145,7 +145,7 @@ Uint8List buildCallBookXlsxBytes(
     ('作词：', lyricistDisplay),
     ('编曲：', arrangerDisplay),
     ('混音：', mixerDisplay),
-    if (hasTuner) ('调校：', tunerDisplay),
+    if (hasTuner) ('调教：', tunerDisplay),
     ('演唱：', vocalistDisplay),
     ('应援色：', supportColorDisplay),
   ];

@@ -27,17 +27,6 @@ Future<void> main() async {
 
   if (AppPlatform.isWindows) {
     await windowManager.ensureInitialized();
-    const windowOptions = WindowOptions(
-      size: Size(1280, 820),
-      minimumSize: Size(420, 620),
-      center: true,
-      title: 'CallbookMaker',
-      backgroundColor: Color(0xFFF3F4F6),
-    );
-    await windowManager.waitUntilReadyToShow(windowOptions, () async {
-      await windowManager.show();
-      await windowManager.focus();
-    });
   }
 
   runApp(
@@ -46,6 +35,24 @@ Future<void> main() async {
       showStartupSplash: true,
     ),
   );
+
+  if (AppPlatform.isWindows) {
+    const windowOptions = WindowOptions(
+      size: Size(1280, 820),
+      minimumSize: Size(420, 620),
+      center: true,
+      title: 'CallbookMaker',
+    );
+    unawaited(
+      windowManager.waitUntilReadyToShow(windowOptions, () {
+        WidgetsBinding.instance.addPostFrameCallback((_) async {
+          await windowManager.show();
+          await windowManager.focus();
+        });
+        WidgetsBinding.instance.scheduleFrame();
+      }),
+    );
+  }
 }
 
 class LiveCallStudioApp extends StatefulWidget {

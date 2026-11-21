@@ -1,7 +1,19 @@
+import 'package:flutter/widgets.dart' show IconData;
 import 'package:prism_ui/icons/icons.dart' as prism;
 
 /// FlClash / Prism UI geometric vector glyphs (24x24 grid) for Live Call Studio.
 abstract final class CallbookGlyphs {
+  /// Material 3 `dark_mode_outlined` (moon) icon for light mode toggle.
+  static const IconData darkModeOutlined = IconData(
+    0xef9f,
+    fontFamily: 'MaterialIcons',
+  );
+
+  /// Material 3 `light_mode_outlined` (sun) icon for dark mode toggle.
+  static const IconData lightModeOutlined = IconData(
+    0xf162,
+    fontFamily: 'MaterialIcons',
+  );
   static const dashboard = prism.Glyph([
     prism.GlyphBox(3.5, 3.5, 10.5, 11.5, 2),
     prism.GlyphBox(13.5, 3.5, 20.5, 9.5, 2),

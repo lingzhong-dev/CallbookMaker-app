@@ -13,7 +13,7 @@ class CallBadgePill extends StatelessWidget {
     this.onContextAction,
     this.menuItems,
     this.compact = false,
-    this.showShortcut = true,
+    this.showShortcut = false,
     this.enableSparkle = false,
   });
 
@@ -98,7 +98,7 @@ class CallBadgePill extends StatelessWidget {
               ),
             ),
           ),
-        ] else if (!selected && showShortcut && preset.shortcut.isNotEmpty) ...[
+        ] else if (showShortcut && preset.shortcut.isNotEmpty) ...[
           const SizedBox(width: 5),
           Text(
             preset.shortcut,
@@ -108,7 +108,9 @@ class CallBadgePill extends StatelessWidget {
             style: AppTextStyle.caption2.of(context).copyWith(
               fontFamily: 'GoogleSans',
               fontFeatures: const [FontFeature.tabularFigures()],
-              color: scheme.onSurfaceVariant,
+              color: selected
+                  ? fg.withValues(alpha: 0.85)
+                  : scheme.onSurfaceVariant,
             ),
           ),
         ],
