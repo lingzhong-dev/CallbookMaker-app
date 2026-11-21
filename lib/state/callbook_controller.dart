@@ -59,55 +59,35 @@ class CuratedThemePreset {
 
 const List<CuratedThemePreset> curatedThemePresets = [
   CuratedThemePreset(
-    id: 'flclash-azure',
-    name: '蔚蓝仪表',
-    description: 'Classic #0068FF Vivid',
-    seedColor: Color(0xFF0068FF),
-    mode: prism.ThemeMode.light,
+    id: 'tiyi-blue',
+    name: '天依蓝',
+    description: '#66CCFF · 洛天依经典应援色',
+    seedColor: Color(0xFF66CCFF),
+    mode: prism.ThemeMode.system,
     style: prism.ColorStyle.vivid,
   ),
   CuratedThemePreset(
-    id: 'amber-dark',
-    name: '琥珀暗黑',
-    description: 'OLED 暗夜打 Call Stage Amber',
-    seedColor: Color(0xFFFF9800),
-    mode: prism.ThemeMode.dark,
+    id: 'miku-green',
+    name: '初音绿',
+    description: '#39C5BB · 初音未来苍绿应援色',
+    seedColor: Color(0xFF39C5BB),
+    mode: prism.ThemeMode.system,
     style: prism.ColorStyle.vivid,
   ),
   CuratedThemePreset(
-    id: 'prism-violet',
-    name: 'Prism 紫域',
-    description: 'M3 Expressive Violet Tinted',
-    seedColor: Color(0xFF8B5CF6),
-    mode: prism.ThemeMode.light,
-    style: prism.ColorStyle.tinted,
-  ),
-  CuratedThemePreset(
-    id: 'emerald-call',
-    name: '翡翠应援',
-    description: 'Emerald Live Stage',
-    seedColor: Color(0xFF009B72),
-    mode: prism.ThemeMode.light,
+    id: 'kasumi-red',
+    name: '香澄红',
+    description: '#FF5522 · BanG Dream! Poppin\'Party',
+    seedColor: Color(0xFFFF5522),
+    mode: prism.ThemeMode.system,
     style: prism.ColorStyle.vivid,
-  ),
-  CuratedThemePreset(
-    id: 'sakura-live',
-    name: '樱粉舞台',
-    description: 'Sakura Concert Glow',
-    seedColor: Color(0xFFEC4899),
-    mode: prism.ThemeMode.dark,
-    style: prism.ColorStyle.tinted,
-    pureBlack: true,
   ),
 ];
 
 const List<Color> savedSwatchSeeds = [
-  Color(0xFF0068FF),
-  Color(0xFFFF9800),
-  Color(0xFF8B5CF6),
-  Color(0xFF009B72),
-  Color(0xFFEC4899),
-  Color(0xFF06B6D4),
+  Color(0xFF66CCFF),
+  Color(0xFF39C5BB),
+  Color(0xFFFF5522),
 ];
 
 sealed class TimelineItem {
@@ -244,7 +224,7 @@ class CallbookController extends ChangeNotifier {
 
   // Theme State (`FlClashThemeManager` equivalent)
   prism.ThemeMode _themeMode = prism.ThemeMode.system;
-  Color _seedColor = const Color(0xFF0068FF);
+  Color _seedColor = const Color(0xFF66CCFF);
   prism.ColorStyle _colorStyle = prism.ColorStyle.vivid;
   bool _pureBlack = false;
   bool _liquidGlass = true;
@@ -1236,9 +1216,6 @@ class CallbookController extends ChangeNotifier {
 
   void applyThemePreset(CuratedThemePreset preset) {
     _seedColor = preset.seedColor;
-    _themeMode = preset.mode;
-    _colorStyle = preset.style;
-    _pureBlack = preset.pureBlack;
     _saveThemePrefs();
     _notifyThemeChanged();
   }

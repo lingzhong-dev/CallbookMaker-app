@@ -491,13 +491,10 @@ class _DashboardViewState extends State<DashboardView> {
                       onSubmitted: (_) => _commitTitle(),
                     ),
                     const SizedBox(height: 6),
-                    Wrap(
-                      spacing: 6,
-                      runSpacing: 6,
-                      crossAxisAlignment: WrapCrossAlignment.center,
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
-                        ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 160),
+                        Expanded(
                           child: TextField(
                             controller: _artistCtrl,
                             focusNode: _artistFocus,
@@ -510,6 +507,7 @@ class _DashboardViewState extends State<DashboardView> {
                             onSubmitted: (_) => _commitArtist(),
                           ),
                         ),
+                        const SizedBox(width: 6),
                         TonalChip(
                           label: '切换曲库 / 导入',
                           color: scheme.surfaceContainerHigh,
@@ -715,7 +713,7 @@ class _DashboardViewState extends State<DashboardView> {
           focusNode: focusNode,
           maxLines: maxLines,
           minLines: maxLines,
-          decoration: InputDecoration(hintText: hint),
+          decoration: InputDecoration(hintText: hint, isDense: true),
           onSubmitted: (_) => onSubmitted(),
         ),
       ],
@@ -734,7 +732,7 @@ class _DashboardViewState extends State<DashboardView> {
       padding: const EdgeInsets.all(14),
       child: FilledInputTheme(
         borderRadius: AppRadius.md,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
         fillColor: scheme.surfaceContainerHigh,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1309,7 +1307,6 @@ class _DisplayFilterChip extends StatelessWidget {
         foreground: fg,
         inkColor: fg,
         selected: selected,
-        tapTarget: AppTokens.minTapTargetSize,
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
         onPressed: onPressed,
         child: Row(

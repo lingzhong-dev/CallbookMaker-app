@@ -523,7 +523,7 @@ void main() {
           expect(controller.useGoogleSans, isFalse);
 
           await _scrollToAndTap(tester, find.text('恢复默认'));
-          expect(controller.themeMode, prism.ThemeMode.light);
+          expect(controller.themeMode, prism.ThemeMode.system);
           expect(controller.colorStyle, prism.ColorStyle.vivid);
           expect(controller.pureBlack, isFalse);
           expect(controller.liquidGlass, isTrue);

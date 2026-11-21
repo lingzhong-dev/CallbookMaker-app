@@ -624,6 +624,7 @@ class TimelineEditorWidgetState extends State<TimelineEditorWidget>
               Wrap(
                 spacing: 6,
                 runSpacing: 6,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   for (final preset in c.allPresets)
                     CallBadgePill(
@@ -1063,19 +1064,24 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard>
                   onPressed: widget.onEditLine,
                 ),
                 Semantics(
+                  container: true,
+                  excludeSemantics: true,
                   button: true,
                   label: '删除歌词行',
-                  child: IconButton(
-                    tooltip: '删除此行',
-                    icon: GlyphIcon(
-                      CallbookGlyphs.trash,
-                      size: 17,
-                      color: scheme.error,
+                  child: Tooltip(
+                    message: '删除此行',
+                    child: PressSurface(
+                      fill: const Color(0x00000000),
+                      shape: AppShape.full,
+                      inkColor: scheme.error,
+                      padding: const EdgeInsets.all(4),
+                      onPressed: () => c.deleteLine(line.id),
+                      child: GlyphIcon(
+                        CallbookGlyphs.trash,
+                        size: 16,
+                        color: scheme.error,
+                      ),
                     ),
-                    style: const ButtonStyle(
-                      minimumSize: AppTokens.minTapTargetSize,
-                    ),
-                    onPressed: () => c.deleteLine(line.id),
                   ),
                 ),
               ],
@@ -1093,9 +1099,19 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard>
             return Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(child: metaChips),
-                const SizedBox(width: 6),
-                Flexible(child: actionChips),
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: headerConstraints.maxWidth * 0.42,
+                  ),
+                  child: metaChips,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.topRight,
+                    child: actionChips,
+                  ),
+                ),
               ],
             );
           },
@@ -1109,7 +1125,7 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard>
             children: [
               for (final tag in _displayedTags)
                 if (presetMap[tag.presetId] case final preset?)
-                  EntryTransition(
+                  _InlineTagEntryTransition(
                     key: ValueKey<String>('tag-entry-${tag.presetId}'),
                     animation: _tagTransitions.animationOf(tag.presetId),
                     leaving: _tagTransitions.isLeaving(tag.presetId),
@@ -1905,10 +1921,9 @@ class _TailUpdraftToggleChip extends StatelessWidget {
           ),
           foreground: fg,
           inkColor: fg,
-          tapTarget: AppTokens.minTapTargetSize,
           padding: EdgeInsets.symmetric(
             horizontal: compact ? 9 : 11,
-            vertical: compact ? 5 : 7,
+            vertical: compact ? 4 : 6,
           ),
           onPressed: onTap,
           child: Text(
@@ -3386,6 +3401,55 @@ class _EditSuffixDialogState extends State<_EditSuffixDialog> {
             ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+class _InlineTagEntryTransition extends StatelessWidget {
+  const _InlineTagEntryTransition({
+    super.key,
+    required this.animation,
+    required this.leaving,
+    required this.child,
+  });
+
+  final Animation<double>? animation;
+  final bool leaving;
+  final Widget child;
+
+  static final Animatable<double> _size = CurveTween(
+    curve: AppMotion.curveEffects,
+  );
+  static final Animatable<double> _fade = CurveTween(
+    curve: const Interval(0.0, 0.7, curve: Curves.easeOut),
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final anim = animation;
+    if (anim == null) {
+      return IgnorePointer(ignoring: leaving, child: child);
+    }
+    return IgnorePointer(
+      ignoring: leaving,
+      child: AnimatedBuilder(
+        animation: anim,
+        builder: (context, inner) {
+          final widthFactor = _size.evaluate(anim).clamp(0.0, 1.0);
+          return ClipRect(
+            child: Align(
+              alignment: AlignmentDirectional.centerStart,
+              widthFactor: widthFactor,
+              heightFactor: 1.0,
+              child: inner,
+            ),
+          );
+        },
+        child: FadeTransition(
+          opacity: anim.drive(_fade),
+          child: child,
+        ),
       ),
     );
   }

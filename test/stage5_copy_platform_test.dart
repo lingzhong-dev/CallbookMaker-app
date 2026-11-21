@@ -2,11 +2,14 @@ import 'dart:io';
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:live_call_studio/data/default_songs.dart';
 import 'package:live_call_studio/main.dart';
 import 'package:live_call_studio/state/callbook_controller.dart';
 import 'package:live_call_studio/ui/archive_view.dart';
 import 'package:live_call_studio/ui/dashboard_view.dart';
 import 'package:live_call_studio/ui/theme_view.dart';
+import 'package:live_call_studio/ui/widgets/call_badge_pill.dart';
+import 'package:live_call_studio/ui/widgets/timeline_editor_widget.dart';
 import 'package:prism_ui/prism_ui.dart' as prism;
 
 import 'support/mock_audioplayers_harness.dart';
@@ -233,6 +236,111 @@ void main() {
         await checkViewport(const Size(1280, 820), expectTwoCols: true);
         await checkViewport(const Size(900, 800), expectTwoCols: false);
         await checkViewport(const Size(420, 800), expectTwoCols: false);
+
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pump();
+      },
+    );
+
+    test(
+      'Curated theme presets and swatches match the 3 onboarding colors and preserve ThemeMode',
+      () async {
+        expect(curatedThemePresets.length, 3);
+        expect(savedSwatchSeeds.length, 3);
+        for (var i = 0; i < 3; i++) {
+          expect(
+            curatedThemePresets[i].name,
+            defaultOnboardingThemeColors[i].name,
+          );
+          expect(
+            curatedThemePresets[i].seedColor,
+            defaultOnboardingThemeColors[i].color,
+          );
+          expect(savedSwatchSeeds[i], defaultOnboardingThemeColors[i].color);
+        }
+
+        final controller = await createTestCallbookController(
+          enableAudioOutput: false,
+        );
+        try {
+          controller.setThemeMode(prism.ThemeMode.dark);
+          controller.setPureBlack(true);
+          controller.applyThemePreset(curatedThemePresets[1]);
+          expect(controller.seedColor, const Color(0xFF39C5BB));
+          expect(controller.themeMode, prism.ThemeMode.dark);
+          expect(controller.pureBlack, isTrue);
+
+          controller.resetTheme();
+          expect(controller.seedColor, const Color(0xFF66CCFF));
+          expect(controller.themeMode, prism.ThemeMode.system);
+          expect(controller.pureBlack, isFalse);
+        } finally {
+          controller.dispose();
+        }
+      },
+    );
+
+    testWidgets(
+      'Timeline tag transition stays left-aligned and compact pills keep compact height',
+      timeout: const Timeout(Duration(seconds: 25)),
+      (tester) async {
+        tester.view.physicalSize = const Size(1280, 820);
+        tester.view.devicePixelRatio = 1.0;
+
+        final controller = await createTestCallbookController(
+          enableAudioOutput: false,
+        );
+        final firstLine = controller.sortedLines.first;
+        controller.selectLine(firstLine.id);
+        if (!firstLine.calls.any((t) => t.presetId == 'front-wave')) {
+          controller.toggleLineCall(firstLine.id, 'front-wave');
+        }
+
+        await tester.pumpWidget(LiveCallStudioApp(controller: controller));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 260));
+
+        expect(tester.takeException(), isNull);
+
+        // Compact CallBadgePill and compact delete icon button should not expand to 48px box height.
+        final pills = find.descendant(
+          of: find.byType(TimelineEditorWidget),
+          matching: find.byType(CallBadgePill),
+        );
+        expect(pills, findsWidgets);
+        for (final element in pills.evaluate()) {
+          final size = element.size!;
+          expect(size.height, lessThan(40.0));
+          expect(size.width, lessThan(260.0));
+        }
+
+        final deleteButtons = find.descendant(
+          of: find.byType(TimelineEditorWidget),
+          matching: find.bySemanticsLabel('删除歌词行'),
+        );
+        expect(deleteButtons, findsWidgets);
+        expect(tester.getSize(deleteButtons.first).height, lessThan(36.0));
+
+        // The inline tag inside the first line card stays left-aligned rather than centered across the card.
+        final timelineBox = tester.renderObject<RenderBox>(
+          find.byType(TimelineEditorWidget),
+        );
+        final timelineLeft = timelineBox.localToGlobal(Offset.zero).dx;
+        final allFrontWaves = find
+            .descendant(
+              of: find.byType(TimelineEditorWidget),
+              matching: find.byWidgetPredicate(
+                (w) => w is CallBadgePill && w.preset.id == 'front-wave',
+              ),
+            )
+            .evaluate()
+            .toList();
+        expect(allFrontWaves.length, greaterThanOrEqualTo(2));
+        final cardTagBox = allFrontWaves[1].renderObject! as RenderBox;
+        final cardTagLeft = cardTagBox.localToGlobal(Offset.zero).dx;
+        expect(cardTagLeft - timelineLeft, lessThan(60.0));
 
         tester.view.resetPhysicalSize();
         tester.view.resetDevicePixelRatio();

@@ -2,7 +2,6 @@ import 'package:flutter/widgets.dart';
 import 'package:prism_ui/prism_ui.dart';
 
 import '../../models/callbook_models.dart';
-import '../theme/app_tokens.dart';
 
 class CallBadgePill extends StatelessWidget {
   const CallBadgePill({
@@ -153,7 +152,6 @@ class CallBadgePill extends StatelessWidget {
       foreground: fg,
       inkColor: fg,
       padding: padding,
-      tapTarget: AppTokens.minTapTargetSize,
       selected: selected,
       onPressed: onTap,
       inert: onTap == null,
