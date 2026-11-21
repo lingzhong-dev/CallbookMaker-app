@@ -30,8 +30,17 @@ class DashboardView extends StatefulWidget {
 
 class _DashboardViewState extends State<DashboardView> {
   final ScrollController _scrollController = ScrollController();
-  final GlobalKey<TimelineEditorWidgetState> _timelineKey =
+  final ScrollController _leftScrollController = ScrollController();
+  final ScrollController _timelineScrollController = ScrollController();
+  final ValueNotifier<bool> _compactStickyVisible = ValueNotifier<bool>(false);
+  final GlobalKey<TimelineEditorWidgetState> _desktopTimelineKey =
       GlobalKey<TimelineEditorWidgetState>();
+  final GlobalKey<TimelineEditorWidgetState> _compactTimelineKey =
+      GlobalKey<TimelineEditorWidgetState>();
+  bool _isTwoColumnLayout = false;
+
+  GlobalKey<TimelineEditorWidgetState> get _activeTimelineKey =>
+      _isTwoColumnLayout ? _desktopTimelineKey : _compactTimelineKey;
 
   late final TextEditingController _titleCtrl;
   late final TextEditingController _artistCtrl;
@@ -77,8 +86,34 @@ class _DashboardViewState extends State<DashboardView> {
     _tunerFocus.addListener(_onTunerFocusChanged);
     _editorNameFocus.addListener(_onEditorNameFocusChanged);
     _editorNoteFocus.addListener(_onEditorNoteFocusChanged);
+    _scrollController.addListener(_onCompactScrollChanged);
     widget.controller.projectListenable.addListener(_syncMetaControllers);
     widget.controller.scrollToTopSignal.addListener(_handleScrollToTopSignal);
+  }
+
+  void _onCompactScrollChanged() {
+    if (!mounted || _isTwoColumnLayout || !_scrollController.hasClients) {
+      if (_compactStickyVisible.value) {
+        _compactStickyVisible.value = false;
+      }
+      return;
+    }
+    final offset = _scrollController.offset;
+    var changed = false;
+    if (!_compactStickyVisible.value && offset > 280) {
+      _compactStickyVisible.value = true;
+      changed = true;
+    } else if (_compactStickyVisible.value && offset < 220) {
+      _compactStickyVisible.value = false;
+      changed = true;
+    }
+    if (changed) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && !_isTwoColumnLayout) {
+          _compactTimelineKey.currentState?.recenterFollowTargetIfActive();
+        }
+      });
+    }
   }
 
   void _commitTitle() {
@@ -193,10 +228,13 @@ class _DashboardViewState extends State<DashboardView> {
     if (!mounted) return;
     final c = widget.controller;
     if (c.isPracticeMode || c.route != StudioRoute.dashboard) return;
+    final activeController = _isTwoColumnLayout
+        ? _timelineScrollController
+        : _scrollController;
     unawaited(
       ScrollToTopButton.scrollToTop(
         context,
-        _scrollController,
+        activeController,
         controller: c,
       ),
     );
@@ -232,7 +270,11 @@ class _DashboardViewState extends State<DashboardView> {
     widget.controller.scrollToTopSignal.removeListener(
       _handleScrollToTopSignal,
     );
+    _scrollController.removeListener(_onCompactScrollChanged);
     _scrollController.dispose();
+    _leftScrollController.dispose();
+    _timelineScrollController.dispose();
+    _compactStickyVisible.dispose();
     _titleFocus.removeListener(_onTitleFocusChanged);
     _artistFocus.removeListener(_onArtistFocusChanged);
     _bpmFocus.removeListener(_onBpmFocusChanged);
@@ -264,7 +306,11 @@ class _DashboardViewState extends State<DashboardView> {
   }
 
   void _scrollToTimeline() {
-    final ctx = _timelineKey.currentContext;
+    if (_isTwoColumnLayout) {
+      _activeTimelineKey.currentState?.jumpToFollowTargetOrTop();
+      return;
+    }
+    final ctx = _compactTimelineKey.currentContext;
     if (ctx == null || !_scrollController.hasClients) return;
     final target = ContinuousAutoScroller.computeTargetOffset(
       scrollController: _scrollController,
@@ -301,54 +347,242 @@ class _DashboardViewState extends State<DashboardView> {
     final c = widget.controller;
     final scheme = context.colorScheme;
     final bottomInset = BottomInsetScope.of(context);
-    return Stack(
-      children: [
-        NotificationListener<ScrollNotification>(
-          onNotification: (notification) {
-            _timelineKey.currentState?.handleOuterScrollNotification(
-              notification,
-            );
-            return false;
-          },
-          child: SingleChildScrollView(
-            controller: _scrollController,
-            padding: EdgeInsets.fromLTRB(16, 4, 16, 20 + bottomInset),
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final twoCols = constraints.maxWidth >= 960;
-                final leftColumn = _buildLeftControlColumn(context, c, scheme);
-                final timeline = TimelineEditorWidget(
-                  key: _timelineKey,
-                  controller: c,
-                  compact: true,
-                  externalScrollController: _scrollController,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final twoCols = constraints.maxWidth >= 960;
+        _isTwoColumnLayout = twoCols;
+        if (twoCols && _compactStickyVisible.value) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && _isTwoColumnLayout && _compactStickyVisible.value) {
+              _compactStickyVisible.value = false;
+            }
+          });
+        }
+        final activeTimelineController = twoCols
+            ? _timelineScrollController
+            : _scrollController;
+
+        final Widget body;
+        if (twoCols) {
+          final pinHero = constraints.maxHeight >= 680;
+          final leftPane = pinHero
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _buildHeroCard(context, c, scheme),
+                    const SizedBox(height: 12),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        controller: _leftScrollController,
+                        padding: EdgeInsets.only(bottom: 20 + bottomInset),
+                        child: _buildLeftSecondaryColumn(context, c, scheme),
+                      ),
+                    ),
+                  ],
+                )
+              : SingleChildScrollView(
+                  controller: _leftScrollController,
+                  padding: EdgeInsets.only(bottom: 20 + bottomInset),
+                  child: _buildLeftControlColumn(context, c, scheme),
                 );
-                if (twoCols) {
-                  return Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+          final timeline = TimelineEditorWidget(
+            key: _desktopTimelineKey,
+            controller: c,
+            compact: false,
+            externalScrollController: _timelineScrollController,
+          );
+          body = Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(flex: 4, child: leftPane),
+                const SizedBox(width: 16),
+                Expanded(flex: 8, child: timeline),
+              ],
+            ),
+          );
+        } else {
+          final leftColumn = _buildLeftControlColumn(context, c, scheme);
+          final timeline = TimelineEditorWidget(
+            key: _compactTimelineKey,
+            controller: c,
+            compact: true,
+            externalScrollController: _scrollController,
+          );
+          body = Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              ValueListenableBuilder<bool>(
+                valueListenable: _compactStickyVisible,
+                builder: (context, visible, _) {
+                  if (!visible) return const SizedBox.shrink();
+                  return _buildCompactStickyTransportBar(context, c, scheme);
+                },
+              ),
+              Expanded(
+                child: NotificationListener<ScrollNotification>(
+                  onNotification: (notification) {
+                    _compactTimelineKey.currentState
+                        ?.handleOuterScrollNotification(notification);
+                    return false;
+                  },
+                  child: SingleChildScrollView(
+                    controller: _scrollController,
+                    padding: EdgeInsets.fromLTRB(16, 4, 16, 20 + bottomInset),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        leftColumn,
+                        const SizedBox(height: 12),
+                        timeline,
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          );
+        }
+
+        return Stack(
+          children: [
+            body,
+            ScrollToTopButton(
+              scrollController: activeTimelineController,
+              controller: c,
+              isCurrentLineVisible: () =>
+                  _activeTimelineKey.currentState?.isFollowTargetVisible() ??
+                  false,
+              bottomOffset: bottomInset + AppTokens.s16,
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildCompactStickyTransportBar(
+    BuildContext context,
+    CallbookController c,
+    ColorScheme scheme,
+  ) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 2, 16, 6),
+      child: Card(
+        inert: true,
+        radius: AppTokens.radiusCard,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: ListenableBuilder(
+          listenable: Listenable.merge([c.playbackListenable, c.projectListenable]),
+          builder: (context, _) {
+            final safeDuration = math.max(1000, c.durationMs).toDouble();
+            final clampedPos = c.currentTimeMs.toDouble().clamp(
+              0.0,
+              safeDuration,
+            );
+            final playButton = Semantics(
+              button: true,
+              label: c.isPlaying ? '暂停' : '播放',
+              child: IconButton.filled(
+                tooltip: c.isPlaying ? '暂停（Space）' : '播放（Space）',
+                icon: GlyphIcon(
+                  c.isPlaying ? CallbookGlyphs.stop : CallbookGlyphs.play,
+                  size: 14,
+                  color: scheme.onPrimary,
+                  fill: 1,
+                ),
+                style: ButtonStyle(
+                  backgroundColor: WidgetStatePropertyAll(scheme.primary),
+                  shape: AppShape.circle,
+                  minimumSize: const Size(32, 32),
+                  fixedSize: const Size(32, 32),
+                  tapTargetSize: TapTargetSize.padded,
+                ),
+                onPressed: c.togglePlay,
+              ),
+            );
+            final slider = Slider(
+              value: clampedPos,
+              min: 0,
+              max: safeDuration,
+              onChanged: (v) => c.seek(v.round()),
+            );
+            final clockText = Text(
+              formatMsToClock(c.currentTimeMs),
+              style: AppTextStyle.caption2.of(context).copyWith(
+                fontFamily: 'GoogleSans',
+                fontFeatures: const [FontFeature.tabularFigures()],
+                color: scheme.onSurfaceVariant,
+              ),
+            );
+            final locateChip = TonalChip(
+              label: '定位',
+              color: scheme.surfaceContainerHigh,
+              foregroundColor: scheme.onSurface,
+              onPressed: () =>
+                  _compactTimelineKey.currentState?.jumpToFollowTargetOrTop(),
+            );
+            final followLabel = Text(
+              '跟随',
+              style: AppTextStyle.caption2.of(context).copyWith(
+                color: scheme.onSurfaceVariant,
+              ),
+            );
+            final followSwitch = Switch(
+              value: c.followPlayback,
+              onChanged: c.setFollowPlayback,
+              semanticLabel: '悬浮条跟随播放滚动',
+            );
+
+            return LayoutBuilder(
+              builder: (context, barConstraints) {
+                if (barConstraints.maxWidth < 440) {
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Expanded(flex: 4, child: leftColumn),
-                      const SizedBox(width: 16),
-                      Expanded(flex: 8, child: timeline),
+                      Row(
+                        children: [
+                          playButton,
+                          const SizedBox(width: 8),
+                          Expanded(child: slider),
+                          const SizedBox(width: 6),
+                          clockText,
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          locateChip,
+                          const Spacer(),
+                          followLabel,
+                          const SizedBox(width: 4),
+                          followSwitch,
+                        ],
+                      ),
                     ],
                   );
                 }
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [leftColumn, const SizedBox(height: 12), timeline],
+                return Row(
+                  children: [
+                    playButton,
+                    const SizedBox(width: 8),
+                    Expanded(child: slider),
+                    const SizedBox(width: 6),
+                    clockText,
+                    const SizedBox(width: 8),
+                    locateChip,
+                    const SizedBox(width: 6),
+                    followLabel,
+                    const SizedBox(width: 2),
+                    followSwitch,
+                  ],
                 );
               },
-            ),
-          ),
+            );
+          },
         ),
-        ScrollToTopButton(
-          scrollController: _scrollController,
-          controller: c,
-          isCurrentLineVisible: () =>
-              _timelineKey.currentState?.isFollowTargetVisible() ?? false,
-          bottomOffset: bottomInset + AppTokens.s16,
-        ),
-      ],
+      ),
     );
   }
 
@@ -362,6 +596,19 @@ class _DashboardViewState extends State<DashboardView> {
       children: [
         _buildHeroCard(context, c, scheme),
         const SizedBox(height: 12),
+        _buildLeftSecondaryColumn(context, c, scheme),
+      ],
+    );
+  }
+
+  Widget _buildLeftSecondaryColumn(
+    BuildContext context,
+    CallbookController c,
+    ColorScheme scheme,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
         _buildCreditsAndEditorCard(context, c, scheme),
         const SizedBox(height: 12),
         _buildAudioSettingsCard(context, c, scheme),

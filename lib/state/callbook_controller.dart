@@ -156,7 +156,7 @@ class CallbookController extends ChangeNotifier {
       },
       onEnded: () {
         if (_disposed) return;
-        _isPlaying = false;
+        _setPlayingState(false);
         _followPausedByScrollTop = false;
         _playbackNotifier.notifyListeners();
         notifyListeners();
@@ -184,6 +184,7 @@ class CallbookController extends ChangeNotifier {
   final ChangeNotifier _beatNotifier = ChangeNotifier();
   final ValueNotifier<String?> _playingLineIdNotifier = ValueNotifier<String?>(null);
   final ValueNotifier<String?> _upcomingLineIdNotifier = ValueNotifier<String?>(null);
+  final ValueNotifier<bool> _isPlayingNotifier = ValueNotifier<bool>(false);
   final ValueNotifier<String> _statusNotifier =
       ValueNotifier<String>('已就绪 · CallbookMaker');
   final ValueNotifier<AppBannerEvent?> _bannerNotifier =
@@ -289,6 +290,7 @@ class CallbookController extends ChangeNotifier {
   Listenable get beatListenable => _beatNotifier;
   ValueListenable<String?> get playingLineIdListenable => _playingLineIdNotifier;
   ValueListenable<String?> get upcomingLineIdListenable => _upcomingLineIdNotifier;
+  ValueListenable<bool> get isPlayingListenable => _isPlayingNotifier;
   ValueListenable<String> get statusListenable => _statusNotifier;
   ValueListenable<AppBannerEvent?> get bannerListenable => _bannerNotifier;
   ValueListenable<GtFlashEvent?> get gtFlashListenable => _gtFlashNotifier;
@@ -488,6 +490,13 @@ class CallbookController extends ChangeNotifier {
       if (forceNotify || playingChanged || upcomingChanged) {
         _playbackSyncNotifier.notifyListeners();
       }
+    }
+  }
+
+  void _setPlayingState(bool value) {
+    _isPlaying = value;
+    if (!_disposed && _isPlayingNotifier.value != value) {
+      _isPlayingNotifier.value = value;
     }
   }
 
@@ -1097,9 +1106,14 @@ class CallbookController extends ChangeNotifier {
   }
 
   void setFollowPlayback(bool value) {
+    final wasFollowing = _followPlayback;
     _followPlayback = value;
     if (value) {
       _followPausedByScrollTop = false;
+    }
+    if (value && !wasFollowing) {
+      syncPlaybackState(forceNotify: true);
+      _jumpToCurrentLineSignal.value++;
     }
     _notifyProjectChanged();
   }
@@ -1258,12 +1272,12 @@ class CallbookController extends ChangeNotifier {
     try {
       if (_isPlaying) {
         await _audio.pause();
-        _isPlaying = false;
+        _setPlayingState(false);
         _followPausedByScrollTop = false;
         _playbackNotifier.notifyListeners();
       } else {
         final started = await _audio.play();
-        _isPlaying = started;
+        _setPlayingState(started);
         if (!started) {
           _setStatusInternal('音频播放失败，请检查音源或系统音频设备');
           _playbackNotifier.notifyListeners();
@@ -1281,6 +1295,9 @@ class CallbookController extends ChangeNotifier {
     await _audio.seek(ms);
     if (!_disposed) {
       syncPlaybackState(forceNotify: true);
+      if (_followPlayback) {
+        _jumpToCurrentLineSignal.value++;
+      }
     }
   }
 
@@ -2490,7 +2507,7 @@ class CallbookController extends ChangeNotifier {
       final switchSeq = ++_sourceSwitchSeq;
       _clearUndoHistory();
       _currentTimeMs = 0;
-      _isPlaying = false;
+      _setPlayingState(false);
       _durationMs = _computeProjectDurationMs(
         nextProject,
         knownAudioDurationMs: _knownAudioDurationMs,
@@ -2585,7 +2602,7 @@ class CallbookController extends ChangeNotifier {
     _clearUndoHistory();
     await _audio.pause();
     await _audio.seek(0);
-    _isPlaying = false;
+    _setPlayingState(false);
     _currentTimeMs = 0;
     if (!hasMeasuredExternalAudio) {
       _knownAudioDurationMs = 0;
@@ -2625,7 +2642,7 @@ class CallbookController extends ChangeNotifier {
     final switchSeq = ++_sourceSwitchSeq;
     _knownAudioDurationMs = 0;
     _currentTimeMs = 0;
-    _isPlaying = false;
+    _setPlayingState(false);
     try {
       await _audio.setAudioSource(localPath: filePath);
     } catch (err) {
@@ -2698,7 +2715,7 @@ class CallbookController extends ChangeNotifier {
       knownAudioDurationMs: _knownAudioDurationMs,
     );
     _currentTimeMs = 0;
-    _isPlaying = false;
+    _setPlayingState(false);
     _setProject(nextProject);
     syncPlaybackState(forceNotify: true);
     _activeLineId = sortedLines.isNotEmpty ? sortedLines.first.id : null;
@@ -2825,7 +2842,7 @@ class CallbookController extends ChangeNotifier {
         knownAudioDurationMs: _knownAudioDurationMs,
       );
       _currentTimeMs = 0;
-      _isPlaying = false;
+      _setPlayingState(false);
       syncPlaybackState(forceNotify: true);
 
       _activeLineId = sortedLines.isNotEmpty ? sortedLines.first.id : null;
@@ -2955,7 +2972,7 @@ class CallbookController extends ChangeNotifier {
       knownAudioDurationMs: _knownAudioDurationMs,
     );
     _currentTimeMs = 0;
-    _isPlaying = false;
+    _setPlayingState(false);
 
     _setProject(restored);
     syncPlaybackState(forceNotify: true);
@@ -3145,6 +3162,7 @@ class CallbookController extends ChangeNotifier {
     _beatNotifier.dispose();
     _playingLineIdNotifier.dispose();
     _upcomingLineIdNotifier.dispose();
+    _isPlayingNotifier.dispose();
     _statusNotifier.dispose();
     _bannerNotifier.dispose();
     _gtFlashNotifier.dispose();

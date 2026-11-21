@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/physics.dart';
 import 'package:flutter/rendering.dart';
@@ -27,6 +28,7 @@ class ContinuousAutoScroller {
 
   ScrollController? _activeScrollController;
   Timer? _manualResumeTimer;
+  double? _activeTargetOffset;
   bool _isProgrammaticScroll = false;
   bool _manualPauseActive = false;
   bool _disposed = false;
@@ -36,10 +38,16 @@ class ContinuousAutoScroller {
 
   /// Computes the target scroll offset to place [itemContext] at [alignment]
   /// (`0.0` = top of viewport, `0.5` = center) inside [scrollController].
+  ///
+  /// Resolves the viewport `RenderBox` directly from [scrollController]'s own
+  /// `ScrollPosition.context` so nested non-scrolling widgets or `shrinkWrap`
+  /// lists never corrupt the coordinate space. Returns `null` if [itemContext]
+  /// is currently parked in an off-screen `KeepAlive` bucket.
   static double? computeTargetOffset({
     required ScrollController scrollController,
     required BuildContext itemContext,
     required double alignment,
+    double bottomOcclusion = 0.0,
   }) {
     if (!scrollController.hasClients) return null;
     final position = scrollController.position;
@@ -48,14 +56,32 @@ class ContinuousAutoScroller {
     if (itemBox is! RenderBox || !itemBox.attached || !itemBox.hasSize) {
       return null;
     }
-    final scrollable = Scrollable.maybeOf(itemContext);
-    if (scrollable == null) return null;
-    final scrollBox = scrollable.context.findRenderObject();
+    final scrollContext =
+        position.context.notificationContext ?? position.context.storageContext;
+    final scrollBox = scrollContext.findRenderObject();
     if (scrollBox is! RenderBox || !scrollBox.attached || !scrollBox.hasSize) {
       return null;
     }
+    RenderObject? cursor = itemBox;
+    var isDescendant = false;
+    while (cursor != null) {
+      if (identical(cursor, scrollBox)) {
+        isDescendant = true;
+        break;
+      }
+      final pd = cursor.parentData;
+      if (pd is SliverMultiBoxAdaptorParentData && pd.keptAlive) {
+        return null;
+      }
+      cursor = cursor.parent;
+    }
+    if (!isDescendant) return null;
+
     final topLeft = itemBox.localToGlobal(Offset.zero, ancestor: scrollBox);
-    final viewportHeight = position.viewportDimension;
+    final viewportHeight = math.max(
+      0.0,
+      position.viewportDimension - bottomOcclusion,
+    );
     final itemHeight = itemBox.size.height;
     final desiredTop = itemHeight >= viewportHeight
         ? 0.0
@@ -65,6 +91,24 @@ class ContinuousAutoScroller {
       position.minScrollExtent,
       position.maxScrollExtent,
     );
+  }
+
+  /// Jumps [scrollController] immediately to [targetOffset] while marking
+  /// the scroll as programmatic so manual-scroll pause detection ignores it.
+  void jumpToOffset({
+    required ScrollController scrollController,
+    required double targetOffset,
+  }) {
+    if (_disposed || !scrollController.hasClients) return;
+    final position = scrollController.position;
+    if (!position.hasContentDimensions) return;
+    final clampedTarget = targetOffset.clamp(
+      position.minScrollExtent,
+      position.maxScrollExtent,
+    );
+    cancelAnimation();
+    _activeScrollController = scrollController;
+    _jumpProgrammatically(scrollController, clampedTarget);
   }
 
   /// Scrolls [scrollController] to [targetOffset], seamlessly inheriting
@@ -82,7 +126,15 @@ class ContinuousAutoScroller {
       position.maxScrollExtent,
     );
     final currentOffset = position.pixels;
-    if ((clampedTarget - currentOffset).abs() < 0.5) return;
+    if (_springCtrl.isAnimating &&
+        _activeTargetOffset != null &&
+        (clampedTarget - _activeTargetOffset!).abs() < 0.5) {
+      return;
+    }
+    if ((clampedTarget - currentOffset).abs() < 0.5) {
+      cancelAnimation();
+      return;
+    }
 
     _activeScrollController = scrollController;
 
@@ -92,6 +144,7 @@ class ContinuousAutoScroller {
       return;
     }
 
+    _activeTargetOffset = clampedTarget;
     final velocity = _springCtrl.isAnimating ? _springCtrl.velocity : 0.0;
     final sim = SpringSimulation(
       AppMotion.autoScrollSpring,
@@ -108,11 +161,13 @@ class ContinuousAutoScroller {
     required ScrollController scrollController,
     required BuildContext itemContext,
     required double alignment,
+    double bottomOcclusion = 0.0,
   }) {
     final target = computeTargetOffset(
       scrollController: scrollController,
       itemContext: itemContext,
       alignment: alignment,
+      bottomOcclusion: bottomOcclusion,
     );
     if (target == null) return false;
     scrollToOffset(
@@ -191,6 +246,7 @@ class ContinuousAutoScroller {
   }
 
   void cancelAnimation() {
+    _activeTargetOffset = null;
     if (_springCtrl.isAnimating) {
       _springCtrl.stop();
     }
@@ -209,6 +265,9 @@ class ContinuousAutoScroller {
       position.maxScrollExtent,
     );
     _jumpProgrammatically(sc, next);
+    if (!_springCtrl.isAnimating) {
+      _activeTargetOffset = null;
+    }
   }
 
   void _jumpProgrammatically(ScrollController sc, double offset) {

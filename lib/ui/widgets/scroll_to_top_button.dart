@@ -121,7 +121,9 @@ class _ScrollToTopButtonState extends State<ScrollToTopButton>
       widget.controller?.playbackSyncListenable.addListener(_syncVisibility);
       widget.controller?.projectListenable.addListener(_syncVisibility);
     }
-    _syncVisibility();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _syncVisibility();
+    });
   }
 
   @override
@@ -149,7 +151,9 @@ class _ScrollToTopButtonState extends State<ScrollToTopButton>
     if (!mounted) return;
     final sc = widget.scrollController;
     var nextPast = _pastThreshold;
-    if (!sc.hasClients) {
+    if (!sc.hasClients ||
+        sc.positions.length != 1 ||
+        !sc.position.hasViewportDimension) {
       nextPast = false;
     } else {
       final position = sc.position;

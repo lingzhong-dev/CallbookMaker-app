@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 import 'package:prism_ui/icons/icons.dart';
 import 'package:prism_ui/prism_ui.dart';
@@ -66,24 +67,104 @@ class TimelineEditorWidgetState extends State<TimelineEditorWidget>
       EntryTransitions<String>(vsync: this, onLeft: _handleLineEntryLeft);
   late final ContinuousAutoScroller _autoScroller = ContinuousAutoScroller(
     vsync: this,
-    onResumeAutoFollow: _handlePlaybackSync,
+    onResumeAutoFollow: _handleResumeAutoFollow,
   );
   late List<TimelineLineItem> _displayedItems = List<TimelineLineItem>.from(
     widget.controller.timelineItems,
   );
   String? _lastActiveLineId;
+  String? _lastFollowedLineId;
+  late bool _lastFollowPlayback = widget.controller.followPlayback;
+  late bool _lastIsPlaying = widget.controller.isPlaying;
   String? _lastLineListSignature;
   String? _pendingScrollLineId;
+  String? _pendingLocateTargetId;
+  int _locateAttemptCount = 0;
+  bool _locateRefinementScheduled = false;
+  ScrollController? _attachedScrollController;
   bool _showSectionPanel = false;
   late bool _showShortcuts = widget.controller.shortcutsVisibleNotifier.value;
 
   ScrollController get _effectiveScrollController =>
       widget.externalScrollController ?? _scrollController;
 
+  void _syncScrollControllerListener() {
+    final next = _effectiveScrollController;
+    if (_attachedScrollController == next) return;
+    _attachedScrollController?.removeListener(_onEffectiveScrollTick);
+    _attachedScrollController = next;
+    next.addListener(_onEffectiveScrollTick);
+  }
+
+  void _onEffectiveScrollTick() {
+    final targetId = _pendingLocateTargetId;
+    if (targetId == null || !mounted || _autoScroller.isManualPauseActive) {
+      return;
+    }
+    final ctx = _lineKeys[targetId]?.currentContext;
+    if (ctx == null) return;
+    final computed = ContinuousAutoScroller.computeTargetOffset(
+      scrollController: _effectiveScrollController,
+      itemContext: ctx,
+      alignment: 0.42,
+    );
+    if (computed == null) return;
+    if (!_locateRefinementScheduled) {
+      _locateRefinementScheduled = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _locateRefinementScheduled = false;
+        if (!mounted || _pendingLocateTargetId != targetId) return;
+        if (_autoScroller.isManualPauseActive) {
+          _pendingLocateTargetId = null;
+          return;
+        }
+        _performScrollToLine(targetId);
+      });
+    }
+  }
+
   /// Forwards scroll notifications from the outer [DashboardView]
   /// [SingleChildScrollView] so manual scrolling pauses auto-follow for 3s.
   void handleOuterScrollNotification(ScrollNotification notification) {
     _autoScroller.handleScrollNotification(notification, widget.controller);
+  }
+
+  void recenterFollowTargetIfActive() {
+    final c = widget.controller;
+    if (!mounted ||
+        !c.followPlayback ||
+        c.isPracticeMode ||
+        c.followPausedByScrollTop ||
+        _autoScroller.isManualPauseActive) {
+      return;
+    }
+    final targetId = c.followTargetLineId;
+    if (targetId != null) {
+      _lastFollowedLineId = targetId;
+      _pendingScrollLineId = null;
+      _scheduleScrollToLine(targetId);
+    }
+  }
+
+  /// Scrolls the timeline to the current follow target line, or to the top
+  /// when no target line is available.
+  void jumpToFollowTargetOrTop() {
+    _autoScroller.clearManualPause();
+    final targetId = widget.controller.followTargetLineId;
+    if (targetId != null) {
+      _lastFollowedLineId = targetId;
+      _pendingScrollLineId = null;
+      _scheduleScrollToLine(targetId);
+      return;
+    }
+    final sc = _effectiveScrollController;
+    if (sc.hasClients) {
+      _autoScroller.scrollToOffset(
+        context: context,
+        scrollController: sc,
+        targetOffset: 0.0,
+      );
+    }
   }
 
   void _handleLineEntryLeft(String lineId) {
@@ -134,7 +215,7 @@ class TimelineEditorWidgetState extends State<TimelineEditorWidget>
   }
 
   /// Reports whether the active/upcoming playback line is currently visible in
-  /// the enclosing scrollable viewport.
+  /// the viewport of [_effectiveScrollController].
   bool isFollowTargetVisible() {
     final targetId = widget.controller.followTargetLineId;
     if (targetId == null) return false;
@@ -142,24 +223,54 @@ class TimelineEditorWidgetState extends State<TimelineEditorWidget>
     if (ctx == null) return false;
     final ro = ctx.findRenderObject();
     if (ro is! RenderBox || !ro.attached || !ro.hasSize) return false;
-    final scrollable = Scrollable.maybeOf(ctx);
-    if (scrollable == null) return true;
-    final scrollBox = scrollable.context.findRenderObject();
-    if (scrollBox is! RenderBox || !scrollBox.hasSize) return false;
+    final sc = _effectiveScrollController;
+    if (!sc.hasClients) return false;
+    final position = sc.position;
+    if (!position.hasContentDimensions) return false;
+    final scrollContext =
+        position.context.notificationContext ?? position.context.storageContext;
+    final scrollBox = scrollContext.findRenderObject();
+    if (scrollBox is! RenderBox || !scrollBox.attached || !scrollBox.hasSize) {
+      return false;
+    }
+    RenderObject? cursor = ro;
+    var isDescendant = false;
+    while (cursor != null) {
+      if (identical(cursor, scrollBox)) {
+        isDescendant = true;
+        break;
+      }
+      final pd = cursor.parentData;
+      if (pd is SliverMultiBoxAdaptorParentData && pd.keptAlive) {
+        return false;
+      }
+      cursor = cursor.parent;
+    }
+    if (!isDescendant) return false;
+    final rawInset = widget.compact
+        ? (context.getInheritedWidgetOfExactType<BottomInsetScope>()?.inset ??
+              0.0)
+        : 0.0;
+    final bottomOcclusion = rawInset > 0 ? rawInset + 44.0 : 0.0;
+    final visibleBottom = math.max(0.0, scrollBox.size.height - bottomOcclusion);
     final topLeft = ro.localToGlobal(Offset.zero, ancestor: scrollBox);
     final rect = topLeft & ro.size;
-    return rect.bottom > 0 && rect.top < scrollBox.size.height;
+    return rect.bottom > 0 && rect.top < visibleBottom;
   }
 
   @override
   void initState() {
     super.initState();
     _lastActiveLineId = widget.controller.activeLineId;
+    _lastFollowPlayback = widget.controller.followPlayback;
+    _lastIsPlaying = widget.controller.isPlaying;
     _lastLineListSignature = _computeLineListSignature(
       widget.controller.timelineItems,
     );
+    _syncScrollControllerListener();
     widget.controller.projectListenable.addListener(_handleProjectChanged);
     widget.controller.playbackSyncListenable.addListener(_handlePlaybackSync);
+    widget.controller.isPlayingListenable.addListener(_handleIsPlayingChanged);
     widget.controller.jumpToCurrentLineSignal.addListener(_handleJumpToCurrent);
     widget.controller.shortcutsVisibleNotifier.addListener(
       _handleShortcutsChanged,
@@ -169,12 +280,16 @@ class TimelineEditorWidgetState extends State<TimelineEditorWidget>
   @override
   void didUpdateWidget(covariant TimelineEditorWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
+    _syncScrollControllerListener();
     if (oldWidget.controller != widget.controller) {
       oldWidget.controller.projectListenable.removeListener(
         _handleProjectChanged,
       );
       oldWidget.controller.playbackSyncListenable.removeListener(
         _handlePlaybackSync,
+      );
+      oldWidget.controller.isPlayingListenable.removeListener(
+        _handleIsPlayingChanged,
       );
       oldWidget.controller.jumpToCurrentLineSignal.removeListener(
         _handleJumpToCurrent,
@@ -183,6 +298,10 @@ class TimelineEditorWidgetState extends State<TimelineEditorWidget>
         _handleShortcutsChanged,
       );
       _lastActiveLineId = widget.controller.activeLineId;
+      _lastFollowedLineId = null;
+      _lastFollowPlayback = widget.controller.followPlayback;
+      _lastIsPlaying = widget.controller.isPlaying;
+      _pendingLocateTargetId = null;
       _lastLineListSignature = _computeLineListSignature(
         widget.controller.timelineItems,
       );
@@ -192,6 +311,9 @@ class TimelineEditorWidgetState extends State<TimelineEditorWidget>
       _showShortcuts = widget.controller.shortcutsVisibleNotifier.value;
       widget.controller.projectListenable.addListener(_handleProjectChanged);
       widget.controller.playbackSyncListenable.addListener(_handlePlaybackSync);
+      widget.controller.isPlayingListenable.addListener(
+        _handleIsPlayingChanged,
+      );
       widget.controller.jumpToCurrentLineSignal.addListener(
         _handleJumpToCurrent,
       );
@@ -208,10 +330,27 @@ class TimelineEditorWidgetState extends State<TimelineEditorWidget>
     }
   }
 
+  void _handleIsPlayingChanged() {
+    final next = widget.controller.isPlaying;
+    if (next != _lastIsPlaying) {
+      _lastIsPlaying = next;
+      if (!next) {
+        _lastFollowedLineId = null;
+      }
+    }
+  }
+
+  void _handleResumeAutoFollow() {
+    _lastFollowedLineId = null;
+    _handlePlaybackSync();
+  }
+
   void _handleJumpToCurrent() {
+    if (!mounted) return;
     _autoScroller.clearManualPause();
     final targetId = widget.controller.followTargetLineId;
     if (targetId != null) {
+      _lastFollowedLineId = targetId;
       _pendingScrollLineId = null;
       _scheduleScrollToLine(targetId);
     }
@@ -226,17 +365,127 @@ class TimelineEditorWidgetState extends State<TimelineEditorWidget>
         final scheduledId = _pendingScrollLineId;
         _pendingScrollLineId = null;
         if (!mounted || scheduledId == null) return;
-        final ctx = _lineKeys[scheduledId]?.currentContext;
-        if (ctx != null) {
-          _autoScroller.scrollToContext(
-            context: context,
-            scrollController: _effectiveScrollController,
-            itemContext: ctx,
-            alignment: 0.35,
-          );
-        }
+        _performScrollToLine(scheduledId);
       });
     }
+  }
+
+  void _performScrollToLine(String targetId) {
+    if (!mounted) return;
+    final sc = _effectiveScrollController;
+    if (!sc.hasClients || !sc.position.hasContentDimensions) return;
+
+    final ctx = _lineKeys[targetId]?.currentContext;
+    if (ctx != null) {
+      final rawInset = widget.compact
+          ? (context.getInheritedWidgetOfExactType<BottomInsetScope>()?.inset ??
+                0.0)
+          : 0.0;
+      final bottomOcclusion = rawInset > 0 ? rawInset + 44.0 : 0.0;
+      final ok = _autoScroller.scrollToContext(
+        context: context,
+        scrollController: sc,
+        itemContext: ctx,
+        alignment: 0.42,
+        bottomOcclusion: bottomOcclusion,
+      );
+      if (ok) {
+        _pendingLocateTargetId = null;
+        _locateAttemptCount = 0;
+        return;
+      }
+    }
+
+    // Target item is either unmounted (off-screen) or parked in KeepAlive.
+    final idx = _displayedItems.indexWhere((item) => item.line.id == targetId);
+    if (idx < 0 || _displayedItems.isEmpty) {
+      _pendingLocateTargetId = null;
+      _locateAttemptCount = 0;
+      return;
+    }
+    if (_pendingLocateTargetId != targetId) {
+      _pendingLocateTargetId = targetId;
+      _locateAttemptCount = 0;
+    } else if (_autoScroller.isAnimating) {
+      // Wait for the in-flight spring to bring the item into mounted range;
+      // _onEffectiveScrollTick will refine as soon as it mounts.
+      return;
+    }
+    _locateAttemptCount++;
+    if (_locateAttemptCount > 12) {
+      _pendingLocateTargetId = null;
+      _locateAttemptCount = 0;
+      return;
+    }
+
+    final pos = sc.position;
+    final maxExtent = pos.maxScrollExtent;
+    final viewport = pos.viewportDimension;
+    int? minMountedIdx;
+    int? maxMountedIdx;
+    for (var i = 0; i < _displayedItems.length; i++) {
+      final itemCtx = _lineKeys[_displayedItems[i].line.id]?.currentContext;
+      if (itemCtx != null &&
+          ContinuousAutoScroller.computeTargetOffset(
+                scrollController: sc,
+                itemContext: itemCtx,
+                alignment: 0.0,
+              ) !=
+              null) {
+        minMountedIdx ??= i;
+        maxMountedIdx = i;
+      }
+    }
+
+    double nextOffset;
+    if (_locateAttemptCount == 1 ||
+        minMountedIdx == null ||
+        maxMountedIdx == null) {
+      nextOffset = _displayedItems.length <= 1
+          ? 0.0
+          : (maxExtent * (idx / (_displayedItems.length - 1))).clamp(
+              pos.minScrollExtent,
+              maxExtent,
+            );
+    } else if (idx < minMountedIdx) {
+      nextOffset = (pos.pixels - viewport * 0.85).clamp(
+        pos.minScrollExtent,
+        maxExtent,
+      );
+    } else if (idx > maxMountedIdx) {
+      nextOffset = (pos.pixels + viewport * 0.85).clamp(
+        pos.minScrollExtent,
+        maxExtent,
+      );
+    } else {
+      _pendingLocateTargetId = null;
+      _locateAttemptCount = 0;
+      return;
+    }
+
+    if ((nextOffset - pos.pixels).abs() > viewport * 2.5 &&
+        !context.disableAnimations) {
+      _autoScroller.jumpToOffset(
+        scrollController: sc,
+        targetOffset: nextOffset,
+      );
+    } else {
+      _autoScroller.scrollToOffset(
+        context: context,
+        scrollController: sc,
+        targetOffset: nextOffset,
+      );
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _pendingLocateTargetId != targetId) return;
+      if (_autoScroller.isManualPauseActive) {
+        _pendingLocateTargetId = null;
+        _locateAttemptCount = 0;
+        return;
+      }
+      _performScrollToLine(targetId);
+    });
   }
 
   void _handleProjectChanged() {
@@ -253,6 +502,17 @@ class TimelineEditorWidgetState extends State<TimelineEditorWidget>
     final nextActive = c.activeLineId;
     final activeChanged = nextActive != null && nextActive != _lastActiveLineId;
     _lastActiveLineId = nextActive;
+
+    final prevFollow = _lastFollowPlayback;
+    _lastFollowPlayback = c.followPlayback;
+    if (prevFollow && !c.followPlayback) {
+      _lastFollowedLineId = null;
+      _pendingLocateTargetId = null;
+      if (!activeChanged) {
+        _pendingScrollLineId = null;
+        _autoScroller.cancelAnimation();
+      }
+    }
 
     if (activeChanged) {
       _autoScroller.clearManualPause();
@@ -272,16 +532,26 @@ class TimelineEditorWidgetState extends State<TimelineEditorWidget>
       return;
     }
     final targetId = c.followTargetLineId;
-    if (targetId != null) {
-      _scheduleScrollToLine(targetId);
+    if (targetId == null) return;
+    if (targetId == _lastFollowedLineId &&
+        _pendingScrollLineId == null &&
+        _pendingLocateTargetId == null) {
+      return;
     }
+    _lastFollowedLineId = targetId;
+    _scheduleScrollToLine(targetId);
   }
 
   @override
   void dispose() {
+    _attachedScrollController?.removeListener(_onEffectiveScrollTick);
+    _attachedScrollController = null;
     widget.controller.projectListenable.removeListener(_handleProjectChanged);
     widget.controller.playbackSyncListenable.removeListener(
       _handlePlaybackSync,
+    );
+    widget.controller.isPlayingListenable.removeListener(
+      _handleIsPlayingChanged,
     );
     widget.controller.jumpToCurrentLineSignal.removeListener(
       _handleJumpToCurrent,
@@ -452,6 +722,57 @@ class TimelineEditorWidgetState extends State<TimelineEditorWidget>
     }
   }
 
+  Widget _buildTimelineItem(
+    BuildContext context,
+    int idx,
+    Map<String, CallPreset> presetMap,
+  ) {
+    final c = widget.controller;
+    final line = _displayedItems[idx].line;
+    final leaving = _lineTransitions.isLeaving(line.id);
+    final gtAlert = c.getAlertForLine(line.id);
+    final canMergeNext = !leaving &&
+        !line.kind.isSection &&
+        idx + 1 < _displayedItems.length &&
+        !_lineTransitions.isLeaving(_displayedItems[idx + 1].line.id) &&
+        !_displayedItems[idx + 1].line.kind.isSection;
+    final canSplit = !leaving &&
+        !line.kind.isSection &&
+        line.text.original.runes.length >= 2;
+    return EntryTransition(
+      key: ValueKey<String>('timeline-entry-${line.id}'),
+      animation: _lineTransitions.animationOf(line.id),
+      leaving: leaving,
+      child: KeyedSubtree(
+        key: _lineKeys.putIfAbsent(line.id, GlobalKey.new),
+        child: _ReactiveTimelineLineCard(
+          controller: c,
+          line: line,
+          presetMap: presetMap,
+          gtAlert: gtAlert,
+          isSelected: !leaving && c.activeLineId == line.id,
+          canMergeNext: canMergeNext,
+          canSplit: canSplit,
+          onCreatePreset: () => _openCreatePresetDialog(context),
+          onAddSectionAfter: () => _openAddSectionDialog(
+            context,
+            initialKind: LyricLineKind.interlude,
+            afterLineId: line.id,
+          ),
+          onEditLine: () => _openEditLineDialog(context, line),
+          onDoubleTapEdit: () => _openEditLineDialog(
+            context,
+            line,
+            autofocusOriginal: true,
+          ),
+          onSplitLine: () => _openSplitLineDialog(context, line),
+          onOpenSuffix: (tag, preset) =>
+              _openSuffixDialog(context, line, tag, preset),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = widget.controller;
@@ -461,308 +782,299 @@ class TimelineEditorWidgetState extends State<TimelineEditorWidget>
     final activeLineHasGt =
         c.activeLineId != null && c.getAlertForLine(c.activeLineId!) != null;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        // Sticky Call Toolbar Card
-        Card(
-          inert: true,
-          padding: const EdgeInsets.all(14),
-          radius: AppTokens.radiusCard,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              LayoutBuilder(
-                builder: (context, constraints) {
-                  final titleGroup = Wrap(
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    spacing: 8,
-                    runSpacing: 6,
-                    children: [
-                      Text(
-                        c.siteText('编写工作台'),
-                        style: AppTextStyle.headline
-                            .of(context, emphasized: true)
-                            .copyWith(color: scheme.onSurface),
-                      ),
-                      TonalChip(
-                        label:
-                            '${c.sortedLines.length} 句 · ${c.sectionStats.total} 段落 · ${c.sortedAlerts.length} GT 警报',
-                        color: scheme.surfaceContainerHigh,
-                        foregroundColor: scheme.onSurfaceVariant,
-                      ),
-                      Semantics(
-                        label: '键盘快捷键说明',
-                        button: true,
-                        child: Tooltip(
-                          message: '键盘快捷键说明（?）',
-                          child: TonalChip(
-                            label: '?',
-                            color: _showShortcuts
-                                ? scheme.primaryContainer
-                                : scheme.surfaceContainerHigh,
-                            foregroundColor: _showShortcuts
-                                ? scheme.onPrimaryContainer
-                                : scheme.onSurfaceVariant,
-                            onPressed: c.toggleShortcutsPanel,
-                          ),
-                        ),
-                      ),
-                    ],
-                  );
-                  final actionsGroup = Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      Text(
-                        '跟随滚动',
-                        style: AppTextStyle.caption1.of(context).copyWith(
-                          color: scheme.onSurfaceVariant,
-                        ),
-                      ),
-                      Switch(
-                        value: c.followPlayback,
-                        onChanged: c.setFollowPlayback,
-                        semanticLabel: '跟随播放滚动',
-                      ),
-                      Text(
-                        '自动跳下句',
-                        style: AppTextStyle.caption1.of(context).copyWith(
-                          color: scheme.onSurfaceVariant,
-                        ),
-                      ),
-                      Switch(
-                        value: c.autoAdvanceOnTag,
-                        onChanged: c.setAutoAdvanceOnTag,
-                        semanticLabel: '打标后自动跳转下一句',
-                      ),
-                      Tooltip(
-                        message: activeLineHasGt
-                            ? '取消当前行 GT 警报（G）'
-                            : '插入当前行 GT 警报（G）',
-                        child: TonalButton(
-                          size: TonalButtonSize.compact,
-                          label: activeLineHasGt
-                              ? c.siteText('取消 GT 警报')
-                              : c.siteText('GT 警报'),
-                          onPressed:
-                              items.isEmpty ? null : () => c.insertGtAlert(),
-                        ),
-                      ),
-                      TonalButton(
-                        size: TonalButtonSize.compact,
-                        label: _showSectionPanel ? '收起段落' : '前/间/尾奏',
-                        onPressed: () => setState(() {
-                          _showSectionPanel = !_showSectionPanel;
-                        }),
-                      ),
-                      if (c.canUndo)
-                        Semantics(
-                          label: '撤销 ${c.lastUndoLabel ?? ''}'.trim(),
-                          button: true,
-                          child: TonalButton(
-                            size: TonalButtonSize.compact,
-                            label: '撤销',
-                            onPressed: c.undoLastTimelineEdit,
-                          ),
-                        ),
-                      TonalButton(
-                        size: TonalButtonSize.compact,
-                        label: '加行',
-                        onPressed: c.addEmptyLine,
-                      ),
-                    ],
-                  );
-                  if (constraints.maxWidth < 680) {
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        titleGroup,
-                        const SizedBox(height: 8),
-                        actionsGroup,
-                      ],
-                    );
-                  }
-                  return Row(
-                    children: [
-                      Expanded(child: titleGroup),
-                      const SizedBox(width: 8),
-                      actionsGroup,
-                    ],
-                  );
-                },
-              ),
-              if (_showSectionPanel) ...[
-                const SizedBox(height: 10),
-                _InlineSectionPanel(
-                  controller: c,
-                  onClose: () => setState(() => _showSectionPanel = false),
-                ),
-              ],
-              if (_showShortcuts) ...[
-                const SizedBox(height: 10),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 9,
+    final toolbarCard = Card(
+      inert: true,
+      padding: const EdgeInsets.all(14),
+      radius: AppTokens.radiusCard,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final titleGroup = Wrap(
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 8,
+                runSpacing: 6,
+                children: [
+                  Text(
+                    c.siteText('编写工作台'),
+                    style: AppTextStyle.headline
+                        .of(context, emphasized: true)
+                        .copyWith(color: scheme.onSurface),
                   ),
-                  decoration: ShapeDecoration(
-                    color: scheme.surfaceContainerLow,
-                    shape: AppShape.lg,
+                  TonalChip(
+                    label:
+                        '${c.sortedLines.length} 句 · ${c.sectionStats.total} 段落 · ${c.sortedAlerts.length} GT 警报',
+                    color: scheme.surfaceContainerHigh,
+                    foregroundColor: scheme.onSurfaceVariant,
                   ),
-                  child: Text(
-                    'Space 播放/暂停 · 1~0 切换军 Call · G 切换当前行 GT 警报 · ↑/↓ 切行 · ←/→ 跳 2s · F 现场演练 · Ctrl+Z 撤销 · Ctrl+Home 回到顶部 · ? 收起/展开',
-                    style: AppTextStyle.caption1.of(context).copyWith(
-                      fontFamily: 'GoogleSans',
-                      color: scheme.onSurfaceVariant,
+                  Semantics(
+                    label: '键盘快捷键说明',
+                    button: true,
+                    child: Tooltip(
+                      message: '键盘快捷键说明（?）',
+                      child: TonalChip(
+                        label: '?',
+                        color: _showShortcuts
+                            ? scheme.primaryContainer
+                            : scheme.surfaceContainerHigh,
+                        foregroundColor: _showShortcuts
+                            ? scheme.onPrimaryContainer
+                            : scheme.onSurfaceVariant,
+                        onPressed: c.toggleShortcutsPanel,
+                      ),
                     ),
                   ),
-                ),
-              ],
-              const SizedBox(height: 10),
-              Wrap(
+                ],
+              );
+              final actionsGroup = Wrap(
                 spacing: 6,
                 runSpacing: 6,
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
-                  for (final preset in c.allPresets)
-                    CallBadgePill(
-                      preset: preset,
-                      selected: c.activeLineId != null &&
-                          c.project.lines.any(
-                            (l) =>
-                                l.id == c.activeLineId &&
-                                l.calls.any((tag) => tag.presetId == preset.id),
-                          ),
-                      compact: true,
-                      showShortcut: MediaQuery.sizeOf(context).width >= 600,
-                      enableSparkle: true,
-                      onTap: () => triggerCallPresetWithUi(
-                        context: context,
-                        controller: c,
-                        presetId: preset.id,
-                      ),
-                      menuItems: preset.builtIn
-                          ? null
-                          : buildCustomPresetMenuItems(
-                              context,
-                              controller: c,
-                              preset: preset,
-                            ),
+                  Text(
+                    '跟随滚动',
+                    style: AppTextStyle.caption1.of(context).copyWith(
+                      color: scheme.onSurfaceVariant,
                     ),
-                  ValueListenableBuilder<String?>(
-                    valueListenable: c.playingLineIdListenable,
-                    builder: (context, _, _) {
-                      final quickTargetLine = c.resolveLineForQuickTag();
-                      return _TailUpdraftToggleChip(
-                        enabled: quickTargetLine?.tailUpdraft == true,
-                        compact: true,
-                        onTap: quickTargetLine == null
-                            ? null
-                            : () {
-                                final enabled = c.toggleTailUpdraft(
-                                  quickTargetLine.id,
-                                );
-                                if (enabled && c.autoAdvanceOnTag) {
-                                  c.stepActiveLine(1);
-                                }
-                              },
-                      );
-                    },
                   ),
-                  TonalChip(
-                    label: '+ 自定义标签',
-                    color: scheme.primaryContainer,
-                    foregroundColor: scheme.onPrimaryContainer,
-                    onPressed: () => _openCreatePresetDialog(context),
+                  Switch(
+                    value: c.followPlayback,
+                    onChanged: c.setFollowPlayback,
+                    semanticLabel: '跟随播放滚动',
+                  ),
+                  Text(
+                    '自动跳下句',
+                    style: AppTextStyle.caption1.of(context).copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                  Switch(
+                    value: c.autoAdvanceOnTag,
+                    onChanged: c.setAutoAdvanceOnTag,
+                    semanticLabel: '打标后自动跳转下一句',
+                  ),
+                  Tooltip(
+                    message: activeLineHasGt
+                        ? '取消当前行 GT 警报（G）'
+                        : '插入当前行 GT 警报（G）',
+                    child: TonalButton(
+                      size: TonalButtonSize.compact,
+                      label: activeLineHasGt
+                          ? c.siteText('取消 GT 警报')
+                          : c.siteText('GT 警报'),
+                      onPressed:
+                          items.isEmpty ? null : () => c.insertGtAlert(),
+                    ),
+                  ),
+                  TonalButton(
+                    size: TonalButtonSize.compact,
+                    label: _showSectionPanel ? '收起段落' : '前/间/尾奏',
+                    onPressed: () => setState(() {
+                      _showSectionPanel = !_showSectionPanel;
+                    }),
+                  ),
+                  if (c.canUndo)
+                    Semantics(
+                      label: '撤销 ${c.lastUndoLabel ?? ''}'.trim(),
+                      button: true,
+                      child: TonalButton(
+                        size: TonalButtonSize.compact,
+                        label: '撤销',
+                        onPressed: c.undoLastTimelineEdit,
+                      ),
+                    ),
+                  TonalButton(
+                    size: TonalButtonSize.compact,
+                    label: '加行',
+                    onPressed: c.addEmptyLine,
                   ),
                 ],
-              ),
-            ],
+              );
+              if (constraints.maxWidth < 680) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    titleGroup,
+                    const SizedBox(height: 8),
+                    actionsGroup,
+                  ],
+                );
+              }
+              return Row(
+                children: [
+                  Expanded(child: titleGroup),
+                  const SizedBox(width: 8),
+                  actionsGroup,
+                ],
+              );
+            },
           ),
-        ),
-        const SizedBox(height: 10),
-
-        if (_displayedItems.isEmpty)
-          Card(
-            inert: true,
-            padding: const EdgeInsets.all(24),
-            child: Center(
+          if (_showSectionPanel) ...[
+            const SizedBox(height: 10),
+            _InlineSectionPanel(
+              controller: c,
+              onClose: () => setState(() => _showSectionPanel = false),
+            ),
+          ],
+          if (_showShortcuts) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 9,
+              ),
+              decoration: ShapeDecoration(
+                color: scheme.surfaceContainerLow,
+                shape: AppShape.lg,
+              ),
               child: Text(
-                '时间轴为空，点击「导入音源 / LRC」或右上角「加行」开始制作 Call 本。',
-                style: AppTextStyle.subheadline.of(context).copyWith(
+                'Space 播放/暂停 · 1~0 切换军 Call · G 切换当前行 GT 警报 · ↑/↓ 切行 · ←/→ 跳 2s · F 现场演练 · Ctrl+Z 撤销 · Ctrl+Home 回到顶部 · ? 收起/展开',
+                style: AppTextStyle.caption1.of(context).copyWith(
+                  fontFamily: 'GoogleSans',
                   color: scheme.onSurfaceVariant,
                 ),
               ),
             ),
-          )
-        else
-          NotificationListener<ScrollNotification>(
-            onNotification: (notification) {
-              if (!widget.compact) {
-                _autoScroller.handleScrollNotification(notification, c);
-              }
-              return false;
-            },
-            child: ListView.separated(
-              controller: _scrollController,
-              shrinkWrap: true,
-              physics: widget.compact
-                  ? const NeverScrollableScrollPhysics()
-                  : const ClampingScrollPhysics(),
-              itemCount: _displayedItems.length,
-              separatorBuilder: (_, _) => const SizedBox(height: 8),
-              itemBuilder: (context, idx) {
-                final line = _displayedItems[idx].line;
-                final leaving = _lineTransitions.isLeaving(line.id);
-                final gtAlert = c.getAlertForLine(line.id);
-                final canMergeNext = !leaving &&
-                    !line.kind.isSection &&
-                    idx + 1 < _displayedItems.length &&
-                    !_lineTransitions.isLeaving(
-                      _displayedItems[idx + 1].line.id,
-                    ) &&
-                    !_displayedItems[idx + 1].line.kind.isSection;
-                final canSplit = !leaving &&
-                    !line.kind.isSection &&
-                    line.text.original.runes.length >= 2;
-                return EntryTransition(
-                  key: ValueKey<String>('timeline-entry-${line.id}'),
-                  animation: _lineTransitions.animationOf(line.id),
-                  leaving: leaving,
-                  child: KeyedSubtree(
-                    key: _lineKeys.putIfAbsent(line.id, GlobalKey.new),
-                    child: _ReactiveTimelineLineCard(
-                      controller: c,
-                      line: line,
-                      presetMap: presetMap,
-                      gtAlert: gtAlert,
-                      isSelected: !leaving && c.activeLineId == line.id,
-                      canMergeNext: canMergeNext,
-                      canSplit: canSplit,
-                      onCreatePreset: () => _openCreatePresetDialog(context),
-                      onAddSectionAfter: () => _openAddSectionDialog(
-                        context,
-                        initialKind: LyricLineKind.interlude,
-                        afterLineId: line.id,
+          ],
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              for (final preset in c.allPresets)
+                CallBadgePill(
+                  preset: preset,
+                  selected: c.activeLineId != null &&
+                      c.project.lines.any(
+                        (l) =>
+                            l.id == c.activeLineId &&
+                            l.calls.any((tag) => tag.presetId == preset.id),
                       ),
-                      onEditLine: () => _openEditLineDialog(context, line),
-                      onDoubleTapEdit: () => _openEditLineDialog(
-                        context,
-                        line,
-                        autofocusOriginal: true,
+                  compact: true,
+                  showShortcut: MediaQuery.sizeOf(context).width >= 600,
+                  enableSparkle: true,
+                  onTap: () => triggerCallPresetWithUi(
+                    context: context,
+                    controller: c,
+                    presetId: preset.id,
+                  ),
+                  menuItems: preset.builtIn
+                      ? null
+                      : buildCustomPresetMenuItems(
+                          context,
+                          controller: c,
+                          preset: preset,
+                        ),
+                ),
+              ValueListenableBuilder<String?>(
+                valueListenable: c.playingLineIdListenable,
+                builder: (context, _, _) {
+                  final quickTargetLine = c.resolveLineForQuickTag();
+                  return _TailUpdraftToggleChip(
+                    enabled: quickTargetLine?.tailUpdraft == true,
+                    compact: true,
+                    onTap: quickTargetLine == null
+                        ? null
+                        : () {
+                            final enabled = c.toggleTailUpdraft(
+                              quickTargetLine.id,
+                            );
+                            if (enabled && c.autoAdvanceOnTag) {
+                              c.stepActiveLine(1);
+                            }
+                          },
+                  );
+                },
+              ),
+              TonalChip(
+                label: '+ 自定义标签',
+                color: scheme.primaryContainer,
+                foregroundColor: scheme.onPrimaryContainer,
+                onPressed: () => _openCreatePresetDialog(context),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+
+    final emptyCard = Card(
+      inert: true,
+      padding: const EdgeInsets.all(24),
+      child: Center(
+        child: Text(
+          '时间轴为空，点击「导入音源 / LRC」或右上角「加行」开始制作 Call 本。',
+          style: AppTextStyle.subheadline.of(context).copyWith(
+            color: scheme.onSurfaceVariant,
+          ),
+        ),
+      ),
+    );
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final useIndependentScroll =
+            !widget.compact && constraints.hasBoundedHeight;
+        if (useIndependentScroll) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: math.max(180.0, constraints.maxHeight * 0.5),
+                ),
+                child: SingleChildScrollView(child: toolbarCard),
+              ),
+              const SizedBox(height: 10),
+              if (_displayedItems.isEmpty)
+                emptyCard
+              else
+                Expanded(
+                  child: NotificationListener<ScrollNotification>(
+                    onNotification: (notification) {
+                      _autoScroller.handleScrollNotification(notification, c);
+                      return false;
+                    },
+                    child: ListView.separated(
+                      controller: _effectiveScrollController,
+                      scrollCacheExtent: const ScrollCacheExtent.pixels(600),
+                      physics: const ClampingScrollPhysics(),
+                      padding: EdgeInsets.only(
+                        bottom: BottomInsetScope.of(context) + 72,
                       ),
-                      onSplitLine: () => _openSplitLineDialog(context, line),
-                      onOpenSuffix: (tag, preset) =>
-                          _openSuffixDialog(context, line, tag, preset),
+                      itemCount: _displayedItems.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 8),
+                      itemBuilder: (context, idx) =>
+                          _buildTimelineItem(context, idx, presetMap),
                     ),
                   ),
-                );
-              },
-            ),
-          ),
-      ],
+                ),
+            ],
+          );
+        }
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            toolbarCard,
+            const SizedBox(height: 10),
+            if (_displayedItems.isEmpty)
+              emptyCard
+            else
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (var idx = 0; idx < _displayedItems.length; idx++) ...[
+                    if (idx > 0) const SizedBox(height: 8),
+                    _buildTimelineItem(context, idx, presetMap),
+                  ],
+                ],
+              ),
+          ],
+        );
+      },
     );
   }
 }
@@ -804,9 +1116,10 @@ class _ReactiveTimelineLineCard extends StatefulWidget {
 }
 
 class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin, AutomaticKeepAliveClientMixin {
   late bool _isPlaying;
   late bool _isUpcoming;
+  late bool _isPlaybackActive;
   DateTime? _lastTapAt;
   int _lastGtFlashSeq = 0;
 
@@ -821,13 +1134,18 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard>
   );
 
   @override
+  bool get wantKeepAlive => widget.isSelected;
+
+  @override
   void initState() {
     super.initState();
     _isPlaying = widget.controller.playingLineId == widget.line.id;
     _isUpcoming = widget.controller.upcomingLineId == widget.line.id;
+    _isPlaybackActive = widget.controller.isPlaying;
     _lastGtFlashSeq = widget.controller.gtFlashListenable.value?.seq ?? 0;
     widget.controller.playingLineIdListenable.addListener(_onPlaybackChanged);
     widget.controller.upcomingLineIdListenable.addListener(_onPlaybackChanged);
+    widget.controller.isPlayingListenable.addListener(_onPlaybackChanged);
     widget.controller.gtFlashListenable.addListener(_onGtFlashEvent);
   }
 
@@ -873,16 +1191,23 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard>
   @override
   void didUpdateWidget(covariant _ReactiveTimelineLineCard oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.isSelected != widget.isSelected) {
+      updateKeepAlive();
+    }
     if (oldWidget.controller != widget.controller) {
       oldWidget.controller.playingLineIdListenable
           .removeListener(_onPlaybackChanged);
       oldWidget.controller.upcomingLineIdListenable
           .removeListener(_onPlaybackChanged);
+      oldWidget.controller.isPlayingListenable.removeListener(
+        _onPlaybackChanged,
+      );
       oldWidget.controller.gtFlashListenable.removeListener(_onGtFlashEvent);
       widget.controller.playingLineIdListenable.addListener(_onPlaybackChanged);
       widget.controller.upcomingLineIdListenable.addListener(
         _onPlaybackChanged,
       );
+      widget.controller.isPlayingListenable.addListener(_onPlaybackChanged);
       widget.controller.gtFlashListenable.addListener(_onGtFlashEvent);
     }
     if (oldWidget.line.id != widget.line.id) {
@@ -898,15 +1223,20 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard>
     }
     _isPlaying = widget.controller.playingLineId == widget.line.id;
     _isUpcoming = widget.controller.upcomingLineId == widget.line.id;
+    _isPlaybackActive = widget.controller.isPlaying;
   }
 
   void _onPlaybackChanged() {
     final nextPlaying = widget.controller.playingLineId == widget.line.id;
     final nextUpcoming = widget.controller.upcomingLineId == widget.line.id;
-    if (nextPlaying != _isPlaying || nextUpcoming != _isUpcoming) {
+    final nextPlaybackActive = widget.controller.isPlaying;
+    if (nextPlaying != _isPlaying ||
+        nextUpcoming != _isUpcoming ||
+        nextPlaybackActive != _isPlaybackActive) {
       setState(() {
         _isPlaying = nextPlaying;
         _isUpcoming = nextUpcoming;
+        _isPlaybackActive = nextPlaybackActive;
       });
     }
   }
@@ -929,6 +1259,7 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard>
         .removeListener(_onPlaybackChanged);
     widget.controller.upcomingLineIdListenable
         .removeListener(_onPlaybackChanged);
+    widget.controller.isPlayingListenable.removeListener(_onPlaybackChanged);
     widget.controller.gtFlashListenable.removeListener(_onGtFlashEvent);
     _tagTransitions.dispose();
     _gtFlashCtrl.dispose();
@@ -937,6 +1268,7 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard>
 
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     final c = widget.controller;
     final line = widget.line;
     final presetMap = widget.presetMap;
@@ -990,11 +1322,17 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard>
                     color: scheme.warning,
                     foregroundColor: const Color(0xFF000000),
                   ),
-                if (isPlaying)
+                if (isPlaying && _isPlaybackActive)
                   TonalChip(
                     label: 'PLAYING',
                     color: scheme.primary,
                     foregroundColor: scheme.onPrimary,
+                  )
+                else if (isPlaying)
+                  TonalChip(
+                    label: c.siteText('当前句 · 已暂停'),
+                    color: scheme.primaryContainer,
+                    foregroundColor: scheme.onPrimaryContainer,
                   )
                 else if (isUpcoming)
                   TonalChip(
