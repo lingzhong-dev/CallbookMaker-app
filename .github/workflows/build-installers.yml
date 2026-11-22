@@ -101,6 +101,8 @@ jobs:
     name: Build Android APK
     needs: [ prepare-version ]
     runs-on: ubuntu-latest
+    env:
+      REQUIRE_RELEASE_SIGNING: 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -122,6 +124,33 @@ jobs:
 
       - run: flutter pub get
 
+      - name: Restore release signing key
+        shell: python
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          import base64, os
+          from pathlib import Path
+
+          for name in ('KEYSTORE_BASE64', 'KEYSTORE_PASSWORD', 'KEY_ALIAS', 'KEY_PASSWORD'):
+              if not os.environ.get(name):
+                  raise SystemExit(f'Missing signing secret: {name}')
+          key = base64.b64decode(''.join(os.environ['KEYSTORE_BASE64'].split()), validate=True)
+          if not key:
+              raise SystemExit('Empty release keystore')
+          os.umask(0o077)
+          Path('android/app/upload-keystore.jks').write_bytes(key)
+          # Escape Java Properties syntax without treating secret values as shell code.
+          escapes = {'\\': r'\\', ' ': r'\ ', '\t': r'\t', '\n': r'\n', '\r': r'\r', '\f': r'\f'}
+          with Path('android/key.properties').open('w', encoding='utf-8') as props:
+              props.write('storeFile=upload-keystore.jks\n')
+              for prop, name in [('storePassword', 'KEYSTORE_PASSWORD'), ('keyAlias', 'KEY_ALIAS'), ('keyPassword', 'KEY_PASSWORD')]:
+                  value = ''.join(escapes.get(c, c) for c in os.environ[name])
+                  props.write(f'{prop}={value}\n')
+
       - name: Build universal APK
         run: |
           flutter build apk --release --build-name="${{ needs.prepare-version.outputs.version }}" --build-number="${{ needs.prepare-version.outputs.build_number }}" --dart-define=APP_VERSION="${{ needs.prepare-version.outputs.app_version }}"
@@ -132,6 +161,27 @@ jobs:
         run: |
           flutter build apk --release --split-per-abi --build-name="${{ needs.prepare-version.outputs.version }}" --build-number="${{ needs.prepare-version.outputs.build_number }}" --dart-define=APP_VERSION="${{ needs.prepare-version.outputs.app_version }}"
           cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk "dist/android/CallbookMaker-${{ needs.prepare-version.outputs.tag_name }}-android-arm64-v8a.apk"
+
+      - name: Verify release APK signers and version codes
+        shell: bash
+        env:
+          # Public certificate digest, not the keystore hash. Pin it across releases.
+          RELEASE_CERT_SHA256: '7c7f1dd565bc8031093516c7486666e47fb15b9e7942b1a496b1b7f11bc7c0c0'
+          EXPECTED_VERSION_CODE: ${{ needs.prepare-version.outputs.build_number }}
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          signer=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
+          test -x "$signer"
+          for apk in dist/android/*.apk; do
+            actual=$("$signer" verify --print-certs "$apk" | awk '/^Signer #[0-9]+ certificate SHA-256 digest:/ {print $NF}')
+            code=$("${signer%/*}/aapt" dump badging "$apk" | awk -F"'" '/^package: / {print $4}')
+            if [[ "$actual" != "$RELEASE_CERT_SHA256" || "$code" != "$EXPECTED_VERSION_CODE" ]]; then
+              echo "::error::Unexpected release certificate or versionCode for $apk"
+              exit 1
+            fi
+            echo "$apk versionCode=$code signer SHA-256: $actual"
+          done
 
       - uses: actions/upload-artifact@v4
         with:
