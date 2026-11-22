@@ -174,13 +174,14 @@ jobs:
           signer=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
           test -x "$signer"
           for apk in dist/android/*.apk; do
-            actual=$("$signer" verify --print-certs "$apk" | awk '/^Signer #[0-9]+ certificate SHA-256 digest:/ {print $NF}')
+            # SDK 36 prints "Signer #1", SDK 37 prints scheme labels such as "V2 Signer:".
+            actual=$("$signer" verify --print-certs "$apk" | awk '/^(Signer #[0-9]+|V[0-9.]+ Signer).*certificate SHA-256 digest:/ {print $NF}' | sort -u)
             code=$("${signer%/*}/aapt" dump badging "$apk" | awk -F"'" '/^package: / {print $4}')
+            echo "$apk versionCode=$code signer SHA-256: $actual"
             if [[ "$actual" != "$RELEASE_CERT_SHA256" || "$code" != "$EXPECTED_VERSION_CODE" ]]; then
               echo "::error::Unexpected release certificate or versionCode for $apk"
               exit 1
             fi
-            echo "$apk versionCode=$code signer SHA-256: $actual"
           done
 
       - uses: actions/upload-artifact@v4
