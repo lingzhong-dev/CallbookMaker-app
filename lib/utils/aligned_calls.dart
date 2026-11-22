@@ -1,6 +1,9 @@
 import 'dart:math' as math;
 
+import 'package:kuromoji_dart/kuromoji_dart.dart';
+
 import '../models/callbook_models.dart';
+import '../services/japanese_ruby_annotator.dart';
 import 'lrc_ruby_parser.dart';
 
 class ResolvedAlignedCue {
@@ -24,12 +27,14 @@ class AlignedLyricRun {
     required this.end,
     this.call,
     required this.rubyParts,
+    this.romaji,
   });
 
   final int start;
   final int end;
   final ResolvedAlignedCue? call;
   final List<RubySegment> rubyParts;
+  final String? romaji;
 }
 
 final _hexColorPattern = RegExp(r'^#[0-9a-fA-F]{6}$');
@@ -56,6 +61,7 @@ List<AlignedCallCue> normalizeAlignedCalls(
     final normalizedColor = _hexColorPattern.hasMatch(rawColor)
         ? rawColor.toUpperCase()
         : null;
+    final cleanRomaji = item.romaji?.trim();
     cleaned.add(
       AlignedCallCue(
         id: item.id.trim().isNotEmpty ? item.id : 'ac-$start-$end',
@@ -63,6 +69,7 @@ List<AlignedCallCue> normalizeAlignedCalls(
         end: end,
         text: text,
         colorHex: normalizedColor,
+        romaji: (cleanRomaji == null || cleanRomaji.isEmpty) ? null : cleanRomaji,
       ),
     );
   }
@@ -221,6 +228,8 @@ List<RubySegment> _sliceRubySegmentsRange(
 List<AlignedLyricRun> buildAlignedLyricRuns(
   LyricLine line, {
   required bool showRuby,
+  bool showRomaji = false,
+  Tokenizer? tokenizer,
 }) {
   final original = line.text.original;
   if (original.isEmpty) return const [];
@@ -247,11 +256,11 @@ List<AlignedLyricRun> buildAlignedLyricRuns(
     pos += seg.base.length;
   }
 
-  final runs = <AlignedLyricRun>[];
+  final rawRuns = <AlignedLyricRun>[];
   var cursor = 0;
   for (final cue in resolved) {
     if (cue.start > cursor) {
-      runs.add(
+      rawRuns.add(
         AlignedLyricRun(
           start: cursor,
           end: cue.start,
@@ -259,7 +268,7 @@ List<AlignedLyricRun> buildAlignedLyricRuns(
         ),
       );
     }
-    runs.add(
+    rawRuns.add(
       AlignedLyricRun(
         start: cue.start,
         end: cue.end,
@@ -270,7 +279,7 @@ List<AlignedLyricRun> buildAlignedLyricRuns(
     cursor = cue.end;
   }
   if (cursor < original.length) {
-    runs.add(
+    rawRuns.add(
       AlignedLyricRun(
         start: cursor,
         end: original.length,
@@ -278,7 +287,119 @@ List<AlignedLyricRun> buildAlignedLyricRuns(
       ),
     );
   }
-  return runs;
+  if (!showRomaji || rawRuns.isEmpty) return rawRuns;
+
+  final assigned = JapaneseRubyAnnotator.assignRomajiToRuns(
+    line,
+    [for (final r in rawRuns) (start: r.start, end: r.end)],
+    tokenizer: tokenizer ?? JapaneseRubyAnnotator.instance.loadedTokenizer,
+  );
+  return [
+    for (var i = 0; i < rawRuns.length; i++)
+      AlignedLyricRun(
+        start: rawRuns[i].start,
+        end: rawRuns[i].end,
+        call: rawRuns[i].call,
+        rubyParts: rawRuns[i].rubyParts,
+        romaji: assigned[i],
+      ),
+  ];
+}
+
+/// Subdivides non-call stretches into word/token pieces with aligned romaji so
+/// [RubyLyricText] can render Call pills, ruby/kanji, and word-aligned romaji
+/// vertically while still wrapping gracefully at word boundaries on narrow screens.
+List<AlignedLyricRun> buildAlignedWordRunsForRomaji(
+  LyricLine line, {
+  required bool showRuby,
+  Tokenizer? tokenizer,
+}) {
+  final original = line.text.original;
+  if (original.isEmpty) return const [];
+  final activeTokenizer =
+      tokenizer ?? JapaneseRubyAnnotator.instance.loadedTokenizer;
+  final baseRuns = buildAlignedLyricRuns(
+    line,
+    showRuby: showRuby,
+    showRomaji: false,
+    tokenizer: activeTokenizer,
+  );
+  if (baseRuns.isEmpty) return const [];
+
+  final rubyHtml = line.text.ruby;
+  final parsedRuby = (showRuby && rubyHtml != null && rubyHtml.contains('<ruby'))
+      ? parseRubySegments(rubyHtml, original)
+      : [RubySegment(base: original)];
+  final rubyPlain = parsedRuby.map((s) => s.base).join();
+  final segments = rubyPlain == original ? parsedRuby : [RubySegment(base: original)];
+  final spans = <_RubySpan>[];
+  var pos = 0;
+  for (final seg in segments) {
+    spans.add(
+      _RubySpan(
+        start: pos,
+        end: pos + seg.base.length,
+        base: seg.base,
+        rt: seg.rt,
+      ),
+    );
+    pos += seg.base.length;
+  }
+
+  final atoms = JapaneseRubyAnnotator.deriveRomajiAtoms(
+    line,
+    tokenizer: activeTokenizer,
+  );
+
+  final splitRuns = <AlignedLyricRun>[];
+  for (final run in baseRuns) {
+    if (run.call != null) {
+      splitRuns.add(run);
+      continue;
+    }
+
+    // Collect word/token cut boundaries strictly inside this non-call run.
+    final cuts = <int>{run.start, run.end};
+    for (final a in atoms) {
+      if (a.start > run.start && a.start < run.end) cuts.add(a.start);
+      if (a.end > run.start && a.end < run.end) cuts.add(a.end);
+    }
+    if (cuts.length <= 2) {
+      for (final sp in spans) {
+        if (sp.start > run.start && sp.start < run.end) cuts.add(sp.start);
+        if (sp.end > run.start && sp.end < run.end) cuts.add(sp.end);
+      }
+    }
+    final sorted = cuts.toList()..sort();
+    for (var i = 0; i < sorted.length - 1; i++) {
+      final s = sorted[i];
+      final e = sorted[i + 1];
+      if (e <= s) continue;
+      splitRuns.add(
+        AlignedLyricRun(
+          start: s,
+          end: e,
+          rubyParts: _sliceRubySegmentsRange(spans, s, e),
+        ),
+      );
+    }
+  }
+
+  final assigned = JapaneseRubyAnnotator.assignRomajiToRuns(
+    line,
+    [for (final r in splitRuns) (start: r.start, end: r.end)],
+    tokenizer: activeTokenizer,
+  );
+  return [
+    for (var i = 0; i < splitRuns.length; i++)
+      AlignedLyricRun(
+        start: splitRuns[i].start,
+        end: splitRuns[i].end,
+        call: splitRuns[i].call,
+        rubyParts: splitRuns[i].rubyParts,
+        romaji: assigned[i],
+      ),
+  ];
 }
 
 /// Merges two adjacent lyric lines cleanly, preserving ruby furigana, calls,

@@ -20,15 +20,9 @@ class GatewayConfigPanel extends StatefulWidget {
 }
 
 class _GatewayConfigPanelState extends State<GatewayConfigPanel> {
-  late final TextEditingController _backendCtrl;
-  late final TextEditingController _gatewayUrlCtrl;
   late final TextEditingController _neteaseCookieCtrl;
-  final FocusNode _backendUrlFocus = FocusNode();
-  final FocusNode _gatewayUrlFocus = FocusNode();
   final FocusNode _neteaseCookieFocus = FocusNode();
 
-  String _lastSyncedBackendUrl = '';
-  String _lastSyncedGatewayUrl = '';
   String _lastSyncedCookie = '';
   bool _obscureCookie = true;
   late bool _expanded;
@@ -38,23 +32,9 @@ class _GatewayConfigPanelState extends State<GatewayConfigPanel> {
     super.initState();
     _expanded = !widget.collapsible;
     final c = widget.controller;
-    _backendCtrl = TextEditingController(text: c.backendUrl);
-    _gatewayUrlCtrl = TextEditingController(text: c.savedGatewayUrl);
     _neteaseCookieCtrl = TextEditingController(text: c.savedNeteaseCookie);
-    _lastSyncedBackendUrl = c.backendUrl;
-    _lastSyncedGatewayUrl = c.savedGatewayUrl;
     _lastSyncedCookie = c.savedNeteaseCookie;
     c.gatewayListenable.addListener(_syncNetworkControllers);
-    _backendUrlFocus.addListener(_onBackendUrlFocusChanged);
-  }
-
-  void _onBackendUrlFocusChanged() {
-    if (!_backendUrlFocus.hasFocus && mounted) {
-      final trimmed = _backendCtrl.text.trim();
-      if (trimmed.isNotEmpty && trimmed != widget.controller.backendUrl) {
-        widget.controller.setBackendUrl(trimmed);
-      }
-    }
   }
 
   @override
@@ -74,20 +54,6 @@ class _GatewayConfigPanelState extends State<GatewayConfigPanel> {
 
   void _syncNetworkControllers() {
     final c = widget.controller;
-    if (c.backendUrl != _lastSyncedBackendUrl) {
-      _lastSyncedBackendUrl = c.backendUrl;
-      if (!_backendUrlFocus.hasFocus && _backendCtrl.text != c.backendUrl) {
-        _backendCtrl.text = c.backendUrl;
-      }
-    }
-    if (c.savedGatewayUrl != _lastSyncedGatewayUrl) {
-      _lastSyncedGatewayUrl = c.savedGatewayUrl;
-      if (!_gatewayUrlFocus.hasFocus &&
-          c.savedGatewayUrl.isNotEmpty &&
-          _gatewayUrlCtrl.text != c.savedGatewayUrl) {
-        _gatewayUrlCtrl.text = c.savedGatewayUrl;
-      }
-    }
     if (c.savedNeteaseCookie != _lastSyncedCookie) {
       _lastSyncedCookie = c.savedNeteaseCookie;
       if (!_neteaseCookieFocus.hasFocus &&
@@ -112,12 +78,7 @@ class _GatewayConfigPanelState extends State<GatewayConfigPanel> {
   @override
   void dispose() {
     widget.controller.gatewayListenable.removeListener(_syncNetworkControllers);
-    _backendUrlFocus.removeListener(_onBackendUrlFocusChanged);
-    _backendCtrl.dispose();
-    _gatewayUrlCtrl.dispose();
     _neteaseCookieCtrl.dispose();
-    _backendUrlFocus.dispose();
-    _gatewayUrlFocus.dispose();
     _neteaseCookieFocus.dispose();
     super.dispose();
   }
@@ -130,286 +91,292 @@ class _GatewayConfigPanelState extends State<GatewayConfigPanel> {
       builder: (context, _) {
         final scheme = context.colorScheme;
         final gw = c.gatewayStatus;
-        final isDesktop = c.isDesktopHost;
         final account = gw.neteaseAccount?.trim() ?? '';
-        final backendNodeGatewayActive =
-            c.backendOnline &&
-            (gw.managedByBackend || (gw.gatewayOnline && gw.nodeAvailable));
 
         return Card(
-      inert: true,
-      radius: AppTokens.radiusCard,
-      padding: const EdgeInsets.all(14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (widget.collapsible)
-            Semantics(
-              button: true,
-              label: _expanded ? '收起网络与账号配置' : '展开网络与账号配置',
-              child: PressSurface(
-                fill: const Color(0x00000000),
-                shape: AppShape.all(AppTokens.radiusSection),
-                tapTarget: AppTokens.minTapTargetSize,
-                onPressed: () => setState(() => _expanded = !_expanded),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            '网易云直连 & 可选后端服务',
-                            style: AppTextStyle.subheadline
-                                .of(context, emphasized: true)
-                                .copyWith(color: scheme.onSurface),
+          inert: true,
+          radius: AppTokens.radiusCard,
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (widget.collapsible)
+                Semantics(
+                  button: true,
+                  label: _expanded ? '收起网络与注音配置' : '展开网络与注音配置',
+                  child: PressSurface(
+                    fill: const Color(0x00000000),
+                    shape: AppShape.all(AppTokens.radiusSection),
+                    tapTarget: AppTokens.minTapTargetSize,
+                    onPressed: () => setState(() => _expanded = !_expanded),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '网易云直连与内置注音',
+                                style: AppTextStyle.subheadline
+                                    .of(context, emphasized: true)
+                                    .copyWith(color: scheme.onSurface),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                '直接连接与离线日语注音已就绪（点击展开配置）',
+                                style: AppTextStyle.caption2
+                                    .of(context)
+                                    .copyWith(color: scheme.onSurfaceVariant),
+                              ),
+                            ],
                           ),
-                          const SizedBox(height: 2),
-                          Text(
-                            c.backendOnline
-                                ? '后端注音在线 · 支持直接连接'
-                                : '直接连接已就绪（点击展开配置）',
-                            style: AppTextStyle.caption2.of(context).copyWith(
-                              color: scheme.onSurfaceVariant,
-                            ),
-                          ),
-                        ],
-                      ),
+                        ),
+                        TonalChip(
+                          label: _expanded ? '收起' : '配置',
+                          color: scheme.surfaceContainerHigh,
+                          foregroundColor: scheme.onSurface,
+                          onPressed: () =>
+                              setState(() => _expanded = !_expanded),
+                        ),
+                      ],
                     ),
-                    TonalChip(
-                      label: _expanded ? '收起' : '配置',
-                      color: scheme.surfaceContainerHigh,
-                      foregroundColor: scheme.onSurface,
-                      onPressed: () => setState(() => _expanded = !_expanded),
+                  ),
+                )
+              else
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '网易云直连与内置注音',
+                      style: AppTextStyle.headline
+                          .of(context, emphasized: true)
+                          .copyWith(color: scheme.onSurface),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '纯本地直连曲库 · 内置离线日语假名与罗马音引擎',
+                      style: AppTextStyle.caption1.of(context).copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
                     ),
                   ],
                 ),
-              ),
-            )
-          else
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
+              if (_expanded) ...[
+                const SizedBox(height: 10),
                 Text(
-                  '网易云直连 & 可选后端服务',
-                  style: AppTextStyle.headline
-                      .of(context, emphasized: true)
-                      .copyWith(color: scheme.onSurface),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  c.backendOnline
-                      ? '后端注音在线 · 支持直接连接'
-                      : '直接连接已就绪 · 可选接入注音服务',
+                  '免配置后端：App 内置直接连接引擎检索网易云与 LRCLIB，并内置离线日语形态素词典自动标注假名与罗马音；粘贴 MUSIC_U 可登录账号解锁完整试听。',
                   style: AppTextStyle.caption1.of(context).copyWith(
                     color: scheme.onSurfaceVariant,
                   ),
                 ),
-              ],
-            ),
-          if (_expanded) ...[
-            const SizedBox(height: 10),
-            Text(
-              c.backendOnline
-                  ? '已连接注音服务后端（日语假名/罗马音注音可用）；未开网关时自动直接连接曲库'
-                  : '免后端：App 内置直接连接引擎检索网易云与 LRCLIB；粘贴 MUSIC_U 可登录账号，可选连接注音服务获取假名注音',
-              style: AppTextStyle.caption1.of(context).copyWith(
-                color: scheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: [
-                TonalChip(
-                  label: '直接连接',
-                  color: scheme.primaryContainer,
-                  foregroundColor: scheme.onPrimaryContainer,
-                ),
-                TonalChip(
-                  label: c.backendOnline ? '后端注音在线' : '后端未连 (可选)',
-                  color: c.backendOnline
-                      ? scheme.successContainer
-                      : scheme.surfaceContainerHigh,
-                  foregroundColor: c.backendOnline
-                      ? scheme.onSuccessContainer
-                      : scheme.onSurfaceVariant,
-                ),
-                if (backendNodeGatewayActive)
-                  TonalChip(
-                    label: 'Node 网关运行中',
-                    color: scheme.successContainer,
-                    foregroundColor: scheme.onSuccessContainer,
-                  ),
-                if (account.isNotEmpty)
-                  TonalChip(
-                    label: '已登录: $account',
-                    color: scheme.successContainer,
-                    foregroundColor: scheme.onSuccessContainer,
-                  )
-                else if (gw.cookieConfigured)
-                  TonalChip(
-                    label: '已存 Cookie',
-                    color: scheme.secondaryContainer,
-                    foregroundColor: scheme.onSecondaryContainer,
-                  ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _backendCtrl,
-                    focusNode: _backendUrlFocus,
-                    decoration: const InputDecoration(
-                      hintText:
-                          '可选注音服务地址：桌面 127.0.0.1:8000 / 模拟器 10.0.2.2:8000',
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    TonalChip(
+                      label: '直接连接',
+                      color: scheme.primaryContainer,
+                      foregroundColor: scheme.onPrimaryContainer,
                     ),
-                    onSubmitted: (v) => c.setBackendUrl(v),
+                    TonalChip(
+                      label: c.offlineRubyEnabled ? '内置注音就绪' : '离线注音已关',
+                      color: c.offlineRubyEnabled
+                          ? scheme.successContainer
+                          : scheme.surfaceContainerHigh,
+                      foregroundColor: c.offlineRubyEnabled
+                          ? scheme.onSuccessContainer
+                          : scheme.onSurfaceVariant,
+                    ),
+                    if (account.isNotEmpty)
+                      TonalChip(
+                        label: '已登录: $account',
+                        color: scheme.successContainer,
+                        foregroundColor: scheme.onSuccessContainer,
+                      )
+                    else if (gw.cookieConfigured)
+                      TonalChip(
+                        label: '已存 Cookie',
+                        color: scheme.secondaryContainer,
+                        foregroundColor: scheme.onSecondaryContainer,
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: ShapeDecoration(
+                    color: SurfaceLevel.block.colorOf(scheme),
+                    shape: AppShape.md,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _SettingSwitchRow(
+                        title: '内置离线日语注音（Ruby / 罗马音）',
+                        subtitle: '搜歌或导入日语 LRC 时自动生成假名注音与罗马音，纯中文歌词自动跳过',
+                        value: c.offlineRubyEnabled,
+                        onChanged: c.setOfflineRubyEnabled,
+                      ),
+                      const SizedBox(height: 10),
+                      _SettingSwitchRow(
+                        title: '优先使用网易云自带罗马音（romalrc）',
+                        subtitle: '网易云曲库返回官方罗马音时优先采用，缺失行由内置离线引擎补全',
+                        value: c.preferNeteaseRomaLrc,
+                        onChanged: c.setPreferNeteaseRomaLrc,
+                      ),
+                      const SizedBox(height: 10),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TonalButton(
+                          size: TonalButtonSize.compact,
+                          label: c.isAnnotatingRuby
+                              ? '正在生成日语注音…'
+                              : '为当前歌曲生成 / 刷新日语注音',
+                          onPressed: c.isAnnotatingRuby
+                              ? null
+                              : () => c.annotateCurrentProjectLyrics(),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(width: 8),
-                TonalButton(
-                  size: TonalButtonSize.compact,
-                  label: '连接',
-                  onPressed: () => c.setBackendUrl(_backendCtrl.text),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '网易云 Cookie（可选：支持完整 Cookie 或 MUSIC_U）',
+                        style: AppTextStyle.caption1
+                            .of(context, emphasized: true)
+                            .copyWith(color: scheme.onSurface),
+                      ),
+                    ),
+                    if (gw.cookieConfigured && gw.cookieMasked.isNotEmpty)
+                      Text(
+                        '已存: ${gw.cookieMasked}',
+                        style: AppTextStyle.caption1.of(context).copyWith(
+                          color: scheme.onSurfaceVariant,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                  ],
                 ),
-                if (isDesktop && !c.backendOnline) ...[
-                  const SizedBox(width: 8),
-                  TonalButton(
-                    size: TonalButtonSize.compact,
-                    label: c.isLaunchingBackend ? '启动中' : '启动后端',
-                    onPressed: c.isLaunchingBackend
-                        ? null
-                        : c.launchLocalBackendOnDesktop,
+                const SizedBox(height: 6),
+                TextField(
+                  controller: _neteaseCookieCtrl,
+                  focusNode: _neteaseCookieFocus,
+                  obscureText: _obscureCookie,
+                  maxLines: _obscureCookie ? 1 : 3,
+                  minLines: 1,
+                  decoration: const InputDecoration(
+                    hintText: '粘贴 MUSIC_U=... 完整 Cookie 或纯 MUSIC_U 字符串（留空即游客直连）',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    TonalButton(
+                      size: TonalButtonSize.compact,
+                      label: '粘贴 Cookie',
+                      onPressed: _pasteCookieFromClipboard,
+                    ),
+                    TonalButton(
+                      size: TonalButtonSize.compact,
+                      label: _obscureCookie ? '显示明文' : '隐藏 Cookie',
+                      onPressed: () =>
+                          setState(() => _obscureCookie = !_obscureCookie),
+                    ),
+                    TonalButton(
+                      size: TonalButtonSize.compact,
+                      label: '清空输入',
+                      onPressed: () =>
+                          setState(() => _neteaseCookieCtrl.clear()),
+                    ),
+                    TonalButton(
+                      size: TonalButtonSize.compact,
+                      label: '检测直连状态',
+                      onPressed: () =>
+                          c.refreshGatewayStatus(probeDirect: true),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                FilledButton(
+                  onPressed: c.isConfiguringGateway
+                      ? null
+                      : () async {
+                          await c.oneClickConfigureAndStartGateway(
+                            cookie: _neteaseCookieCtrl.text,
+                          );
+                        },
+                  child: Text(
+                    c.isConfiguringGateway
+                        ? '正在验证与保存...'
+                        : '验证并保存 Cookie（直接连接）',
+                  ),
+                ),
+                if (gw.message.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    gw.message,
+                    style: AppTextStyle.caption1.of(context).copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
                   ),
                 ],
               ],
-            ),
-            if (c.backendOnline) ...[
-              const SizedBox(height: 8),
-              TextField(
-                controller: _gatewayUrlCtrl,
-                focusNode: _gatewayUrlFocus,
-                decoration: const InputDecoration(
-                  hintText: '可选后端网关地址（默认 http://127.0.0.1:3000）',
-                ),
-              ),
             ],
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    '网易云 Cookie（可选：支持完整 Cookie 或 MUSIC_U）',
-                    style: AppTextStyle.caption1
-                        .of(context, emphasized: true)
-                        .copyWith(color: scheme.onSurface),
-                  ),
-                ),
-                if (gw.cookieConfigured && gw.cookieMasked.isNotEmpty)
-                  Text(
-                    '已存: ${gw.cookieMasked}',
-                    style: AppTextStyle.caption1.of(context).copyWith(
-                      color: scheme.onSurfaceVariant,
-                      fontFeatures: const [FontFeature.tabularFigures()],
-                    ),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            TextField(
-              controller: _neteaseCookieCtrl,
-              focusNode: _neteaseCookieFocus,
-              obscureText: _obscureCookie,
-              maxLines: _obscureCookie ? 1 : 3,
-              minLines: 1,
-              decoration: const InputDecoration(
-                hintText: '粘贴 MUSIC_U=... 完整 Cookie 或纯 MUSIC_U 字符串（留空即游客直连）',
-              ),
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                TonalButton(
-                  size: TonalButtonSize.compact,
-                  label: '粘贴 Cookie',
-                  onPressed: _pasteCookieFromClipboard,
-                ),
-                TonalButton(
-                  size: TonalButtonSize.compact,
-                  label: _obscureCookie ? '显示明文' : '隐藏 Cookie',
-                  onPressed: () =>
-                      setState(() => _obscureCookie = !_obscureCookie),
-                ),
-                TonalButton(
-                  size: TonalButtonSize.compact,
-                  label: '清空输入',
-                  onPressed: () => setState(() => _neteaseCookieCtrl.clear()),
-                ),
-                TonalButton(
-                  size: TonalButtonSize.compact,
-                  label: '检测直连状态',
-                  onPressed: () => c.refreshGatewayStatus(probeDirect: true),
-                ),
-                if (c.backendOnline && gw.managedByBackend)
-                  TonalButton(
-                    size: TonalButtonSize.compact,
-                    label: '停止网关',
-                    onPressed:
-                        c.isConfiguringGateway ? null : c.stopManagedGateway,
-                  ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            FilledButton(
-              onPressed: c.isConfiguringGateway
-                  ? null
-                  : () async {
-                      await c.oneClickConfigureAndStartGateway(
-                        cookie: _neteaseCookieCtrl.text,
-                        gatewayUrl: _gatewayUrlCtrl.text,
-                      );
-                    },
-              child: Text(
-                c.isConfiguringGateway
-                    ? '正在验证与配置...'
-                    : (c.backendOnline &&
-                              gw.nodeAvailable &&
-                              gw.packageAvailable
-                          ? '一键写入 Cookie 并启动网关'
-                          : '验证并保存 Cookie（直接连接）'),
-              ),
-            ),
-            if (gw.message.isNotEmpty || gw.pid != null) ...[
-              const SizedBox(height: 8),
-              Text(
-                '${gw.message}${gw.pid != null ? ' (PID ${gw.pid})' : ''}',
-                style: AppTextStyle.caption1.of(context).copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
-              ),
-            ],
-            if (c.backendOnline &&
-                !gw.gatewayOnline &&
-                (!gw.nodeAvailable || !gw.packageAvailable)) ...[
-              const SizedBox(height: 4),
-              Text(
-                '提示：注音服务后端未配置 Node 网关，App 将直接使用内置直接连接引擎检索网易云（同时保留后端注音增强）。',
-                style: AppTextStyle.caption1.of(context).copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
-              ),
-            ],
-          ],
-        ],
-      ),
+          ),
         );
       },
+    );
+  }
+}
+
+class _SettingSwitchRow extends StatelessWidget {
+  const _SettingSwitchRow({
+    required this.title,
+    required this.subtitle,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final String title;
+  final String subtitle;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = context.colorScheme;
+    return Row(
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: AppTextStyle.caption1
+                    .of(context, emphasized: true)
+                    .copyWith(color: scheme.onSurface),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                subtitle,
+                style: AppTextStyle.caption2.of(context).copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 12),
+        Switch(value: value, onChanged: onChanged, semanticLabel: title),
+      ],
     );
   }
 }

@@ -441,6 +441,13 @@ class _ExportViewState extends State<ExportView> {
       buf.writeln('- [$callColumn]$gtSegment$shoutSegment');
       buf.writeln('  $mainLineText$updraftSegment');
       if (!line.kind.isSection &&
+          c.displayLayers.showRomaji &&
+          line.text.romaji != null &&
+          line.text.romaji!.trim().isNotEmpty) {
+        buf.writeln('  `${line.text.romaji!.trim()}`');
+      }
+      if (!line.kind.isSection &&
+          c.displayLayers.showTranslation &&
           line.text.translation != null &&
           line.text.translation!.trim().isNotEmpty) {
         buf.writeln('  _${line.text.translation}_');
@@ -586,6 +593,41 @@ class _ExportViewState extends State<ExportView> {
                   const SizedBox(height: AppTokens.s12),
                   const LinearProgressIndicator(),
                 ],
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Text(
+                      '显示与导出层：',
+                      style: AppTextStyle.caption1.of(context).copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                    _ExportLayerChip(
+                      label: '日语注音 (Furigana)',
+                      selected: c.displayLayers.showRuby,
+                      onPressed: () => c.updateDisplayLayers(
+                        showRuby: !c.displayLayers.showRuby,
+                      ),
+                    ),
+                    _ExportLayerChip(
+                      label: '罗马音 (Romaji)',
+                      selected: c.displayLayers.showRomaji,
+                      onPressed: () => c.updateDisplayLayers(
+                        showRomaji: !c.displayLayers.showRomaji,
+                      ),
+                    ),
+                    _ExportLayerChip(
+                      label: '中文翻译',
+                      selected: c.displayLayers.showTranslation,
+                      onPressed: () => c.updateDisplayLayers(
+                        showTranslation: !c.displayLayers.showTranslation,
+                      ),
+                    ),
+                  ],
+                ),
               ],
             ),
           ),
@@ -1156,6 +1198,14 @@ class _CallbookLineRow extends StatelessWidget {
         original: line.text.original,
         rubyHtml: line.text.ruby,
         showRuby: displayLayers.showRuby,
+        lineRomaji: line.text.romaji,
+        showRomaji: displayLayers.showRomaji,
+        romajiStyle: TextStyle(
+          fontFamily: fontFamily ?? 'GoogleSans',
+          fontSize: 11,
+          color: const Color(0xFF0061FF),
+        ),
+        alignedRomajiHighlightColor: const Color(0xFF4F46E5),
         alignedCalls: line.alignedCalls,
         customShout: line.customShout,
         pillBackground: const Color(0xFFE0E7FF),
@@ -1282,6 +1332,14 @@ class _CallbookLineRow extends StatelessWidget {
                 ],
                 buildMainTextWithTrailing(),
                 if (!isSec &&
+                    !RubyLyricText.willRenderInlineRomaji(
+                      original: line.text.original,
+                      rubyHtml: line.text.ruby,
+                      lineRomaji: line.text.romaji,
+                      showRomaji: displayLayers.showRomaji,
+                      alignedCalls: line.alignedCalls,
+                      customShout: line.customShout,
+                    ) &&
                     displayLayers.showRomaji &&
                     line.text.romaji != null &&
                     line.text.romaji!.isNotEmpty)
@@ -1432,9 +1490,11 @@ double _measureRubyLineWidth({
 double _measureAlignedRubyLineWidth({
   required LyricLine line,
   required bool showRuby,
+  required bool showRomaji,
   required TextStyle baseStyle,
   required TextStyle rtStyle,
   required TextStyle alignedPillStyle,
+  required TextStyle romajiStyle,
 }) {
   if (line.alignedCalls.isEmpty && line.customShout.trim().isEmpty) {
     return _measureRubyLineWidth(
@@ -1445,7 +1505,17 @@ double _measureAlignedRubyLineWidth({
       rtStyle: rtStyle,
     );
   }
-  final runs = buildAlignedLyricRuns(line, showRuby: showRuby);
+  final inlineRomaji = RubyLyricText.willRenderInlineRomaji(
+    original: line.text.original,
+    rubyHtml: line.text.ruby,
+    lineRomaji: line.text.romaji,
+    showRomaji: showRomaji,
+    alignedCalls: line.alignedCalls,
+    customShout: line.customShout,
+  );
+  final runs = inlineRomaji
+      ? buildAlignedWordRunsForRomaji(line, showRuby: showRuby)
+      : buildAlignedLyricRuns(line, showRuby: showRuby);
   if (runs.isEmpty) {
     return _measureRubyLineWidth(
       original: line.text.original,
@@ -1463,11 +1533,33 @@ double _measureAlignedRubyLineWidth({
       final rtW = seg.rt == null ? 0.0 : _measureTextWidth(seg.rt!, rtStyle);
       sliceW += math.max(baseW, rtW);
     }
+    var runRomajiW = 0.0;
+    if (inlineRomaji) {
+      final rText = (run.romaji ?? '').trim();
+      final rStyle = run.call != null
+          ? romajiStyle.copyWith(fontWeight: FontWeight.w700)
+          : romajiStyle;
+      final pad = run.call != null ? 8.0 : (rText.isEmpty ? 1.0 : 5.0);
+      runRomajiW =
+          (rText.isEmpty ? 0.0 : _measureTextWidth(rText, rStyle)) + pad;
+    }
     if (run.call != null) {
-      final pillW = 14.0 + _measureTextWidth(run.call!.text, alignedPillStyle) + 2.0;
-      total += math.max(sliceW, pillW) + 2.0;
+      final cueRomaji = showRomaji ? (run.call!.cue.romaji ?? '').trim() : '';
+      var pillInnerW = _measureTextWidth(run.call!.text, alignedPillStyle);
+      if (cueRomaji.isNotEmpty) {
+        final pillRomaStyle = alignedPillStyle.copyWith(
+          fontSize: ((alignedPillStyle.fontSize ?? 10.5) - 1.5).clamp(
+            8.5,
+            11.5,
+          ),
+          fontWeight: FontWeight.w600,
+        );
+        pillInnerW += 4.0 + _measureTextWidth(cueRomaji, pillRomaStyle);
+      }
+      final pillW = 14.0 + pillInnerW + 2.0;
+      total += math.max(sliceW, math.max(pillW, runRomajiW)) + 3.0;
     } else {
-      total += sliceW;
+      total += math.max(sliceW, runRomajiW);
     }
   }
   return total;
@@ -1594,9 +1686,11 @@ double _measureUnconstrainedExportWidth({
       mainRowWidth = _measureAlignedRubyLineWidth(
         line: line,
         showRuby: controller.displayLayers.showRuby,
+        showRomaji: controller.displayLayers.showRomaji,
         baseStyle: lyricBaseStyle,
         rtStyle: rtStyle,
         alignedPillStyle: alignedPillStyle,
+        romajiStyle: romajiStyle,
       );
       if (line.tailUpdraft) {
         mainRowWidth += 8.0 + updraftPillWidth;
@@ -1942,6 +2036,58 @@ class _ExportEditorInfoDialogState extends State<_ExportEditorInfoDialog> {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ExportLayerChip extends StatelessWidget {
+  const _ExportLayerChip({
+    required this.label,
+    required this.selected,
+    required this.onPressed,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = context.colorScheme;
+    final fg = selected ? scheme.onPrimaryContainer : scheme.onSurfaceVariant;
+    final bg = selected
+        ? scheme.primaryContainer
+        : scheme.surfaceContainerHigh;
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: label,
+      child: PressSurface(
+        fill: bg,
+        shape: AppShape.full,
+        foreground: fg,
+        inkColor: fg,
+        selected: selected,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        onPressed: onPressed,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (selected) ...[
+              GlyphIcon(Glyphs.check, size: 13, color: fg),
+              const SizedBox(width: 4),
+            ],
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: AppTextStyle.caption1
+                  .of(context, emphasized: selected)
+                  .copyWith(color: fg),
+            ),
+          ],
         ),
       ),
     );

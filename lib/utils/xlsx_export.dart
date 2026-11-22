@@ -409,7 +409,8 @@ String _formatCallFormula(LyricLine line, Map<String, CallPreset> presetMap) {
   for (final aligned in line.alignedCalls) {
     final t = aligned.text.trim();
     if (t.isNotEmpty) {
-      tokens.add(t);
+      final cueRomaji = (aligned.romaji ?? '').trim();
+      tokens.add(cueRomaji.isNotEmpty ? '$t($cueRomaji)' : t);
     }
   }
   if (tokens.isEmpty) return '';

@@ -358,6 +358,7 @@ class AlignedCallCue {
     required this.end,
     required this.text,
     this.colorHex,
+    this.romaji,
   });
 
   final String id;
@@ -365,6 +366,7 @@ class AlignedCallCue {
   final int end;
   final String text;
   final String? colorHex;
+  final String? romaji;
 
   Color? get color {
     final raw = colorHex?.trim();
@@ -388,12 +390,15 @@ class AlignedCallCue {
     String? text,
     String? colorHex,
     bool clearColorHex = false,
+    String? romaji,
+    bool clearRomaji = false,
   }) => AlignedCallCue(
     id: id ?? this.id,
     start: start ?? this.start,
     end: end ?? this.end,
     text: text ?? this.text,
     colorHex: clearColorHex ? null : (colorHex ?? this.colorHex),
+    romaji: clearRomaji ? null : (romaji ?? this.romaji),
   );
 
   Map<String, dynamic> toJson() => {
@@ -402,16 +407,19 @@ class AlignedCallCue {
     'end': end,
     'text': text,
     if (colorHex != null && colorHex!.trim().isNotEmpty) 'color': colorHex,
+    if (romaji != null && romaji!.trim().isNotEmpty) 'romaji': romaji!.trim(),
   };
 
   factory AlignedCallCue.fromJson(Map<String, dynamic> json) {
     final rawColor = json['color']?.toString().trim();
+    final rawRomaji = json['romaji']?.toString().trim();
     return AlignedCallCue(
       id: json['id']?.toString() ?? 'ac-${DateTime.now().millisecondsSinceEpoch}',
       start: (json['start'] as num?)?.round() ?? 0,
       end: (json['end'] as num?)?.round() ?? 1,
       text: json['text']?.toString() ?? '',
       colorHex: (rawColor == null || rawColor.isEmpty) ? null : rawColor,
+      romaji: (rawRomaji == null || rawRomaji.isEmpty) ? null : rawRomaji,
     );
   }
 }
@@ -785,6 +793,7 @@ class TrackDetailResponse {
     this.audioUrl = '',
     this.rawLrc = '',
     this.translatedLrc = '',
+    this.romaLrc = '',
     this.lines = const [],
   });
 
@@ -792,6 +801,7 @@ class TrackDetailResponse {
   final String audioUrl;
   final String rawLrc;
   final String translatedLrc;
+  final String romaLrc;
   final List<LyricLine> lines;
 
   factory TrackDetailResponse.fromJson(Map<String, dynamic> json) {
@@ -803,6 +813,7 @@ class TrackDetailResponse {
       audioUrl: json['audioUrl']?.toString() ?? '',
       rawLrc: json['rawLrc']?.toString() ?? '',
       translatedLrc: json['translatedLrc']?.toString() ?? '',
+      romaLrc: json['romaLrc']?.toString() ?? '',
       lines: [
         for (final item in rawLines)
           if (item is Map<String, dynamic>) LyricLine.fromJson(item),

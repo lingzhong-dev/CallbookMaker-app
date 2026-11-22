@@ -11,6 +11,7 @@ import '../models/callbook_models.dart';
 import '../services/api_client.dart';
 import '../services/audio_metronome_service.dart';
 import '../services/desktop_service_launcher.dart';
+import '../services/japanese_ruby_annotator.dart';
 import '../services/lrclib_direct_client.dart';
 import '../services/netease_direct_client.dart';
 import '../services/project_storage.dart';
@@ -133,12 +134,14 @@ class CallbookController extends ChangeNotifier {
     NeteaseDirectClient? neteaseDirectClient,
     LrclibDirectClient? lrclibDirectClient,
     DesktopServiceLauncher? desktopLauncher,
+    JapaneseRubyAnnotator? rubyAnnotator,
     bool enableAudioOutput = true,
   }) : _api = apiClient ?? CallbookApiClient(),
        _storage = storage ?? ProjectStorage(),
        _neteaseDirect = neteaseDirectClient ?? NeteaseDirectClient(),
        _lrclibDirect = lrclibDirectClient ?? LrclibDirectClient(),
-       _desktopLauncher = desktopLauncher ?? DesktopServiceLauncher() {
+       _desktopLauncher = desktopLauncher ?? DesktopServiceLauncher(),
+       _rubyAnnotator = rubyAnnotator ?? JapaneseRubyAnnotator.instance {
     _audio = AudioMetronomeService(
       enablePlatformAudio: enableAudioOutput,
       onTimeUpdate: _handleTimeUpdate,
@@ -170,6 +173,7 @@ class CallbookController extends ChangeNotifier {
   late final NeteaseDirectClient _neteaseDirect;
   late final LrclibDirectClient _lrclibDirect;
   late final DesktopServiceLauncher _desktopLauncher;
+  late final JapaneseRubyAnnotator _rubyAnnotator;
   late final AudioMetronomeService _audio;
 
   // Scoped sub-notifiers to keep high-frequency playback/status updates from
@@ -261,6 +265,9 @@ class CallbookController extends ChangeNotifier {
   bool _isFetchingLyrics = false;
   bool _isConfiguringGateway = false;
   bool _isLaunchingBackend = false;
+  bool _offlineRubyEnabled = true;
+  bool _preferNeteaseRomaLrc = true;
+  bool _isAnnotatingRuby = false;
   GatewayStatusInfo _gatewayStatus = const GatewayStatusInfo();
   String _savedGatewayUrl = 'http://127.0.0.1:3000';
   String _savedNeteaseCookie = '';
@@ -384,6 +391,9 @@ class CallbookController extends ChangeNotifier {
   bool get isSearching => _isSearching;
   bool get isConfiguringGateway => _isConfiguringGateway;
   bool get isLaunchingBackend => _isLaunchingBackend;
+  bool get offlineRubyEnabled => _offlineRubyEnabled;
+  bool get preferNeteaseRomaLrc => _preferNeteaseRomaLrc;
+  bool get isAnnotatingRuby => _isAnnotatingRuby;
   bool get isDesktopHost => _desktopLauncher.isDesktop;
   GatewayStatusInfo get gatewayStatus => _gatewayStatus;
   String get savedGatewayUrl => _savedGatewayUrl;
@@ -1017,6 +1027,8 @@ class CallbookController extends ChangeNotifier {
     _floatingNavDock = map['floatingNavDock'] != false;
     _useGoogleSans = map['useGoogleSans'] != false;
     _autoAdvanceOnTag = map['autoAdvanceOnTag'] == true;
+    _offlineRubyEnabled = map['offlineRubyEnabled'] != false;
+    _preferNeteaseRomaLrc = map['preferNeteaseRomaLrc'] != false;
     _textScale = ((map['textScale'] as num?)?.toDouble() ?? 1.0).clamp(0.85, 1.25);
   }
 
@@ -1362,6 +1374,71 @@ class CallbookController extends ChangeNotifier {
     _notifyThemeChanged();
   }
 
+  void setOfflineRubyEnabled(bool v) {
+    if (_offlineRubyEnabled == v) return;
+    _offlineRubyEnabled = v;
+    _saveThemePrefs();
+    _gatewayNotifier.notifyListeners();
+    notifyListeners();
+  }
+
+  void setPreferNeteaseRomaLrc(bool v) {
+    if (_preferNeteaseRomaLrc == v) return;
+    _preferNeteaseRomaLrc = v;
+    _saveThemePrefs();
+    _gatewayNotifier.notifyListeners();
+    notifyListeners();
+  }
+
+  /// Runs the built-in offline Japanese morphological annotator on the current
+  /// project's lyric lines, preserving existing romaji when [preferNeteaseRomaLrc]
+  /// is enabled unless [overwriteExistingRomaji] is explicitly true.
+  Future<int> annotateCurrentProjectLyrics({
+    bool forceJapanese = false,
+    bool overwriteExistingRomaji = false,
+  }) async {
+    if (_isAnnotatingRuby) return 0;
+    _isAnnotatingRuby = true;
+    _gatewayNotifier.notifyListeners();
+    try {
+      final before = _project.lines;
+      if (!JapaneseRubyAnnotator.shouldAnnotateLines(
+        before,
+        forceJapanese: forceJapanese,
+      )) {
+        setStatus('当前歌曲未检测到日语假名，已跳过日语注音');
+        return 0;
+      }
+      final annotated = await _rubyAnnotator.annotateLines(
+        before,
+        preferExistingRomaji: !overwriteExistingRomaji && _preferNeteaseRomaLrc,
+        forceJapanese: forceJapanese,
+      );
+      if (_disposed) return 0;
+      var updatedCount = 0;
+      for (var i = 0; i < annotated.length && i < before.length; i++) {
+        if (annotated[i].text.ruby != before[i].text.ruby ||
+            annotated[i].text.romaji != before[i].text.romaji) {
+          updatedCount++;
+        }
+      }
+      if (updatedCount > 0) {
+        _setProject(_project.copyWith(lines: annotated));
+        schedulePersist();
+        _notifyProjectChanged();
+        setStatus('已离线为 $updatedCount 行日语歌词生成假名注音与罗马音');
+      } else {
+        setStatus('当前歌曲的日语注音已是最新');
+      }
+      return updatedCount;
+    } finally {
+      _isAnnotatingRuby = false;
+      if (!_disposed) {
+        _gatewayNotifier.notifyListeners();
+      }
+    }
+  }
+
   void _saveThemePrefs() {
     unawaited(
       _storage.saveThemePrefs({
@@ -1374,6 +1451,8 @@ class CallbookController extends ChangeNotifier {
         'floatingNavDock': _floatingNavDock,
         'useGoogleSans': _useGoogleSans,
         'autoAdvanceOnTag': _autoAdvanceOnTag,
+        'offlineRubyEnabled': _offlineRubyEnabled,
+        'preferNeteaseRomaLrc': _preferNeteaseRomaLrc,
         'textScale': _textScale,
       }),
     );
@@ -1538,6 +1617,15 @@ class CallbookController extends ChangeNotifier {
       showTranslation: showTranslation,
     );
     unawaited(_storage.saveDisplayLayers(_displayLayers));
+    if (showRomaji == true && !_rubyAnnotator.isLoaded) {
+      unawaited(
+        _rubyAnnotator.ensureLoaded().then((t) {
+          if (t != null && !_disposed && _displayLayers.showRomaji) {
+            _notifyProjectChanged();
+          }
+        }),
+      );
+    }
     _notifyProjectChanged();
   }
 
@@ -1981,6 +2069,7 @@ class CallbookController extends ChangeNotifier {
     required int end,
     required String text,
     String? colorHex,
+    String? romaji,
   }) {
     final lines = [..._project.lines];
     final idx = lines.indexWhere((l) => l.id == lineId);
@@ -1990,6 +2079,7 @@ class CallbookController extends ChangeNotifier {
     if (originalLength <= 0) return;
     final cleanText = text.trim();
     if (cleanText.isEmpty) return;
+    final cleanRomaji = romaji?.trim();
 
     final cueId = (id != null && id.trim().isNotEmpty)
         ? id.trim()
@@ -2000,6 +2090,7 @@ class CallbookController extends ChangeNotifier {
       end: end,
       text: cleanText,
       colorHex: colorHex,
+      romaji: (cleanRomaji == null || cleanRomaji.isEmpty) ? null : cleanRomaji,
     );
     final existing = line.alignedCalls.where(
       (c) => c.id != cueId && !(start < c.end && end > c.start),
@@ -2637,13 +2728,39 @@ class CallbookController extends ChangeNotifier {
         }
       }
 
-      // Hybrid mode: if optional FastAPI backend is online & track came from direct mode
-      // (or lacks Ruby markup), annotate Japanese kanji with furigana & romaji.
       var rawLines = detail.lines;
+      if (rawLines.isEmpty && detail.rawLrc.trim().isNotEmpty) {
+        rawLines = parseLrcOffline(
+          detail.rawLrc,
+          translationLrc: detail.translatedLrc,
+          romaLrc: _preferNeteaseRomaLrc ? detail.romaLrc : '',
+        );
+      } else if (!_preferNeteaseRomaLrc && detail.romaLrc.trim().isNotEmpty) {
+        // User opted out of Netease romalrc; re-parse without romalrc so built-in
+        // offline engine (or blank) controls romaji cleanly.
+        rawLines = parseLrcOffline(
+          detail.rawLrc,
+          translationLrc: detail.translatedLrc,
+        );
+      }
+
+      if (_offlineRubyEnabled &&
+          rawLines.isNotEmpty &&
+          rawLines.every((l) => l.text.ruby == null)) {
+        try {
+          rawLines = await _rubyAnnotator.annotateLines(
+            rawLines,
+            preferExistingRomaji: _preferNeteaseRomaLrc,
+          );
+        } catch (_) {
+          // Keep parsed LRC lines if offline annotator is unavailable
+        }
+      }
+
+      // Optional legacy backend fallback if online & still lacks Ruby markup.
       if (_backendOnline &&
           detail.rawLrc.trim().isNotEmpty &&
-          (providerName == 'netease_direct' ||
-              rawLines.every((l) => l.text.ruby == null))) {
+          rawLines.every((l) => l.text.ruby == null)) {
         try {
           final rubyLines = await _api.parseLyricsWithRuby(
             lrc: detail.rawLrc,
@@ -2656,12 +2773,6 @@ class CallbookController extends ChangeNotifier {
         } catch (_) {
           // Keep offline LRC lines when backend parser is unavailable
         }
-      }
-      if (rawLines.isEmpty && detail.rawLrc.trim().isNotEmpty) {
-        rawLines = parseLrcOffline(
-          detail.rawLrc,
-          translationLrc: detail.translatedLrc,
-        );
       }
 
       if (_disposed) return;
@@ -2759,21 +2870,39 @@ class CallbookController extends ChangeNotifier {
   Future<void> importLrcText({
     required String lrc,
     String translationLrc = '',
+    String romaLrc = '',
     bool enableRuby = true,
   }) async {
-    List<LyricLine> lines;
-    if (_backendOnline) {
+    var lines = parseLrcOffline(
+      lrc,
+      translationLrc: translationLrc,
+      romaLrc: _preferNeteaseRomaLrc ? romaLrc : '',
+    );
+    if (enableRuby && _offlineRubyEnabled && lines.isNotEmpty) {
       try {
-        lines = await _api.parseLyricsWithRuby(
+        lines = await _rubyAnnotator.annotateLines(
+          lines,
+          preferExistingRomaji: _preferNeteaseRomaLrc,
+        );
+      } catch (_) {
+        // Keep offline parsed lines
+      }
+    }
+    if (enableRuby &&
+        _backendOnline &&
+        lines.every((l) => l.text.ruby == null)) {
+      try {
+        final backendLines = await _api.parseLyricsWithRuby(
           lrc: lrc,
           translationLrc: translationLrc,
           enableRuby: enableRuby,
         );
+        if (backendLines.isNotEmpty) {
+          lines = backendLines;
+        }
       } catch (_) {
-        lines = parseLrcOffline(lrc, translationLrc: translationLrc);
+        // Keep offline parsed lines
       }
-    } else {
-      lines = parseLrcOffline(lrc, translationLrc: translationLrc);
     }
     final hasMeasuredExternalAudio =
         _knownAudioDurationMs > 0 &&

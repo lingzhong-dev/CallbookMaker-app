@@ -213,32 +213,24 @@ void main() {
     });
   });
 
-  group('Req 3: Non-blocking startup init & animated loading splash', () {
-    testWidgets('LiveCallStudioApp with showStartupSplash renders splash then transitions cleanly into HomeShell', (tester) async {
+  group('Req 3: Non-blocking startup init & instant launch', () {
+    testWidgets('LiveCallStudioApp mounts HomeShell immediately on first frame without a splash overlay', (tester) async {
       SharedPreferences.setMockInitialValues({
         'live_call_studio_onboarding_v1': true,
       });
       final controller = CallbookController(enableAudioOutput: false);
       expect(controller.isLocalInitDone, isFalse);
+      await controller.init(awaitBackgroundSync: false);
+      expect(controller.isLocalInitDone, isTrue);
 
       tester.view.physicalSize = const Size(1280, 820);
       tester.view.devicePixelRatio = 1.0;
 
       try {
         await tester.pumpWidget(
-          LiveCallStudioApp(
-            controller: controller,
-            showStartupSplash: true,
-          ),
+          LiveCallStudioApp(controller: controller),
         );
         await tester.pump();
-
-        expect(find.text('正在准备演练工作台…'), findsOneWidget);
-        expect(find.text('CallbookMaker'), findsOneWidget);
-
-        await tester.pump(const Duration(milliseconds: 500));
-        expect(controller.isLocalInitDone, isTrue);
-        await tester.pump(const Duration(milliseconds: 350));
 
         expect(find.byType(HomeShell), findsOneWidget);
         expect(find.text('正在准备演练工作台…'), findsNothing);
@@ -499,7 +491,7 @@ void main() {
         await tester.pump(const Duration(milliseconds: 260));
         expect(find.text('更改主题色与其他高级设置'), findsOneWidget);
         expect(find.text('关于CallbookMaker'), findsOneWidget);
-        expect(find.text('配置网易云网关'), findsOneWidget);
+        expect(find.text('配置网易云 Cookie 与内置日语注音'), findsOneWidget);
 
         await tester.tap(find.text('关于'));
         await tester.pumpAndSettle();

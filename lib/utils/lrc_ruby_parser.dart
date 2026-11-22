@@ -74,23 +74,16 @@ LyricLineKind? detectExplicitSectionKind(String rawText) {
   return null;
 }
 
-/// Pure-Dart LRC fallback parser when offline (used alongside FastAPI `/api/lyrics/parse`).
+/// Pure-Dart LRC parser supporting optional translation (`tlyric`) and
+/// romaji (`romalrc`) tracks aligned by nearest timestamp.
 List<LyricLine> parseLrcOffline(
   String lrcText, {
   String translationLrc = '',
+  String romaLrc = '',
   int defaultDurationMs = 3000,
 }) {
-  final transMap = <int, String>{};
-  for (final rawLine in translationLrc.split(RegExp(r'\r\n|\r|\n'))) {
-    final matches = _lrcTimestampPattern.allMatches(rawLine).toList();
-    if (matches.isEmpty) continue;
-    final cleanText = rawLine.replaceAll(_lrcTimestampPattern, '').trim();
-    if (cleanText.isEmpty) continue;
-    for (final m in matches) {
-      final ms = _matchToMs(m);
-      transMap[ms] = cleanText;
-    }
-  }
+  final transMap = _parseAuxiliaryLrcMap(translationLrc);
+  final romaMap = _parseAuxiliaryLrcMap(romaLrc);
 
   final entries = <({int ms, String text})>[];
   final rawLines = lrcText.split(RegExp(r'\r\n|\r|\n'));
@@ -127,15 +120,8 @@ List<LyricLine> parseLrcOffline(
     final endMs = nextMs > current.ms ? nextMs : current.ms + defaultDurationMs;
 
     var originalText = current.text;
-    String? matchedTranslation;
-    var bestDiff = 600;
-    for (final entry in transMap.entries) {
-      final diff = (entry.key - current.ms).abs();
-      if (diff <= bestDiff) {
-        bestDiff = diff;
-        matchedTranslation = entry.value;
-      }
-    }
+    var matchedTranslation = _findNearestTimestampText(transMap, current.ms);
+    final matchedRomaji = _findNearestTimestampText(romaMap, current.ms);
     if (matchedTranslation == null) {
       for (final sep in const [' // ', ' || ']) {
         final sepIdx = originalText.indexOf(sep);
@@ -176,12 +162,46 @@ List<LyricLine> parseLrcOffline(
         endTimeMs: endMs,
         text: LyricText(
           original: originalText,
+          romaji: matchedRomaji,
           translation: matchedTranslation,
         ),
       ),
     );
   }
   return result;
+}
+
+Map<int, String> _parseAuxiliaryLrcMap(String rawLrc) {
+  final map = <int, String>{};
+  if (rawLrc.trim().isEmpty) return map;
+  for (final rawLine in rawLrc.split(RegExp(r'\r\n|\r|\n'))) {
+    final trimmed = rawLine.trim();
+    if (trimmed.isEmpty) continue;
+    if (RegExp(r'^\[[a-zA-Z]+:.*\]$').hasMatch(trimmed)) continue;
+    if (trimmed.startsWith('{"t":') && trimmed.contains('"c":')) continue;
+    final matches = _lrcTimestampPattern.allMatches(trimmed).toList();
+    if (matches.isEmpty) continue;
+    final cleanText = trimmed.replaceAll(_lrcTimestampPattern, '').trim();
+    if (cleanText.isEmpty) continue;
+    for (final m in matches) {
+      map[_matchToMs(m)] = cleanText;
+    }
+  }
+  return map;
+}
+
+String? _findNearestTimestampText(Map<int, String> map, int targetMs) {
+  if (map.isEmpty) return null;
+  String? best;
+  var bestDiff = 600;
+  for (final entry in map.entries) {
+    final diff = (entry.key - targetMs).abs();
+    if (diff <= bestDiff) {
+      bestDiff = diff;
+      best = entry.value;
+    }
+  }
+  return best;
 }
 
 int _matchToMs(RegExpMatch match) {

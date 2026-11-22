@@ -1,0 +1,11 @@
+name: kuromoji_dart
+description: Pure-Dart Japanese morphological analyzer (kuromoji + IPADIC assets) for offline furigana/romaji annotation.
+version: 1.0.0
+publish_to: none
+
+environment:
+  sdk: ">=3.10.0 <4.0.0"
+
+flutter:
+  assets:
+    - assets/dict/

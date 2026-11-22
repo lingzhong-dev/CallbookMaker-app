@@ -470,7 +470,7 @@ void main() {
           await tester.tap(find.descendant(of: find.byType(MoreView), matching: find.text('网关配置')));
           await tester.pumpAndSettle();
           expect(find.byType(GatewayConfigPanel), findsOneWidget);
-          expect(find.text('网易云直连 & 可选后端服务'), findsOneWidget);
+          expect(find.text('网易云直连与内置注音'), findsOneWidget);
           expect(find.bySemanticsLabel('返回更多'), findsOneWidget);
           await tester.tap(find.bySemanticsLabel('返回更多'));
           await tester.pumpAndSettle();

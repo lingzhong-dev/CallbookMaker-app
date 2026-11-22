@@ -632,7 +632,28 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
                       left: 0,
                       right: 0,
                       bottom: 0,
-                      child: Column(
+                      child: Stack(
+                        children: [
+                          Positioned.fill(
+                            child: IgnorePointer(
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    begin: Alignment.topCenter,
+                                    end: Alignment.bottomCenter,
+                                    colors: [
+                                      scheme.surface.withValues(alpha: 0.0),
+                                      scheme.surface.withValues(alpha: 0.78),
+                                      scheme.surface.withValues(alpha: 0.96),
+                                      scheme.surface,
+                                    ],
+                                    stops: const [0.0, 0.22, 0.52, 1.0],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          Column(
                         mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
@@ -727,31 +748,83 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
                                       : ordered.indexWhere(
                                           (l) => l.id == targetLine.id,
                                         );
+                                  final floatingBg = isDark
+                                      ? Color.alphaBlend(
+                                          scheme.primary.withValues(alpha: 0.06),
+                                          SurfaceLevel.floatingOf(scheme)
+                                              .colorOf(scheme),
+                                        )
+                                      : Color.alphaBlend(
+                                          scheme.primary.withValues(alpha: 0.025),
+                                          SurfaceLevel.floatingOf(scheme)
+                                              .colorOf(scheme),
+                                        );
+                                  final floatingBorder = isDark
+                                      ? scheme.primary.withValues(alpha: 0.34)
+                                      : scheme.outlineVariant.withValues(
+                                          alpha: 0.9,
+                                        );
                                   return Padding(
                                     padding: const EdgeInsets.fromLTRB(
-                                      16,
+                                      12,
                                       4,
-                                      16,
-                                      4,
+                                      12,
+                                      6,
                                     ),
                                     child: DecoratedBox(
                                       decoration: ShapeDecoration(
-                                        color: scheme.surfaceContainer,
-                                        shape: AppShape.xl,
+                                        color: floatingBg,
+                                        shape: RoundedSuperellipseBorder(
+                                          borderRadius:
+                                              AppTokens.radiusCardBorder,
+                                          side: BorderSide(
+                                            color: floatingBorder,
+                                            width: 1.0,
+                                          ),
+                                        ),
                                         shadows: [
                                           BoxShadow(
-                                            color: scheme.shadow
-                                                .withValues(alpha: 0.14),
-                                            blurRadius: 18,
-                                            offset: const Offset(0, 6),
+                                            color: scheme.shadow.withValues(
+                                              alpha: isDark ? 0.46 : 0.14,
+                                            ),
+                                            blurRadius: isDark ? 24 : 18,
+                                            offset: const Offset(0, 8),
                                           ),
+                                          if (isDark)
+                                            BoxShadow(
+                                              color: scheme.shadow
+                                                  .withValues(alpha: 0.24),
+                                              blurRadius: 6,
+                                              offset: const Offset(0, 2),
+                                            ),
                                         ],
                                       ),
                                       child: Padding(
-                                        padding: const EdgeInsets.all(10),
+                                        padding: const EdgeInsets.fromLTRB(
+                                          12,
+                                          7,
+                                          12,
+                                          10,
+                                        ),
                                         child: Column(
                                           mainAxisSize: MainAxisSize.min,
                                           children: [
+                                          Center(
+                                            child: Container(
+                                              width: 32,
+                                              height: 3.5,
+                                              margin: const EdgeInsets.only(
+                                                bottom: 7,
+                                              ),
+                                              decoration: ShapeDecoration(
+                                                color: scheme.outlineVariant
+                                                    .withValues(
+                                                      alpha: isDark ? 0.65 : 0.85,
+                                                    ),
+                                                shape: AppShape.full,
+                                              ),
+                                            ),
+                                          ),
                                           Row(
                                             children: [
                                               Expanded(
@@ -1125,8 +1198,10 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
                               selectedIndex: selectedIndex < 0 ? 0 : selectedIndex,
                               onSelected: (idx) => c.setRoute(_routes[idx]),
                             ),
-                        ],
-                      ),
+                          ],
+                        ),
+                      ],
+                    ),
                     ),
 
                   if (_practiceMounted || c.isPracticeMode)
@@ -1249,16 +1324,14 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
                           width: 8,
                           height: 8,
                           decoration: ShapeDecoration(
-                            color: c.backendOnline
-                                ? scheme.success
-                                : scheme.warning,
+                            color: scheme.success,
                             shape: AppShape.circle,
                           ),
                         ),
                         const SizedBox(width: 6),
                         Flexible(
                           child: Text(
-                            c.backendOnline ? '后端在线' : '直接连接',
+                            '直接连接',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: AppTextStyle.caption2.of(context).copyWith(

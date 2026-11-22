@@ -197,9 +197,7 @@ class _MoreViewState extends State<MoreView> {
                   iconBackground: scheme.primaryContainer,
                   iconColor: scheme.onPrimaryContainer,
                   title: c.siteText('网关配置'),
-                  subtitle: c.backendOnline
-                      ? '后端注音在线 · 支持直接连接'
-                      : '配置网易云网关',
+                  subtitle: '配置网易云 Cookie 与内置日语注音',
                   onTap: () => _openSubPage(context, _MoreSubPage.gateway),
                 ),
                 Padding(

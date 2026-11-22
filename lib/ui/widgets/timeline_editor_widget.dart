@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/rendering.dart';
@@ -6,6 +7,7 @@ import 'package:prism_ui/icons/icons.dart';
 import 'package:prism_ui/prism_ui.dart';
 
 import '../../models/callbook_models.dart';
+import '../../services/japanese_ruby_annotator.dart';
 import '../../state/callbook_controller.dart';
 import '../../utils/aligned_calls.dart';
 import '../../utils/lrc_ruby_parser.dart';
@@ -1513,40 +1515,64 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard>
           ),
         ],
         const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          runSpacing: 6,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          children: [
-            RubyLyricText(
-              original: line.text.original,
-              rubyHtml: line.text.ruby,
-              showRuby: c.displayLayers.showRuby,
-              alignedCalls: isSection ? const [] : line.alignedCalls,
-              customShout: isSection ? '' : line.customShout,
-              pillBackground: scheme.tertiaryContainer,
-              pillForeground: scheme.onTertiaryContainer,
-              pillBorderColor: scheme.outlineVariant,
-              underlineColor: const Color(0x886366F1),
-              baseStyle: AppTextStyle.body
-                  .of(context, emphasized: true)
-                  .copyWith(color: scheme.onSurface, fontSize: 17),
-            ),
-            if (line.tailUpdraft) const _TailUpdraftTagBadge(),
-          ],
-        ),
-        if (c.displayLayers.showRomaji &&
-            line.text.romaji != null &&
-            line.text.romaji!.isNotEmpty) ...[
-          const SizedBox(height: 3),
-          Text(
-            line.text.romaji!,
-            style: AppTextStyle.caption1.of(context).copyWith(
+        Builder(
+          builder: (context) {
+            final inlineRomaji = !isSection &&
+                RubyLyricText.willRenderInlineRomaji(
+                  original: line.text.original,
+                  rubyHtml: line.text.ruby,
+                  lineRomaji: line.text.romaji,
+                  showRomaji: c.displayLayers.showRomaji,
+                  alignedCalls: line.alignedCalls,
+                  customShout: line.customShout,
+                );
+            final romajiStyle = AppTextStyle.caption1.of(context).copyWith(
               fontFamily: 'GoogleSans',
               color: scheme.primary,
-            ),
-          ),
-        ],
+            );
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    RubyLyricText(
+                      original: line.text.original,
+                      rubyHtml: line.text.ruby,
+                      showRuby: c.displayLayers.showRuby,
+                      lineRomaji: line.text.romaji,
+                      showRomaji: !isSection && c.displayLayers.showRomaji,
+                      romajiStyle: romajiStyle,
+                      alignedRomajiHighlightColor: scheme.tertiary,
+                      alignedCalls: isSection ? const [] : line.alignedCalls,
+                      customShout: isSection ? '' : line.customShout,
+                      pillBackground: scheme.tertiaryContainer,
+                      pillForeground: scheme.onTertiaryContainer,
+                      pillBorderColor: scheme.outlineVariant,
+                      underlineColor: const Color(0x886366F1),
+                      baseStyle: AppTextStyle.body
+                          .of(context, emphasized: true)
+                          .copyWith(color: scheme.onSurface, fontSize: 17),
+                    ),
+                    if (line.tailUpdraft) const _TailUpdraftTagBadge(),
+                  ],
+                ),
+                if (!inlineRomaji &&
+                    c.displayLayers.showRomaji &&
+                    line.text.romaji != null &&
+                    line.text.romaji!.isNotEmpty) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    line.text.romaji!,
+                    style: romajiStyle,
+                  ),
+                ],
+              ],
+            );
+          },
+        ),
         if (c.displayLayers.showTranslation &&
             line.text.translation != null &&
             line.text.translation!.isNotEmpty) ...[
@@ -2328,7 +2354,7 @@ class _InlineAlignedCallsBar extends StatelessWidget {
     final res = await showAppDialog<_AlignedCallFormResult>(
       context: context,
       builder: (ctx) => _AlignedCallPickerDialog(
-        original: line.text.original,
+        line: line,
         initialCue: editing,
       ),
     );
@@ -2340,6 +2366,7 @@ class _InlineAlignedCallsBar extends StatelessWidget {
       end: res.end,
       text: res.text,
       colorHex: res.colorHex,
+      romaji: res.romaji,
     );
   }
 
@@ -2455,7 +2482,9 @@ class _AlignedCueChip extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(9, 4, 4, 4),
               onPressed: onEdit,
               child: Text(
-                '${cue.text} → $targetSnippet',
+                (cue.romaji ?? '').trim().isNotEmpty
+                    ? '${cue.text} (${cue.romaji!.trim()}) → $targetSnippet'
+                    : '${cue.text} → $targetSnippet',
                 style: AppTextStyle.caption1
                     .of(context, emphasized: true)
                     .copyWith(color: fg),
@@ -2492,21 +2521,23 @@ class _AlignedCallFormResult {
     required this.end,
     required this.text,
     this.colorHex,
+    this.romaji,
   });
 
   final int start;
   final int end;
   final String text;
   final String? colorHex;
+  final String? romaji;
 }
 
 class _AlignedCallPickerDialog extends StatefulWidget {
   const _AlignedCallPickerDialog({
-    required this.original,
+    required this.line,
     this.initialCue,
   });
 
-  final String original;
+  final LyricLine line;
   final AlignedCallCue? initialCue;
 
   @override
@@ -2519,24 +2550,32 @@ class _AlignedCallPickerDialogState extends State<_AlignedCallPickerDialog> {
   late int _start;
   late int _end;
   late final TextEditingController _textCtrl;
+  late final TextEditingController _romajiCtrl;
   String? _colorHex;
   bool _textAutoFilled = false;
+  late bool _showShoutRomajiField;
+
+  String get _original => widget.line.text.original;
 
   @override
   void initState() {
     super.initState();
     final spans = <({String text, int start, int end})>[];
     var offset = 0;
-    for (final rune in widget.original.runes) {
+    for (final rune in _original.runes) {
       final ch = String.fromCharCode(rune);
       spans.add((text: ch, start: offset, end: offset + ch.length));
       offset += ch.length;
     }
     _chars = spans;
 
+    final initRomaji = widget.initialCue?.romaji?.trim() ?? '';
+    _romajiCtrl = TextEditingController(text: initRomaji);
+    _showShoutRomajiField = initRomaji.isNotEmpty;
+
     if (widget.initialCue != null) {
-      _start = widget.initialCue!.start.clamp(0, widget.original.length - 1);
-      _end = widget.initialCue!.end.clamp(_start + 1, widget.original.length);
+      _start = widget.initialCue!.start.clamp(0, _original.length - 1);
+      _end = widget.initialCue!.end.clamp(_start + 1, _original.length);
       _textCtrl = TextEditingController(text: widget.initialCue!.text);
       _colorHex = widget.initialCue!.colorHex;
       _textAutoFilled = false;
@@ -2544,7 +2583,7 @@ class _AlignedCallPickerDialogState extends State<_AlignedCallPickerDialog> {
       _start = _chars.first.start;
       _end = _chars.first.end;
       _textCtrl = TextEditingController(
-        text: widget.original.substring(_start, _end),
+        text: _original.substring(_start, _end),
       );
       _textAutoFilled = true;
     } else {
@@ -2552,16 +2591,27 @@ class _AlignedCallPickerDialogState extends State<_AlignedCallPickerDialog> {
       _end = 0;
       _textCtrl = TextEditingController();
     }
+
+    if (!JapaneseRubyAnnotator.instance.isLoaded) {
+      unawaited(
+        JapaneseRubyAnnotator.instance.ensureLoaded().then((tokenizer) {
+          if (tokenizer != null && mounted) {
+            setState(() {});
+          }
+        }),
+      );
+    }
   }
 
   @override
   void dispose() {
     _textCtrl.dispose();
+    _romajiCtrl.dispose();
     super.dispose();
   }
 
   void _onTapChar(({String text, int start, int end}) span) {
-    final prevSlice = widget.original.substring(_start, _end);
+    final prevSlice = _original.substring(_start, _end);
     int nextStart;
     int nextEnd;
     if (_end - _start > 1 || (span.start == _start && span.end == _end)) {
@@ -2571,7 +2621,7 @@ class _AlignedCallPickerDialogState extends State<_AlignedCallPickerDialog> {
       nextStart = math.min(_start, span.start);
       nextEnd = math.max(_end, span.end);
     }
-    final nextSlice = widget.original.substring(nextStart, nextEnd);
+    final nextSlice = _original.substring(nextStart, nextEnd);
     setState(() {
       _start = nextStart;
       _end = nextEnd;
@@ -2584,12 +2634,42 @@ class _AlignedCallPickerDialogState extends State<_AlignedCallPickerDialog> {
     });
   }
 
+  void _autoFillShoutRomaji() {
+    final derived = JapaneseRubyAnnotator.deriveCueRomaji(
+      _textCtrl.text,
+      tokenizer: JapaneseRubyAnnotator.instance.loadedTokenizer,
+    );
+    if (derived != null && derived.isNotEmpty) {
+      setState(() {
+        _romajiCtrl.text = derived;
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = context.colorScheme;
-    final selectedSlice = widget.original.isEmpty
+    final selectedSlice = _original.isEmpty
         ? ''
-        : widget.original.substring(_start, _end);
+        : _original.substring(_start, _end);
+    final tokenizer = JapaneseRubyAnnotator.instance.loadedTokenizer;
+    final selectedRomaji = _original.isEmpty
+        ? ''
+        : JapaneseRubyAnnotator.sliceRomajiForRange(
+            widget.line,
+            _start,
+            _end,
+            tokenizer: tokenizer,
+          );
+    final derivedFullRomaji = JapaneseRubyAnnotator.sliceRomajiForRange(
+      widget.line,
+      0,
+      _original.length,
+      tokenizer: tokenizer,
+    );
+    final lineRomajiHint = (widget.line.text.romaji ?? '').trim().isNotEmpty
+        ? widget.line.text.romaji!.trim()
+        : derivedFullRomaji;
     final canSave = _end > _start && _textCtrl.text.trim().isNotEmpty;
 
     return AlertDialog(
@@ -2608,6 +2688,10 @@ class _AlignedCallPickerDialogState extends State<_AlignedCallPickerDialog> {
                     end: _end,
                     text: _textCtrl.text.trim(),
                     colorHex: _colorHex,
+                    romaji: _showShoutRomajiField &&
+                            _romajiCtrl.text.trim().isNotEmpty
+                        ? _romajiCtrl.text.trim()
+                        : null,
                   ),
                 )
               : null,
@@ -2624,6 +2708,16 @@ class _AlignedCallPickerDialogState extends State<_AlignedCallPickerDialog> {
               color: scheme.onSurfaceVariant,
             ),
           ),
+          if (lineRomajiHint.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              '整行罗马音参考：$lineRomajiHint',
+              style: AppTextStyle.caption2.of(context).copyWith(
+                fontFamily: 'GoogleSans',
+                color: scheme.primary,
+              ),
+            ),
+          ],
           const SizedBox(height: 8),
           Wrap(
             spacing: 4,
@@ -2663,6 +2757,38 @@ class _AlignedCallPickerDialogState extends State<_AlignedCallPickerDialog> {
                 ),
             ],
           ),
+          if (selectedRomaji.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+              decoration: ShapeDecoration(
+                color: scheme.surfaceContainerLow,
+                shape: AppShape.md,
+              ),
+              child: Row(
+                children: [
+                  Text(
+                    '对位词罗马音',
+                    style: AppTextStyle.caption2.of(context).copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      selectedRomaji,
+                      style: AppTextStyle.caption1
+                          .of(context, emphasized: true)
+                          .copyWith(
+                            fontFamily: 'GoogleSans',
+                            color: scheme.primary,
+                          ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 12),
           TextField(
             controller: _textCtrl,
@@ -2673,6 +2799,57 @@ class _AlignedCallPickerDialogState extends State<_AlignedCallPickerDialog> {
               _textAutoFilled = false;
             }),
           ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              TonalChip(
+                label: _showShoutRomajiField ? '收起喊声罗马音' : '+ 附带喊声罗马音（可选）',
+                color: _showShoutRomajiField
+                    ? scheme.primaryContainer
+                    : scheme.surfaceContainerHigh,
+                foregroundColor: _showShoutRomajiField
+                    ? scheme.onPrimaryContainer
+                    : scheme.onSurface,
+                onPressed: () => setState(() {
+                  _showShoutRomajiField = !_showShoutRomajiField;
+                  if (_showShoutRomajiField &&
+                      _romajiCtrl.text.trim().isEmpty) {
+                    final derived = JapaneseRubyAnnotator.deriveCueRomaji(
+                      _textCtrl.text,
+                      tokenizer: tokenizer,
+                    );
+                    if (derived != null) {
+                      _romajiCtrl.text = derived;
+                    }
+                  }
+                }),
+              ),
+              if (_showShoutRomajiField &&
+                  JapaneseRubyAnnotator.deriveCueRomaji(
+                        _textCtrl.text,
+                        tokenizer: tokenizer,
+                      ) !=
+                      null)
+                TonalChip(
+                  label: '按日语生成罗马音',
+                  color: scheme.secondaryContainer,
+                  foregroundColor: scheme.onSecondaryContainer,
+                  onPressed: _autoFillShoutRomaji,
+                ),
+            ],
+          ),
+          if (_showShoutRomajiField) ...[
+            const SizedBox(height: 8),
+            TextField(
+              controller: _romajiCtrl,
+              decoration: const InputDecoration(
+                hintText: '可选：喊声的罗马音标注（如 Seeno / Daisuki）',
+              ),
+            ),
+          ],
           const SizedBox(height: 12),
           Wrap(
             spacing: 8,

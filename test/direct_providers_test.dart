@@ -566,12 +566,18 @@ void main() {
         expect(controller.searchResults.first.provider, 'netease_direct');
 
         await controller.loadRemoteTrack(controller.searchResults.first);
-        expect(rubyCalled, isTrue);
+        // Built-in offline kuromoji annotator enriches Japanese lyrics locally first.
+        expect(rubyCalled, isFalse);
         final lyric = controller.sortedLines.firstWhere(
           (l) => l.kind == LyricLineKind.lyric,
         );
         expect(lyric.text.ruby, contains('<ruby>'));
-        expect(lyric.text.romaji, 'hoshizora wo miagete');
+        expect((lyric.text.romaji ?? '').toLowerCase(), 'hoshizora wo miagete');
+
+        // Disabling built-in offline annotator falls back to optional backend /api/lyrics/parse.
+        controller.setOfflineRubyEnabled(false);
+        await controller.loadRemoteTrack(controller.searchResults.first);
+        expect(rubyCalled, isTrue);
       } finally {
         controller.dispose();
       }
@@ -607,7 +613,7 @@ void main() {
 
           // Dashboard keeps AudioSourcePanel ('网易云直连'), while GatewayConfigPanel & GT beep live elsewhere
           expect(find.text('网易云直连'), findsOneWidget);
-          expect(find.text('网易云直连 & 可选后端服务'), findsNothing);
+          expect(find.text('网易云直连与内置注音'), findsNothing);
           expect(find.text('GT 前置警报音'), findsNothing);
 
           // Navigate 更多 -> 网关配置
@@ -617,7 +623,7 @@ void main() {
           await tester.pump();
           await tester.pump(const Duration(milliseconds: 50));
 
-          final gatewayHeader = find.text('网易云直连 & 可选后端服务');
+          final gatewayHeader = find.text('网易云直连与内置注音');
           await tester.ensureVisible(gatewayHeader);
           await tester.pump();
 
@@ -625,7 +631,8 @@ void main() {
           expect(tester.takeException(), isNull);
           expect(gatewayHeader, findsOneWidget);
           expect(find.text('直接连接'), findsAtLeastNWidgets(1));
-          expect(find.text('后端未连 (可选)'), findsOneWidget);
+          expect(find.text('内置注音就绪'), findsOneWidget);
+          expect(find.text('启动后端'), findsNothing);
           expect(find.text('验证并保存 Cookie（直接连接）'), findsOneWidget);
           expect(find.textContaining('未检测到 Node.js'), findsNothing);
         } finally {
@@ -685,7 +692,7 @@ void main() {
           await tester.pump();
           await tester.pump(const Duration(milliseconds: 50));
 
-          final gatewayHeader = find.text('网易云直连 & 可选后端服务');
+          final gatewayHeader = find.text('网易云直连与内置注音');
           final target = find.text('验证并保存 Cookie（直接连接）');
           await tester.scrollUntilVisible(
             target,

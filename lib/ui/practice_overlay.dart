@@ -1003,41 +1003,66 @@ class _PracticeLineCard extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 12),
-                RubyLyricText(
-                  original: line.text.original,
-                  rubyHtml: line.text.ruby,
-                  showRuby: displayLayers.showRuby,
-                  alignedCalls: isSec ? const [] : line.alignedCalls,
-                  customShout: isSec ? '' : line.customShout,
-                  pillBackground: scheme.tertiaryContainer,
-                  pillForeground: scheme.onTertiaryContainer,
-                  pillBorderColor: scheme.outlineVariant,
-                  underlineColor: scheme.tertiary,
-                  baseStyle: TextStyle(
-                    fontSize: (isPlaying ? 32 : 22) * textScale,
-                    fontWeight: FontWeight.w800,
-                    height: 1.32,
-                    color: scheme.onSurface,
-                  ),
-                  rtStyle: TextStyle(
-                    fontSize: (isPlaying ? 15 : 11) * textScale,
-                    fontWeight: FontWeight.w600,
-                    color: scheme.primary,
-                  ),
-                ),
-                if (displayLayers.showRomaji &&
-                    line.text.romaji != null &&
-                    line.text.romaji!.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    line.text.romaji!,
-                    style: TextStyle(
+                Builder(
+                  builder: (context) {
+                    final showInlineRomaji = !isSec &&
+                        RubyLyricText.willRenderInlineRomaji(
+                          original: line.text.original,
+                          rubyHtml: line.text.ruby,
+                          lineRomaji: line.text.romaji,
+                          showRomaji: displayLayers.showRomaji,
+                          alignedCalls: line.alignedCalls,
+                          customShout: line.customShout,
+                        );
+                    final romajiStyle = TextStyle(
                       fontFamily: 'GoogleSans',
                       fontSize: isPlaying ? 16 : 13,
                       color: scheme.tertiary,
-                    ),
-                  ),
-                ],
+                    );
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        RubyLyricText(
+                          original: line.text.original,
+                          rubyHtml: line.text.ruby,
+                          showRuby: displayLayers.showRuby,
+                          lineRomaji: line.text.romaji,
+                          showRomaji: !isSec && displayLayers.showRomaji,
+                          romajiStyle: romajiStyle,
+                          alignedRomajiHighlightColor: scheme.tertiary,
+                          alignedCalls: isSec ? const [] : line.alignedCalls,
+                          customShout: isSec ? '' : line.customShout,
+                          pillBackground: scheme.tertiaryContainer,
+                          pillForeground: scheme.onTertiaryContainer,
+                          pillBorderColor: scheme.outlineVariant,
+                          underlineColor: scheme.tertiary,
+                          baseStyle: TextStyle(
+                            fontSize: (isPlaying ? 32 : 22) * textScale,
+                            fontWeight: FontWeight.w800,
+                            height: 1.32,
+                            color: scheme.onSurface,
+                          ),
+                          rtStyle: TextStyle(
+                            fontSize: (isPlaying ? 15 : 11) * textScale,
+                            fontWeight: FontWeight.w600,
+                            color: scheme.primary,
+                          ),
+                        ),
+                        if (!isSec &&
+                            !showInlineRomaji &&
+                            displayLayers.showRomaji &&
+                            line.text.romaji != null &&
+                            line.text.romaji!.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Text(
+                            line.text.romaji!,
+                            style: romajiStyle,
+                          ),
+                        ],
+                      ],
+                    );
+                  },
+                ),
                 if (displayLayers.showTranslation &&
                     line.text.translation != null &&
                     line.text.translation!.isNotEmpty) ...[

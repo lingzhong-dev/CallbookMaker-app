@@ -12,6 +12,8 @@ dependencies:
     sdk: flutter
   prism_ui:
     path: packages/prism_ui
+  kuromoji_dart:
+    path: packages/kuromoji_dart
   audioplayers: ^6.1.0
   crypto: ^3.0.6
   file_picker: ^10.3.3

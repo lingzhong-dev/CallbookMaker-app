@@ -389,6 +389,7 @@ class NeteaseDirectClient {
 
     final rawLrc = _extractLyricField(lyricData, 'lrc');
     final translatedLrc = _extractLyricField(lyricData, 'tlyric');
+    final romaLrc = _extractLyricField(lyricData, 'romalrc');
 
     var audioUrl = urlV1Data != null ? _extractAudioUrl(urlV1Data) : '';
     if (audioUrl.isEmpty) {
@@ -431,7 +432,11 @@ class NeteaseDirectClient {
       }
     }
 
-    final lines = parseLrcOffline(rawLrc, translationLrc: translatedLrc);
+    final lines = parseLrcOffline(
+      rawLrc,
+      translationLrc: translatedLrc,
+      romaLrc: romaLrc,
+    );
     final summary = TrackSummary(
       id: cleanId,
       platform: 'netease',
@@ -450,6 +455,7 @@ class NeteaseDirectClient {
       audioUrl: audioUrl,
       rawLrc: rawLrc,
       translatedLrc: translatedLrc,
+      romaLrc: romaLrc,
       lines: lines,
     );
   }
