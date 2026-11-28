@@ -670,6 +670,32 @@ class TimelineEditorWidgetState extends State<TimelineEditorWidget>
     );
   }
 
+  Future<void> _openSplitSectionDialog(
+    BuildContext context,
+    LyricLine section,
+  ) async {
+    if (!section.kind.isSection ||
+        (section.endTimeMs - section.startTimeMs) < 1000) {
+      widget.controller.setStatus('该段落时长过短，无法拆分为两段');
+      return;
+    }
+    final result = await showAppDialog<
+        ({int splitTimeMs, String firstTitle, String secondTitle})>(
+      context: context,
+      builder: (ctx) => _SplitSectionDialog(
+        controller: widget.controller,
+        section: section,
+      ),
+    );
+    if (result == null) return;
+    widget.controller.splitSectionAtTime(
+      section.id,
+      result.splitTimeMs,
+      firstTitle: result.firstTitle,
+      secondTitle: result.secondTitle,
+    );
+  }
+
   Future<void> _openAddSectionDialog(
     BuildContext context, {
     LyricLineKind initialKind = LyricLineKind.interlude,
@@ -742,6 +768,9 @@ class TimelineEditorWidgetState extends State<TimelineEditorWidget>
     final canSplit = !leaving &&
         !line.kind.isSection &&
         line.text.original.runes.length >= 2;
+    final canSplitSection = !leaving &&
+        line.kind.isSection &&
+        (line.endTimeMs - line.startTimeMs) >= 1000;
     return EntryTransition(
       key: ValueKey<String>('timeline-entry-${line.id}'),
       animation: _lineTransitions.animationOf(line.id),
@@ -756,6 +785,7 @@ class TimelineEditorWidgetState extends State<TimelineEditorWidget>
           isSelected: !leaving && c.activeLineId == line.id,
           canMergeNext: canMergeNext,
           canSplit: canSplit,
+          canSplitSection: canSplitSection,
           onCreatePreset: () => _openCreatePresetDialog(context),
           onAddSectionAfter: () => _openAddSectionDialog(
             context,
@@ -769,6 +799,7 @@ class TimelineEditorWidgetState extends State<TimelineEditorWidget>
             autofocusOriginal: true,
           ),
           onSplitLine: () => _openSplitLineDialog(context, line),
+          onSplitSection: () => _openSplitSectionDialog(context, line),
           onOpenSuffix: (tag, preset) =>
               _openSuffixDialog(context, line, tag, preset),
         ),
@@ -1091,11 +1122,13 @@ class _ReactiveTimelineLineCard extends StatefulWidget {
     required this.isSelected,
     required this.canMergeNext,
     required this.canSplit,
+    required this.canSplitSection,
     required this.onCreatePreset,
     required this.onAddSectionAfter,
     required this.onEditLine,
     required this.onDoubleTapEdit,
     required this.onSplitLine,
+    required this.onSplitSection,
     required this.onOpenSuffix,
   });
 
@@ -1106,11 +1139,13 @@ class _ReactiveTimelineLineCard extends StatefulWidget {
   final bool isSelected;
   final bool canMergeNext;
   final bool canSplit;
+  final bool canSplitSection;
   final VoidCallback onCreatePreset;
   final VoidCallback onAddSectionAfter;
   final VoidCallback onEditLine;
   final VoidCallback onDoubleTapEdit;
   final VoidCallback onSplitLine;
+  final VoidCallback onSplitSection;
   final void Function(LineCallTag tag, CallPreset preset) onOpenSuffix;
 
   @override
@@ -1123,7 +1158,7 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard>
   late bool _isPlaying;
   late bool _isUpcoming;
   late bool _isPlaybackActive;
-  DateTime? _lastTapAt;
+  Timer? _doubleTapTimer;
   int _lastGtFlashSeq = 0;
 
   late final AnimationController _gtFlashCtrl = AnimationController(
@@ -1214,7 +1249,8 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard>
       widget.controller.gtFlashListenable.addListener(_onGtFlashEvent);
     }
     if (oldWidget.line.id != widget.line.id) {
-      _lastTapAt = null;
+      _doubleTapTimer?.cancel();
+      _doubleTapTimer = null;
       _displayedTags = List<LineCallTag>.from(widget.line.calls);
     } else if (!identical(oldWidget.line.calls, widget.line.calls)) {
       _displayedTags = _tagTransitions.sync(
@@ -1245,11 +1281,15 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard>
   }
 
   void _handleCardTap() {
-    final now = DateTime.now();
-    final isDoubleTap =
-        _lastTapAt != null &&
-        now.difference(_lastTapAt!) <= const Duration(milliseconds: 350);
-    _lastTapAt = isDoubleTap ? null : now;
+    final isDoubleTap = _doubleTapTimer?.isActive ?? false;
+    _doubleTapTimer?.cancel();
+    if (isDoubleTap) {
+      _doubleTapTimer = null;
+    } else {
+      _doubleTapTimer = Timer(const Duration(milliseconds: 350), () {
+        _doubleTapTimer = null;
+      });
+    }
     widget.controller.selectLine(widget.line.id, seekToLine: true);
     if (isDoubleTap) {
       widget.onDoubleTapEdit();
@@ -1258,6 +1298,7 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard>
 
   @override
   void dispose() {
+    _doubleTapTimer?.cancel();
     widget.controller.playingLineIdListenable
         .removeListener(_onPlaybackChanged);
     widget.controller.upcomingLineIdListenable
@@ -1384,12 +1425,14 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard>
                     foregroundColor: scheme.onSurface,
                     onPressed: () => c.mergeWithNextLine(line.id),
                   ),
-                if (isSelected && widget.canSplit)
+                if (isSelected && (widget.canSplit || widget.canSplitSection))
                   TonalChip(
                     label: '拆分',
                     color: scheme.primaryContainer,
                     foregroundColor: scheme.onPrimaryContainer,
-                    onPressed: widget.onSplitLine,
+                    onPressed: widget.canSplitSection
+                        ? widget.onSplitSection
+                        : widget.onSplitLine,
                   ),
                 if (isSelected && line.kind != LyricLineKind.outro)
                   TonalChip(
@@ -3357,6 +3400,170 @@ class _SplitLyricDialogState extends State<_SplitLyricDialog> {
   }
 }
 
+class _SplitSectionDialog extends StatefulWidget {
+  const _SplitSectionDialog({
+    required this.controller,
+    required this.section,
+  });
+
+  final CallbookController controller;
+  final LyricLine section;
+
+  @override
+  State<_SplitSectionDialog> createState() => _SplitSectionDialogState();
+}
+
+class _SplitSectionDialogState extends State<_SplitSectionDialog> {
+  static const int _minSegmentMs = 500;
+
+  late int _splitTimeMs;
+  late final TextEditingController _timeCtrl;
+  late final TextEditingController _firstTitleCtrl;
+  late final TextEditingController _secondTitleCtrl;
+  String? _errorText;
+
+  @override
+  void initState() {
+    super.initState();
+    final start = widget.section.startTimeMs;
+    final end = widget.section.endTimeMs;
+    final playhead = widget.controller.currentTimeMs;
+    if (playhead >= start + _minSegmentMs && playhead <= end - _minSegmentMs) {
+      _splitTimeMs = playhead;
+    } else {
+      _splitTimeMs = (start + end) ~/ 2;
+    }
+    _timeCtrl = TextEditingController(text: formatMsToClock(_splitTimeMs));
+    _firstTitleCtrl = TextEditingController(text: widget.section.text.original);
+    _secondTitleCtrl = TextEditingController(
+      text: widget.section.kind.bracketTitle,
+    );
+  }
+
+  @override
+  void dispose() {
+    _timeCtrl.dispose();
+    _firstTitleCtrl.dispose();
+    _secondTitleCtrl.dispose();
+    super.dispose();
+  }
+
+  int? _validatedSplitMs() {
+    final parsed = _parseClockText(_timeCtrl.text);
+    if (parsed == null) return null;
+    if (parsed < widget.section.startTimeMs + _minSegmentMs ||
+        parsed > widget.section.endTimeMs - _minSegmentMs) {
+      return null;
+    }
+    return parsed;
+  }
+
+  void _applyTimeMs(int ms) {
+    final minBound = widget.section.startTimeMs + _minSegmentMs;
+    final maxBound = widget.section.endTimeMs - _minSegmentMs;
+    final clamped = ms.clamp(minBound, maxBound);
+    setState(() {
+      _splitTimeMs = clamped;
+      _errorText = null;
+      final formatted = formatMsToClock(clamped);
+      _timeCtrl.value = TextEditingValue(
+        text: formatted,
+        selection: TextSelection.collapsed(offset: formatted.length),
+      );
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = context.colorScheme;
+    final start = widget.section.startTimeMs;
+    final end = widget.section.endTimeMs;
+    final currentPlayhead = widget.controller.currentTimeMs;
+    final playheadInRange =
+        currentPlayhead >= start + _minSegmentMs &&
+        currentPlayhead <= end - _minSegmentMs;
+    final validMs = _validatedSplitMs();
+
+    return AlertDialog(
+      title: '拆分${widget.section.kind.zhLabel}段落',
+      hasFields: true,
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(null),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: validMs == null
+              ? null
+              : () => Navigator.of(context).pop((
+                    splitTimeMs: validMs,
+                    firstTitle: _firstTitleCtrl.text.trim(),
+                    secondTitle: _secondTitleCtrl.text.trim(),
+                  )),
+          child: const Text('确认拆分'),
+        ),
+      ],
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            '原段落时段 ${formatMsToClock(start)} → ${formatMsToClock(end)}',
+            style: AppTextStyle.caption1
+                .of(context)
+                .copyWith(color: scheme.onSurfaceVariant),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _timeCtrl,
+            decoration: InputDecoration(
+              hintText: '切分时刻 mm:ss.ms',
+              errorText: _errorText,
+            ),
+            onChanged: (v) {
+              final parsed = _parseClockText(v);
+              setState(() {
+                if (parsed == null) {
+                  _errorText = '请输入有效时间格式 mm:ss.ms';
+                } else if (parsed < start + _minSegmentMs ||
+                    parsed > end - _minSegmentMs) {
+                  _errorText =
+                      '切分时刻需位于 ${formatMsToClock(start + _minSegmentMs)} ~ ${formatMsToClock(end - _minSegmentMs)} 之间';
+                } else {
+                  _splitTimeMs = parsed;
+                  _errorText = null;
+                }
+              });
+            },
+          ),
+          if (playheadInRange) ...[
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TonalChip(
+                label: '采用当前时刻 ${formatMsToClock(currentPlayhead)}',
+                color: scheme.primaryContainer,
+                foregroundColor: scheme.onPrimaryContainer,
+                onPressed: () => _applyTimeMs(currentPlayhead),
+              ),
+            ),
+          ],
+          const SizedBox(height: 10),
+          TextField(
+            controller: _firstTitleCtrl,
+            decoration: const InputDecoration(hintText: '第一段标题（保留原有 Call 与 GT）'),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _secondTitleCtrl,
+            decoration: const InputDecoration(hintText: '第二段标题（继承尾句标记）'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _CreatePresetDialog extends StatefulWidget {
   const _CreatePresetDialog({required this.existingPresets});
 
@@ -3527,13 +3734,15 @@ class _EditLineDialogState extends State<_EditLineDialog> {
   }
 
   void _closeWithAction(String action) {
-    final parsedStart =
-        _parseClockText(_startCtrl.text) ?? widget.line.startTimeMs;
+    final parsedStart = math.max(
+      0,
+      _parseClockText(_startCtrl.text) ?? widget.line.startTimeMs,
+    );
     final parsedEnd = _parseClockText(_endCtrl.text) ?? widget.line.endTimeMs;
     Navigator.of(context).pop((
       action: action,
       startTimeMs: parsedStart,
-      endTimeMs: math.max(parsedStart + 500, parsedEnd),
+      endTimeMs: parsedEnd > parsedStart ? parsedEnd : parsedStart + 400,
       kind: _selectedKind,
       original: _originalCtrl.text,
       translation: _transCtrl.text,
@@ -3685,13 +3894,15 @@ class _EditLineSheetState extends State<_EditLineSheet> {
   }
 
   void _closeWithAction(String action) {
-    final parsedStart =
-        _parseClockText(_startCtrl.text) ?? widget.line.startTimeMs;
+    final parsedStart = math.max(
+      0,
+      _parseClockText(_startCtrl.text) ?? widget.line.startTimeMs,
+    );
     final parsedEnd = _parseClockText(_endCtrl.text) ?? widget.line.endTimeMs;
     Navigator.of(context).pop((
       action: action,
       startTimeMs: parsedStart,
-      endTimeMs: math.max(parsedStart + 500, parsedEnd),
+      endTimeMs: parsedEnd > parsedStart ? parsedEnd : parsedStart + 400,
       kind: _selectedKind,
       original: _originalCtrl.text,
       translation: _transCtrl.text,

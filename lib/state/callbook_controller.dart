@@ -142,7 +142,12 @@ class CallbookController extends ChangeNotifier {
        _neteaseDirect = neteaseDirectClient ?? NeteaseDirectClient(),
        _lrclibDirect = lrclibDirectClient ?? LrclibDirectClient(),
        _desktopLauncher = desktopLauncher ?? DesktopServiceLauncher(),
-       _rubyAnnotator = rubyAnnotator ?? JapaneseRubyAnnotator.instance {
+       _rubyAnnotator = rubyAnnotator ?? JapaneseRubyAnnotator.instance,
+       _snapClock = audioClock {
+    _snapClock?.start();
+    if (_snapClock == null) {
+      _snapFallbackWatch.start();
+    }
     _audio = AudioMetronomeService(
       enablePlatformAudio: enableAudioOutput,
       clock: audioClock,
@@ -295,6 +300,14 @@ class CallbookController extends ChangeNotifier {
   final List<_TimelineUndoEntry> _undoHistory = <_TimelineUndoEntry>[];
   String? _lastUndoCoalesceKey;
   final Stopwatch _undoCoalesceWatch = Stopwatch();
+  final MonotonicClock? _snapClock;
+  final Stopwatch _snapFallbackWatch = Stopwatch();
+  String? _lastSnapLineId;
+  int _lastSnapAtMs = -1;
+
+  int _snapNowMs() => _snapClock != null
+      ? (_snapClock.elapsedMicroseconds ~/ 1000)
+      : _snapFallbackWatch.elapsedMilliseconds;
 
   // Sparkline Histories (`LineChart` data)
   final List<double> _beatPulseSeries = List<double>.filled(24, 0.24, growable: true);
@@ -1970,12 +1983,50 @@ class CallbookController extends ChangeNotifier {
     List<LyricLine> rawLines,
     LyricLine target,
   ) {
+    int? nextStrictStart;
+    for (final line in rawLines) {
+      if (line.id != target.id && line.startTimeMs > target.startTimeMs) {
+        if (nextStrictStart == null || line.startTimeMs < nextStrictStart) {
+          nextStrictStart = line.startTimeMs;
+        }
+      }
+    }
+    var effectiveTarget = target;
+    if (effectiveTarget.endTimeMs <= effectiveTarget.startTimeMs) {
+      final fallbackEnd = effectiveTarget.startTimeMs + 400;
+      effectiveTarget = effectiveTarget.copyWith(
+        endTimeMs: fallbackEnd,
+        text: effectiveTarget.kind.isSection
+            ? effectiveTarget.text.copyWith(
+                translation: buildSectionSummary(
+                  effectiveTarget.kind,
+                  fallbackEnd - effectiveTarget.startTimeMs,
+                ),
+              )
+            : null,
+      );
+    }
+    if (nextStrictStart != null && effectiveTarget.endTimeMs > nextStrictStart) {
+      effectiveTarget = effectiveTarget.copyWith(
+        endTimeMs: nextStrictStart,
+        text: effectiveTarget.kind.isSection
+            ? effectiveTarget.text.copyWith(
+                translation: buildSectionSummary(
+                  effectiveTarget.kind,
+                  nextStrictStart - effectiveTarget.startTimeMs,
+                ),
+              )
+            : null,
+      );
+    }
+
     final next = <LyricLine>[];
     for (final line in rawLines) {
-      if (line.id != target.id &&
-          line.startTimeMs < target.startTimeMs &&
-          line.endTimeMs > target.startTimeMs) {
-        final trimmedEnd = target.startTimeMs;
+      if (line.id == effectiveTarget.id) {
+        next.add(effectiveTarget);
+      } else if (line.startTimeMs < effectiveTarget.startTimeMs &&
+          line.endTimeMs > effectiveTarget.startTimeMs) {
+        final trimmedEnd = effectiveTarget.startTimeMs;
         if (line.kind.isSection) {
           next.add(
             line.copyWith(
@@ -1998,8 +2049,8 @@ class CallbookController extends ChangeNotifier {
     next.sort((a, b) {
       final cmp = a.startTimeMs.compareTo(b.startTimeMs);
       if (cmp != 0) return cmp;
-      if (a.id == target.id && b.id != target.id) return 1;
-      if (b.id == target.id && a.id != target.id) return -1;
+      if (a.id == effectiveTarget.id && b.id != effectiveTarget.id) return 1;
+      if (b.id == effectiveTarget.id && a.id != effectiveTarget.id) return -1;
       return a.endTimeMs.compareTo(b.endTimeMs);
     });
     return next;
@@ -2037,29 +2088,46 @@ class CallbookController extends ChangeNotifier {
     final idx = lines.indexWhere((l) => l.id == lineId);
     if (idx < 0) return;
     final current = lines[idx];
-    final effectiveStart = startTimeMs ?? current.startTimeMs;
-    final effectiveEnd = math.max(
-      effectiveStart + 400,
-      endTimeMs ?? current.endTimeMs,
-    );
+    final effectiveStart = math.max(0, startTimeMs ?? current.startTimeMs);
+    final preservedSpan = current.endTimeMs > current.startTimeMs
+        ? current.endTimeMs - current.startTimeMs
+        : 400;
+    final candidateEnd = endTimeMs ??
+        (startTimeMs != null
+            ? effectiveStart + preservedSpan
+            : current.endTimeMs);
+    final effectiveEnd = candidateEnd > effectiveStart
+        ? candidateEnd
+        : effectiveStart + 400;
     final nextOriginal = original ?? current.text.original;
     final nextAligned = original != null
         ? (nextOriginal.trim().isEmpty
             ? const <AlignedCallCue>[]
             : normalizeAlignedCalls(current.alignedCalls, nextOriginal.length))
         : current.alignedCalls;
+    final nextKind = kind ?? current.kind;
+    final kindChanged = nextKind != current.kind;
+    final nextText = current.text.copyWith(
+      original: original,
+      translation: translation,
+    );
+    final sectionManuallyEdited = current.kind.isSection &&
+        current.autoGenerated &&
+        (kindChanged ||
+            (startTimeMs != null && effectiveStart != current.startTimeMs) ||
+            ((endTimeMs != null || startTimeMs != null) &&
+                effectiveEnd != current.endTimeMs) ||
+            nextText.original != current.text.original ||
+            nextText.translation != current.text.translation);
     final updatedLine = current.copyWith(
-      startTimeMs: startTimeMs,
+      startTimeMs: startTimeMs != null ? effectiveStart : null,
       endTimeMs: endTimeMs != null || startTimeMs != null ? effectiveEnd : null,
       kind: kind,
       autoGenerated:
-          kind != null && kind != current.kind ? false : current.autoGenerated,
+          (kindChanged || sectionManuallyEdited) ? false : current.autoGenerated,
       customShout: customShout,
       alignedCalls: nextAligned,
-      text: current.text.copyWith(
-        original: original,
-        translation: translation,
-      ),
+      text: nextText,
     );
     lines[idx] = updatedLine;
     final normalizedLines = (startTimeMs != null || endTimeMs != null)
@@ -2406,10 +2474,21 @@ class CallbookController extends ChangeNotifier {
       return;
     }
 
-    final dur = math.max(1200, current.endTimeMs - current.startTimeMs);
+    final dur = current.endTimeMs > current.startTimeMs
+        ? current.endTimeMs - current.startTimeMs
+        : 400;
+    final snappedTimeChanged = _currentTimeMs != current.startTimeMs;
     final snappedLine = current.copyWith(
       startTimeMs: _currentTimeMs,
       endTimeMs: _currentTimeMs + dur,
+      autoGenerated: (current.kind.isSection && snappedTimeChanged)
+          ? false
+          : current.autoGenerated,
+      text: current.kind.isSection
+          ? current.text.copyWith(
+              translation: buildSectionSummary(current.kind, dur),
+            )
+          : null,
     );
     lines[idx] = snappedLine;
     final normalizedLines = _normalizeLinesForInsertOrEdit(lines, snappedLine);
@@ -2424,6 +2503,15 @@ class CallbookController extends ChangeNotifier {
         _areAlertsEqual(nextAlerts, _project.alerts)) {
       return;
     }
+    final nowMs = _snapNowMs();
+    if (_lastSnapLineId == lineId &&
+        _lastSnapAtMs >= 0 &&
+        (nowMs - _lastSnapAtMs) >= 0 &&
+        (nowMs - _lastSnapAtMs) < 160) {
+      return;
+    }
+    _lastSnapLineId = lineId;
+    _lastSnapAtMs = nowMs;
     _pushUndo('校时');
     _setProject(_project.copyWith(lines: normalizedLines, alerts: nextAlerts));
     _refreshTimelineAfterMutation();
@@ -2488,17 +2576,7 @@ class CallbookController extends ChangeNotifier {
       protectedLineIds: _getProtectedSectionLineIds(),
       onlyOutro: onlyOutro,
     );
-    var linesChanged = result.lines.length != prevLines.length;
-    if (!linesChanged) {
-      for (var i = 0; i < result.lines.length; i++) {
-        if (result.lines[i].id != prevLines[i].id ||
-            result.lines[i].startTimeMs != prevLines[i].startTimeMs ||
-            result.lines[i].endTimeMs != prevLines[i].endTimeMs) {
-          linesChanged = true;
-          break;
-        }
-      }
-    }
+    final linesChanged = !_areLinesEqual(result.lines, prevLines);
     if (linesChanged) {
       _setProject(_project.copyWith(lines: result.lines));
       if (_activeLineId != null &&
@@ -2580,16 +2658,173 @@ class CallbookController extends ChangeNotifier {
     _notifyProjectChanged();
   }
 
+  bool splitSectionAtTime(
+    String lineId,
+    int splitTimeMs, {
+    String? firstTitle,
+    String? secondTitle,
+  }) {
+    final idx = _project.lines.indexWhere((l) => l.id == lineId);
+    if (idx < 0) return false;
+    final target = _project.lines[idx];
+    if (!target.kind.isSection) {
+      setStatus('仅支持拆分前奏 / 间奏 / 尾奏段落');
+      return false;
+    }
+    const minSegmentMs = 500;
+    final span = target.endTimeMs - target.startTimeMs;
+    if (span < minSegmentMs * 2) {
+      setStatus('该段落时长不足，无法拆分为两段');
+      return false;
+    }
+    if (splitTimeMs < target.startTimeMs + minSegmentMs ||
+        splitTimeMs > target.endTimeMs - minSegmentMs) {
+      setStatus('切分时间点需严格位于段落起止区间内');
+      return false;
+    }
+
+    final resolvedFirstTitle =
+        (firstTitle != null && firstTitle.trim().isNotEmpty)
+            ? firstTitle.trim()
+            : target.text.original;
+    final resolvedSecondTitle =
+        (secondTitle != null && secondTitle.trim().isNotEmpty)
+            ? secondTitle.trim()
+            : target.kind.bracketTitle;
+
+    final seg1 = target.copyWith(
+      endTimeMs: splitTimeMs,
+      autoGenerated: false,
+      tailUpdraft: false,
+      text: target.text.copyWith(
+        original: resolvedFirstTitle,
+        translation: buildSectionSummary(
+          target.kind,
+          splitTimeMs - target.startTimeMs,
+        ),
+      ),
+    );
+
+    final existingIds = {for (final l in _project.lines) l.id};
+    final stamp = DateTime.now().millisecondsSinceEpoch;
+    var seg2Id = 'sec-split-${target.kind.name}-$stamp';
+    var seq = 0;
+    while (existingIds.contains(seg2Id)) {
+      seq++;
+      seg2Id = 'sec-split-${target.kind.name}-$stamp-$seq';
+    }
+    final seg2 = LyricLine(
+      id: seg2Id,
+      startTimeMs: splitTimeMs,
+      endTimeMs: target.endTimeMs,
+      kind: target.kind,
+      autoGenerated: false,
+      calls: const [],
+      customShout: '',
+      tailUpdraft: target.tailUpdraft,
+      text: LyricText(
+        original: resolvedSecondTitle,
+        translation: buildSectionSummary(
+          target.kind,
+          target.endTimeMs - splitTimeMs,
+        ),
+      ),
+    );
+
+    _pushUndo('拆分段落');
+    final nextLines = <LyricLine>[
+      for (final l in _project.lines)
+        if (l.id == target.id) ...[seg1, seg2] else l,
+    ]..sort((a, b) => a.startTimeMs.compareTo(b.startTimeMs));
+
+    _activeLineId = seg1.id;
+    _setProject(_project.copyWith(lines: nextLines));
+    _refreshTimelineAfterMutation();
+    schedulePersist();
+    _setStatusInternal(
+      '已将${target.kind.zhLabel}拆分为两段（可点击「撤销」恢复）',
+    );
+    _notifyProjectChanged();
+    return true;
+  }
+
   void deleteLine(String lineId) {
-    if (!_project.lines.any((l) => l.id == lineId)) return;
-    _pushUndo('删除行');
+    final idx = _project.lines.indexWhere((l) => l.id == lineId);
+    if (idx < 0) return;
+    final deletedLine = _project.lines[idx];
     final orderedBefore = sortedLines;
+
+    int? earliestLyricStart(List<LyricLine> list) {
+      int? earliest;
+      for (final l in list) {
+        if (!l.kind.isSection) {
+          if (earliest == null || l.startTimeMs < earliest) {
+            earliest = l.startTimeMs;
+          }
+        }
+      }
+      return earliest;
+    }
+
+    final earliestBefore = earliestLyricStart(_project.lines);
+    var nextLines = _project.lines.where((l) => l.id != lineId).toList();
+    final nextAlerts = _project.alerts
+        .where((a) => resolveGtAlertTargetLineId(a, orderedBefore) != lineId)
+        .toList();
+    final earliestAfter = earliestLyricStart(nextLines);
+
+    if (!deletedLine.kind.isSection &&
+        earliestBefore != null &&
+        earliestAfter != null &&
+        earliestAfter > earliestBefore) {
+      final sortedRemaining = [...nextLines]
+        ..sort((a, b) => a.startTimeMs.compareTo(b.startTimeMs));
+      final protectedIds = <String>{
+        for (final a in nextAlerts)
+          if (resolveGtAlertTargetLineId(a, sortedRemaining) != null)
+            resolveGtAlertTargetLineId(a, sortedRemaining)!,
+      };
+      LyricLine? candidateIntro;
+      for (final l in sortedRemaining) {
+        if (l.kind == LyricLineKind.intro && l.startTimeMs < earliestAfter) {
+          candidateIntro = l;
+        }
+      }
+      if (candidateIntro != null &&
+          isAutoMaintainableSection(candidateIntro, protectedIds)) {
+        final intro = candidateIntro;
+        final blockedByLaterSection = sortedRemaining.any(
+          (s) =>
+              s.id != intro.id &&
+              s.kind.isSection &&
+              s.startTimeMs >= intro.endTimeMs &&
+              s.startTimeMs < earliestAfter,
+        );
+        if (!blockedByLaterSection && intro.endTimeMs != earliestAfter) {
+          nextLines = [
+            for (final l in nextLines)
+              if (l.id == intro.id)
+                l.copyWith(
+                  endTimeMs: earliestAfter,
+                  text: l.text.copyWith(
+                    translation: buildSectionSummary(
+                      LyricLineKind.intro,
+                      earliestAfter - l.startTimeMs,
+                    ),
+                  ),
+                )
+              else
+                l,
+          ];
+        }
+      }
+    }
+
+    _pushUndo('删除行');
     _setProject(
       _project.copyWith(
-        lines: _project.lines.where((l) => l.id != lineId).toList(),
-        alerts: _project.alerts
-            .where((a) => resolveGtAlertTargetLineId(a, orderedBefore) != lineId)
-            .toList(),
+        lines: nextLines,
+        alerts: nextAlerts,
       ),
     );
     if (_activeLineId == lineId) {
