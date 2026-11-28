@@ -31,6 +31,8 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  audio_decoder_channel_ =
+      AudioDecoderChannel::Register(flutter_controller_->engine());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   // Window visibility is coordinated by window_manager after the first frame.
@@ -44,6 +46,10 @@ void FlutterWindow::OnDestroy() {
   if (hwnd != nullptr) {
     KillTimer(hwnd, kInitialSurfaceNudgeTimerId);
     KillTimer(hwnd, kInitialSurfaceRestoreTimerId);
+  }
+  if (audio_decoder_channel_) {
+    audio_decoder_channel_->Shutdown();
+    audio_decoder_channel_.reset();
   }
   if (flutter_controller_) {
     flutter_controller_ = nullptr;

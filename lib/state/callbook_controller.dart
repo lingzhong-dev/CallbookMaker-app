@@ -9,6 +9,9 @@ import 'package:prism_ui/prism_ui.dart' as prism;
 import '../data/default_songs.dart';
 import '../models/callbook_models.dart';
 import '../services/audio_metronome_service.dart';
+import '../services/audio_pcm_decoder.dart';
+import '../services/bounded_audio_fetcher.dart';
+import '../services/downbeat_analyzer.dart';
 import '../services/japanese_ruby_annotator.dart';
 import '../services/lrclib_direct_client.dart';
 import '../services/netease_direct_client.dart';
@@ -114,15 +117,17 @@ class TimelineLineItem extends TimelineItem {
 
 class _TimelineUndoEntry {
   const _TimelineUndoEntry({
-    required this.lines,
-    required this.alerts,
-    required this.activeLineId,
+    this.lines,
+    this.alerts,
+    this.activeLineId,
+    this.offsetMsRestore,
     required this.label,
   });
 
-  final List<LyricLine> lines;
-  final List<GtAlert> alerts;
+  final List<LyricLine>? lines;
+  final List<GtAlert>? alerts;
   final String? activeLineId;
+  final int? offsetMsRestore;
   final String label;
 }
 
@@ -132,12 +137,16 @@ class CallbookController extends ChangeNotifier {
     NeteaseDirectClient? neteaseDirectClient,
     LrclibDirectClient? lrclibDirectClient,
     JapaneseRubyAnnotator? rubyAnnotator,
+    BoundedAudioFetcher? audioFetcher,
+    AudioPcmDecoder? audioPcmDecoder,
     bool enableAudioOutput = true,
     MonotonicClock? audioClock,
   }) : _storage = storage ?? ProjectStorage(),
        _neteaseDirect = neteaseDirectClient ?? NeteaseDirectClient(),
        _lrclibDirect = lrclibDirectClient ?? LrclibDirectClient(),
        _rubyAnnotator = rubyAnnotator ?? JapaneseRubyAnnotator.instance,
+       _audioFetcher = audioFetcher ?? BoundedAudioFetcher(),
+       _audioPcmDecoder = audioPcmDecoder ?? AudioPcmDecoder(),
        _snapClock = audioClock {
     _snapClock?.start();
     if (_snapClock == null) {
@@ -182,6 +191,8 @@ class CallbookController extends ChangeNotifier {
   late final NeteaseDirectClient _neteaseDirect;
   late final LrclibDirectClient _lrclibDirect;
   late final JapaneseRubyAnnotator _rubyAnnotator;
+  late final BoundedAudioFetcher _audioFetcher;
+  late final AudioPcmDecoder _audioPcmDecoder;
   late final AudioMetronomeService _audio;
 
   // Scoped sub-notifiers to keep high-frequency playback/status updates from
@@ -265,6 +276,9 @@ class CallbookController extends ChangeNotifier {
   int _cueOutputCompensationMs = 0;
   BpmEstimateResult? _tapBpmCandidate;
   bool _lockBpmCalibrateDownbeat = false;
+  int _downbeatRequestSeq = 0;
+  int? _previewDownbeatOffsetMs;
+  DownbeatAnalysisState _downbeatState = const DownbeatAnalysisState();
   int _currentTimeMs = 0;
   int _durationMs = defaultPrimarySong.durationMs;
   int _knownAudioDurationMs = defaultPrimarySong.durationMs;
@@ -389,6 +403,7 @@ class CallbookController extends ChangeNotifier {
   BpmEstimateResult? get tapBpmCandidate => _tapBpmCandidate;
   int get tapSampleCount => _audio.tapSampleCount;
   bool get lockBpmCalibrateDownbeat => _lockBpmCalibrateDownbeat;
+  DownbeatAnalysisState get downbeatState => _downbeatState;
   int get currentTimeMs => _currentTimeMs;
   int get durationMs => _durationMs;
   int get knownAudioDurationMs => _knownAudioDurationMs;
@@ -1433,6 +1448,9 @@ class CallbookController extends ChangeNotifier {
       return;
     }
     final clamped = bpm.clamp(30, 300);
+    if (clamped != _project.meta.bpm) {
+      _invalidateDownbeatAnalysis(notify: false);
+    }
     _setProject(_project.copyWith(meta: _project.meta.copyWith(bpm: clamped)));
     _syncEngine();
     schedulePersist();
@@ -1443,6 +1461,9 @@ class CallbookController extends ChangeNotifier {
 
   void setTimeSignature(String sig) {
     final normalized = sig == '3/4' ? '3/4' : '4/4';
+    if (normalized != _project.meta.timeSignature) {
+      _invalidateDownbeatAnalysis(notify: false);
+    }
     _setProject(
       _project.copyWith(
         meta: _project.meta.copyWith(timeSignature: normalized),
@@ -1457,6 +1478,10 @@ class CallbookController extends ChangeNotifier {
 
   void adjustOffset(int deltaMs) {
     final nextOffset = clampSongOffsetMs(_project.meta.offsetMs + deltaMs);
+    if (nextOffset != _project.meta.offsetMs) {
+      _invalidateDownbeatAnalysis(notify: false);
+    }
+    _previewDownbeatOffsetMs = null;
     _setProject(
       _project.copyWith(
         meta: _project.meta.copyWith(offsetMs: nextOffset),
@@ -1471,11 +1496,216 @@ class CallbookController extends ChangeNotifier {
 
   void setOffset(int ms) {
     final clamped = clampSongOffsetMs(ms);
+    if (clamped != _project.meta.offsetMs) {
+      _invalidateDownbeatAnalysis(notify: false);
+    }
+    _previewDownbeatOffsetMs = null;
     _setProject(
       _project.copyWith(meta: _project.meta.copyWith(offsetMs: clamped)),
     );
     _syncEngine();
     schedulePersist();
+    _alignmentNotifier.notifyListeners();
+    _playbackNotifier.notifyListeners();
+    _notifyProjectChanged();
+  }
+
+  String _currentDownbeatSourceFingerprint() {
+    final m = _project.meta;
+    return '${m.platform}|${m.trackId ?? ""}|${m.audioUrl.trim()}|${m.title}';
+  }
+
+  String _inferAudioExtFromUrl(String url) {
+    final path = Uri.tryParse(url)?.path.toLowerCase() ?? '';
+    for (final ext in const ['.wav', '.flac', '.m4a', '.aac', '.ogg', '.mp3']) {
+      if (path.endsWith(ext)) return ext;
+    }
+    return '.mp3';
+  }
+
+  void _invalidateDownbeatAnalysis({bool notify = true}) {
+    final hadPreview = _previewDownbeatOffsetMs != null;
+    _previewDownbeatOffsetMs = null;
+    if (hadPreview) {
+      _syncEngine();
+    }
+    final hadState =
+        _downbeatState.isAnalyzing ||
+        _downbeatState.result != null ||
+        _downbeatState.errorMessage != null;
+    ++_downbeatRequestSeq;
+    if (!hadState && !hadPreview) return;
+    _downbeatState = const DownbeatAnalysisState();
+    if (notify && !_disposed) {
+      _alignmentNotifier.notifyListeners();
+    }
+  }
+
+  void cancelDownbeatAnalysis() {
+    _invalidateDownbeatAnalysis(notify: true);
+    setStatus('已取消首拍辅助分析');
+  }
+
+  Future<void> analyzeDownbeatForCurrentTrack({
+    int? maxBytes,
+    int maxDurationMs = 45000,
+  }) async {
+    if (_disposed) return;
+    final urlOrPath = _project.meta.audioUrl.trim();
+    if (urlOrPath.isEmpty || urlOrPath.startsWith('blob:')) {
+      _downbeatState = const DownbeatAnalysisState(
+        isAnalyzing: false,
+        errorMessage: '当前曲目暂无可分析的本地音频或在线直链音源',
+      );
+      _alignmentNotifier.notifyListeners();
+      return;
+    }
+
+    final reqId = ++_downbeatRequestSeq;
+    final snapshotFingerprint = _currentDownbeatSourceFingerprint();
+    final snapshotBpm = _project.meta.bpm;
+    final snapshotBeatsPerBar = _project.meta.beatsPerBar;
+    final snapshotOffsetMs = _project.meta.offsetMs;
+
+    bool isStale() =>
+        _disposed ||
+        reqId != _downbeatRequestSeq ||
+        _currentDownbeatSourceFingerprint() != snapshotFingerprint ||
+        _project.meta.bpm != snapshotBpm ||
+        _project.meta.beatsPerBar != snapshotBeatsPerBar ||
+        _project.meta.offsetMs != snapshotOffsetMs;
+
+    final isRemote =
+        urlOrPath.startsWith('http://') || urlOrPath.startsWith('https://');
+    _downbeatState = DownbeatAnalysisState(
+      isAnalyzing: true,
+      activeRequestId: reqId,
+      stageMessage: isRemote ? '正在按范围拉取在线音频片段…' : '正在读取并解码本地音频…',
+    );
+    _alignmentNotifier.notifyListeners();
+
+    try {
+      var fetchMs = 0;
+      var fetchedBytes = 0;
+      final AudioPcmData pcm;
+      if (isRemote) {
+        final fetched = await _audioFetcher.fetchPrefix(
+          urlOrPath,
+          maxBytes: maxBytes,
+          isCancelled: isStale,
+        );
+        if (isStale()) return;
+        fetchMs = fetched.fetchMs;
+        fetchedBytes = fetched.fetchedBytes;
+        _downbeatState = _downbeatState.copyWith(
+          stageMessage: '正在解码音频片段（${(fetchedBytes / 1024).round()} KB）…',
+        );
+        _alignmentNotifier.notifyListeners();
+        pcm = await _audioPcmDecoder.decodeBytes(
+          fetched.bytes,
+          fileExtensionHint: _inferAudioExtFromUrl(urlOrPath),
+          maxDurationMs: maxDurationMs,
+        );
+      } else {
+        pcm = await _audioPcmDecoder.decodeFile(
+          urlOrPath,
+          maxDurationMs: maxDurationMs,
+        );
+        fetchedBytes = pcm.estimatedPeakBytes;
+      }
+      if (isStale()) return;
+
+      _downbeatState = _downbeatState.copyWith(
+        stageMessage: '正在后台 Isolate 计算有声起点与节拍相位…',
+      );
+      _alignmentNotifier.notifyListeners();
+
+      final result = await analyzeKnownBpmPcmInIsolate(
+        samples: pcm.samples,
+        sampleRate: pcm.sampleRate,
+        knownBpm: snapshotBpm,
+        beatsPerBar: snapshotBeatsPerBar,
+        requestId: reqId,
+        sourceFingerprint: snapshotFingerprint,
+        fetchMs: fetchMs,
+        decodeMs: pcm.decodeMs,
+        fetchedBytes: fetchedBytes,
+        decodePeakBytes: pcm.estimatedPeakBytes,
+      );
+      if (isStale()) return;
+
+      _downbeatState = DownbeatAnalysisState(
+        isAnalyzing: false,
+        activeRequestId: reqId,
+        stageMessage: result.statusMessage,
+        result: result,
+      );
+      _alignmentNotifier.notifyListeners();
+    } catch (err) {
+      if (isStale()) return;
+      final message = err is BoundedAudioFetchException
+          ? err.message
+          : '音频解析失败：$err';
+      _downbeatState = DownbeatAnalysisState(
+        isAnalyzing: false,
+        activeRequestId: reqId,
+        errorMessage: message,
+      );
+      _alignmentNotifier.notifyListeners();
+    }
+  }
+
+  int? get previewDownbeatOffsetMs => _previewDownbeatOffsetMs;
+
+  void clearDownbeatPreviewOffset({bool notify = true}) {
+    if (_previewDownbeatOffsetMs == null) return;
+    _previewDownbeatOffsetMs = null;
+    _syncEngine();
+    if (notify && !_disposed) {
+      _alignmentNotifier.notifyListeners();
+    }
+  }
+
+  Future<void> previewDownbeatCandidate(int offsetMs) async {
+    if (_disposed) return;
+    final candidateOffset = clampSongOffsetMs(offsetMs);
+    _previewDownbeatOffsetMs = candidateOffset;
+    _syncEngine();
+    _alignmentNotifier.notifyListeners();
+    final targetMs = math.max(0, candidateOffset);
+    await seek(targetMs);
+    if (!_disposed && !_isPlaying) {
+      await togglePlay();
+    }
+  }
+
+  void applyDownbeatCandidateOffset(
+    int offsetMs, {
+    String label = '应用首拍辅助分析',
+  }) {
+    final nextOffset = clampSongOffsetMs(offsetMs);
+    final prevOffset = _project.meta.offsetMs;
+    _previewDownbeatOffsetMs = null;
+    if (nextOffset != prevOffset) {
+      _lastUndoCoalesceKey = null;
+      _undoCoalesceWatch.stop();
+      _undoCoalesceWatch.reset();
+      _undoHistory.add(
+        _TimelineUndoEntry(
+          offsetMsRestore: prevOffset,
+          label: label,
+        ),
+      );
+      if (_undoHistory.length > 25) {
+        _undoHistory.removeAt(0);
+      }
+    }
+    _setProject(
+      _project.copyWith(meta: _project.meta.copyWith(offsetMs: nextOffset)),
+    );
+    _syncEngine();
+    schedulePersist();
+    _setStatusInternal('已应用首拍偏移：${nextOffset}ms');
     _alignmentNotifier.notifyListeners();
     _playbackNotifier.notifyListeners();
     _notifyProjectChanged();
@@ -2084,11 +2314,32 @@ class CallbookController extends ChangeNotifier {
     _undoCoalesceWatch.reset();
     final prevAlertLineIds = _alertByLineIdCache.keys.toSet();
     final entry = _undoHistory.removeLast();
+    if (entry.lines == null && entry.offsetMsRestore != null) {
+      final restoredOffset = clampSongOffsetMs(entry.offsetMsRestore!);
+      _invalidateDownbeatAnalysis(notify: false);
+      _setProject(
+        _project.copyWith(
+          meta: _project.meta.copyWith(offsetMs: restoredOffset),
+        ),
+      );
+      _syncEngine();
+      schedulePersist();
+      _setStatusInternal('已撤销「${entry.label}」');
+      _alignmentNotifier.notifyListeners();
+      _playbackNotifier.notifyListeners();
+      _notifyProjectChanged();
+      return true;
+    }
     _setProject(
       _normalizeProjectAlerts(
         _project.copyWith(
-          lines: [for (final l in entry.lines) LyricLine.fromJson(l.toJson())],
-          alerts: [for (final a in entry.alerts) GtAlert.fromJson(a.toJson())],
+          lines: [
+            for (final l in entry.lines!) LyricLine.fromJson(l.toJson()),
+          ],
+          alerts: [
+            for (final a in (entry.alerts ?? const <GtAlert>[]))
+              GtAlert.fromJson(a.toJson()),
+          ],
         ),
       ),
     );
@@ -3084,6 +3335,7 @@ class CallbookController extends ChangeNotifier {
       );
       final switchSeq = ++_sourceSwitchSeq;
       _clearTapSession(notify: false);
+      _invalidateDownbeatAnalysis(notify: false);
       _clearUndoHistory();
       _restorableCreditLines = List<LyricLine>.unmodifiable(filteredCredits);
       _currentTimeMs = 0;
@@ -3341,6 +3593,7 @@ class CallbookController extends ChangeNotifier {
   Future<void> loadLocalAudioFile(String filePath, String fileName) async {
     final switchSeq = ++_sourceSwitchSeq;
     _clearTapSession(notify: false);
+    _invalidateDownbeatAnalysis(notify: false);
     _knownAudioDurationMs = 0;
     _durationMs = _computeProjectDurationMs(
       _project,
@@ -3385,6 +3638,7 @@ class CallbookController extends ChangeNotifier {
     final spec = findDefaultSongById(songId) ?? defaultPrimarySong;
     final switchSeq = ++_sourceSwitchSeq;
     _clearTapSession(notify: false);
+    _invalidateDownbeatAnalysis(notify: false);
     _clearUndoHistory();
     _restorableCreditLines = const [];
     _gatewayNotifier.notifyListeners();
@@ -3545,6 +3799,7 @@ class CallbookController extends ChangeNotifier {
 
       final switchSeq = ++_sourceSwitchSeq;
       _clearTapSession(notify: false);
+      _invalidateDownbeatAnalysis(notify: false);
       _clearUndoHistory();
       _restorableCreditLines = const [];
       _gatewayNotifier.notifyListeners();
@@ -3673,6 +3928,7 @@ class CallbookController extends ChangeNotifier {
 
     final switchSeq = ++_sourceSwitchSeq;
     _clearTapSession(notify: false);
+    _invalidateDownbeatAnalysis(notify: false);
     _clearUndoHistory();
     _restorableCreditLines = const [];
     _gatewayNotifier.notifyListeners();
@@ -3811,7 +4067,7 @@ class CallbookController extends ChangeNotifier {
     _audio.configure(
       bpm: _project.meta.bpm,
       beatsPerBar: _project.meta.beatsPerBar,
-      offsetMs: _project.meta.offsetMs,
+      offsetMs: _previewDownbeatOffsetMs ?? _project.meta.offsetMs,
       cueOutputCompensationMs: _cueOutputCompensationMs,
       metronomeEnabled: _metronomeEnabled,
       metronomeVolume: _metronomeVolume,
@@ -3869,6 +4125,7 @@ class CallbookController extends ChangeNotifier {
     _lifecycleListener?.dispose();
     _lifecycleListener = null;
     unawaited(_audio.dispose());
+    _audioFetcher.dispose();
     _neteaseDirect.dispose();
     _lrclibDirect.dispose();
     _themeNotifier.dispose();

@@ -714,6 +714,9 @@ class _BlockingLoopbackHttpClient implements HttpClient {
   Future<HttpClientRequest> postUrl(Uri url) => openUrl('POST', url);
 
   @override
+  void close({bool force = false}) {}
+
+  @override
   dynamic noSuchMethod(Invocation invocation) {
     return super.noSuchMethod(invocation);
   }

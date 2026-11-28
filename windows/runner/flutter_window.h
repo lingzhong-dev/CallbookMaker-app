@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "audio_decoder.h"
 #include "win32_window.h"
 
 class FlutterWindow : public Win32Window {
@@ -22,6 +23,7 @@ class FlutterWindow : public Win32Window {
  private:
   flutter::DartProject project_;
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
+  std::unique_ptr<AudioDecoderChannel> audio_decoder_channel_;
   bool initial_surface_nudge_scheduled_ = false;
 };
 

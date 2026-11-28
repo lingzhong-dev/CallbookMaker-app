@@ -6,11 +6,13 @@ import 'package:flutter/widgets.dart';
 import 'package:prism_ui/icons/icons.dart';
 import 'package:prism_ui/prism_ui.dart';
 
+import '../models/callbook_models.dart';
 import '../state/callbook_controller.dart';
 import '../utils/color_parser.dart';
 import '../utils/lrc_ruby_parser.dart';
 import 'theme/app_motion.dart';
 import 'theme/app_tokens.dart';
+import 'widgets/app_dialog.dart';
 import 'widgets/audio_source_panel.dart';
 import 'widgets/beat_dots_indicator.dart';
 import 'widgets/callbook_glyphs.dart';
@@ -1016,6 +1018,12 @@ class _DashboardViewState extends State<DashboardView> {
                           !c.lockBpmCalibrateDownbeat,
                         ),
                       ),
+                      TonalChip(
+                        label: '首拍辅助分析',
+                        color: scheme.secondaryContainer,
+                        foregroundColor: scheme.onSecondaryContainer,
+                        onPressed: () => _showDownbeatAnalyzerModal(context, c),
+                      ),
                     ],
                   ),
                 ],
@@ -1959,6 +1967,340 @@ class _OffsetChipButton extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+Future<void> _showDownbeatAnalyzerModal(
+  BuildContext context,
+  CallbookController controller,
+) async {
+  if (!controller.downbeatState.isAnalyzing &&
+      controller.downbeatState.result == null &&
+      controller.downbeatState.errorMessage == null) {
+    unawaited(controller.analyzeDownbeatForCurrentTrack());
+  }
+
+  try {
+    await showAppAdaptiveSheetOrDialog<void>(
+      context: context,
+      dialogBuilder: (dialogCtx) => AlertDialog(
+        title: '首拍辅助分析（已知 BPM 原型）',
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(),
+            child: const Text('关闭'),
+          ),
+        ],
+        child: SizedBox(
+          width: 440,
+          child: _DownbeatAnalyzerBody(
+            controller: controller,
+            onApplied: () {
+              if (dialogCtx.mounted) {
+                Navigator.of(dialogCtx).pop();
+              }
+            },
+          ),
+        ),
+      ),
+      sheetBuilder: (sheetCtx, scrollController) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SheetDragHandle(),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '首拍辅助分析（已知 BPM 原型）',
+                    style: AppTextStyle.headline
+                        .of(sheetCtx, emphasized: true)
+                        .copyWith(color: sheetCtx.colorScheme.onSurface),
+                  ),
+                ),
+                Semantics(
+                  button: true,
+                  label: '关闭首拍辅助分析',
+                  child: IconButton(
+                    tooltip: '关闭',
+                    icon: const GlyphIcon(Glyphs.close, size: 18),
+                    style: const ButtonStyle(
+                      minimumSize: AppTokens.minTapTargetSize,
+                    ),
+                    onPressed: () => Navigator.of(sheetCtx).pop(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: SingleChildScrollView(
+              controller: scrollController,
+              padding: const EdgeInsets.all(AppTokens.s16),
+              child: _DownbeatAnalyzerBody(
+                controller: controller,
+                onApplied: () {
+                  if (sheetCtx.mounted) {
+                    Navigator.of(sheetCtx).pop();
+                  }
+                },
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  } finally {
+    if (controller.downbeatState.isAnalyzing) {
+      controller.cancelDownbeatAnalysis();
+    }
+    controller.clearDownbeatPreviewOffset();
+  }
+}
+
+class _DownbeatAnalyzerBody extends StatefulWidget {
+  const _DownbeatAnalyzerBody({
+    required this.controller,
+    required this.onApplied,
+  });
+
+  final CallbookController controller;
+  final VoidCallback onApplied;
+
+  @override
+  State<_DownbeatAnalyzerBody> createState() => _DownbeatAnalyzerBodyState();
+}
+
+class _DownbeatAnalyzerBodyState extends State<_DownbeatAnalyzerBody> {
+  int? _selectedCandidateOffsetMs;
+  int? _lastResultReqId;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.controller;
+    final scheme = context.colorScheme;
+
+    return ListenableBuilder(
+      listenable: c.alignmentListenable,
+      builder: (context, _) {
+        final state = c.downbeatState;
+        final res = state.result;
+        if (res != null &&
+            res.requestId != _lastResultReqId &&
+            res.candidates.isNotEmpty) {
+          _lastResultReqId = res.requestId;
+          _selectedCandidateOffsetMs = res.candidates.first.offsetMs;
+        }
+        final activeOffset =
+            _selectedCandidateOffsetMs ?? c.project.meta.offsetMs;
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '基于当前工程已知 BPM（${c.project.meta.bpm} BPM）分析有声起点与节拍相位候选，仅辅助参考，不会自动覆盖现有设置或平移歌词。',
+              style: AppTextStyle.caption1.of(context).copyWith(
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 10),
+            if (state.isAnalyzing) ...[
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: ShapeDecoration(
+                  color: scheme.surfaceContainerLow,
+                  shape: AppShape.md,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      state.stageMessage.isNotEmpty
+                          ? state.stageMessage
+                          : '正在分析音频…',
+                      style: AppTextStyle.subheadline
+                          .of(context, emphasized: true)
+                          .copyWith(color: scheme.onSurface),
+                    ),
+                    const SizedBox(height: 8),
+                    TonalButton(
+                      size: TonalButtonSize.compact,
+                      label: '取消分析',
+                      onPressed: c.cancelDownbeatAnalysis,
+                    ),
+                  ],
+                ),
+              ),
+            ] else if (state.errorMessage != null) ...[
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: ShapeDecoration(
+                  color: scheme.errorContainer.withValues(alpha: 0.45),
+                  shape: AppShape.md,
+                ),
+                child: Text(
+                  state.errorMessage!,
+                  style: AppTextStyle.caption1.of(context).copyWith(
+                    color: scheme.onErrorContainer,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              TonalButton(
+                size: TonalButtonSize.compact,
+                label: '重新分析',
+                onPressed: () => c.analyzeDownbeatForCurrentTrack(),
+              ),
+            ] else if (res != null) ...[
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: ShapeDecoration(
+                  color: scheme.surfaceContainerLow,
+                  shape: AppShape.md,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      res.reliable
+                          ? '有声起点：${res.audibleStartMs ?? 0}ms（不自动裁剪音频）'
+                          : (res.audibleStartMs != null
+                                ? '${res.statusMessage}（有声起点：${res.audibleStartMs}ms）'
+                                : res.statusMessage),
+                      style: AppTextStyle.subheadline
+                          .of(context, emphasized: true)
+                          .copyWith(
+                            color: res.reliable
+                                ? scheme.onSurface
+                                : scheme.error,
+                          ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '已分析 ${(res.telemetry.analyzedDurationMs / 1000).toStringAsFixed(1)}s · '
+                      '拉取 ${res.telemetry.fetchMs}ms · 解码 ${res.telemetry.decodeMs}ms · '
+                      '重采样 ${res.telemetry.resampleMs}ms · 分析 ${res.telemetry.analyzeMs}ms · '
+                      '峰值 ${(res.telemetry.estimatedPeakBytes / (1024 * 1024)).toStringAsFixed(2)}MB',
+                      style: AppTextStyle.caption2.of(context).copyWith(
+                        color: scheme.onSurfaceVariant,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (res.reliable && res.candidates.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                for (final cand in res.candidates) ...[
+                  PressSurface(
+                    fill: _selectedCandidateOffsetMs == cand.offsetMs
+                        ? scheme.primaryContainer.withValues(alpha: 0.55)
+                        : scheme.surfaceContainerLow,
+                    shape: AppShape.md,
+                    onPressed: () => setState(() {
+                      _selectedCandidateOffsetMs = cand.offsetMs;
+                    }),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            '${cand.label} · ${cand.offsetMs}ms',
+                            style: AppTextStyle.subheadline
+                                .of(context, emphasized: true)
+                                .copyWith(color: scheme.onSurface),
+                          ),
+                        ),
+                        TonalChip(
+                          label: '置信度 ${(cand.confidence * 100).round()}%',
+                          color: scheme.primaryContainer,
+                          foregroundColor: scheme.onPrimaryContainer,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                ],
+                const SizedBox(height: 6),
+                Text(
+                  '微调与试听偏移：${activeOffset}ms',
+                  style: AppTextStyle.caption1
+                      .of(context, emphasized: true)
+                      .copyWith(
+                        color: scheme.onSurface,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                ),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    for (final delta in const [-10, -1, 1, 10])
+                      TonalChip(
+                        label: delta > 0 ? '+$delta' : '$delta',
+                        color: scheme.surfaceContainerHigh,
+                        foregroundColor: scheme.onSurface,
+                        onPressed: () => setState(() {
+                          _selectedCandidateOffsetMs = clampSongOffsetMs(
+                            activeOffset + delta,
+                          );
+                        }),
+                      ),
+                    TonalChip(
+                      label: '试听预览',
+                      color: scheme.secondaryContainer,
+                      foregroundColor: scheme.onSecondaryContainer,
+                      onPressed: () => c.previewDownbeatCandidate(activeOffset),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TonalButton(
+                        size: TonalButtonSize.compact,
+                        label: '重新分析',
+                        onPressed: () => c.analyzeDownbeatForCurrentTrack(),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: FilledButton(
+                        onPressed: () {
+                          c.applyDownbeatCandidateOffset(activeOffset);
+                          widget.onApplied();
+                        },
+                        child: const Text('应用到首拍'),
+                      ),
+                    ),
+                  ],
+                ),
+              ] else ...[
+                const SizedBox(height: 10),
+                TonalButton(
+                  size: TonalButtonSize.compact,
+                  label: '重新分析',
+                  onPressed: () => c.analyzeDownbeatForCurrentTrack(),
+                ),
+              ],
+            ] else ...[
+              FilledButton(
+                onPressed: () => c.analyzeDownbeatForCurrentTrack(),
+                child: const Text('开始分析当前音频'),
+              ),
+            ],
+          ],
+        );
+      },
     );
   }
 }
