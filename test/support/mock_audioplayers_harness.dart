@@ -7,7 +7,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:live_call_studio/services/api_client.dart';
 import 'package:live_call_studio/services/audio_metronome_service.dart';
 import 'package:live_call_studio/services/lrclib_direct_client.dart';
 import 'package:live_call_studio/services/netease_direct_client.dart';
@@ -480,16 +479,10 @@ Future<CallbookController> createTestCallbookController({
   Map<String, Object> initialPrefs = const {
     'live_call_studio_onboarding_v1': true,
   },
-  http.Client? apiHttpClient,
   http.Client? neteaseHttpClient,
   http.Client? lrclibHttpClient,
 }) async {
   SharedPreferences.setMockInitialValues(initialPrefs);
-  final api = CallbookApiClient(
-    baseUrl: 'http://127.0.0.1:8000',
-    httpClient:
-        apiHttpClient ?? MockClient((_) async => http.Response('offline', 503)),
-  );
   final neteaseDirect = NeteaseDirectClient(
     httpClient:
         neteaseHttpClient ??
@@ -501,7 +494,6 @@ Future<CallbookController> createTestCallbookController({
         MockClient((_) async => http.Response('offline', 503)),
   );
   final controller = CallbookController(
-    apiClient: api,
     neteaseDirectClient: neteaseDirect,
     lrclibDirectClient: lrclibDirect,
     enableAudioOutput: enableAudioOutput,

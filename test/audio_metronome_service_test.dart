@@ -6,8 +6,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:live_call_studio/models/callbook_models.dart';
-import 'package:live_call_studio/services/api_client.dart';
 import 'package:live_call_studio/services/audio_metronome_service.dart';
+import 'package:live_call_studio/services/netease_direct_client.dart';
 import 'package:live_call_studio/state/callbook_controller.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -587,12 +587,10 @@ void main() {
       SharedPreferences.setMockInitialValues({
         'live_call_studio_project_v1': jsonEncode(savedLocalProject.toJson()),
       });
-      final offlineApi = CallbookApiClient(
-        baseUrl: 'http://127.0.0.1:8000',
-        httpClient: MockClient((_) async => http.Response('offline', 503)),
-      );
       final localController = CallbookController(
-        apiClient: offlineApi,
+        neteaseDirectClient: NeteaseDirectClient(
+          httpClient: MockClient((_) async => http.Response('offline', 503)),
+        ),
         enableAudioOutput: true,
       );
       await localController.init();
@@ -634,26 +632,39 @@ void main() {
       SharedPreferences.setMockInitialValues({
         'live_call_studio_project_v1': jsonEncode(savedNeteaseProject.toJson()),
       });
-      final onlineApi = CallbookApiClient(
-        baseUrl: 'http://127.0.0.1:8000',
+      final directNetease = NeteaseDirectClient(
         httpClient: MockClient((req) async {
-          if (req.url.path == '/health') {
-            return http.Response('{"status":"ok","providers":["netease"]}', 200);
+          if (req.url.path == '/eapi/song/lyric/v1') {
+            return http.Response(
+              jsonEncode({'code': 200, 'lrc': {'lyric': '[00:02.00] Remote line'}}),
+              200,
+            );
           }
-          if (req.url.path == '/api/track/netease/998877') {
+          if (req.url.path == '/eapi/v3/song/detail') {
             return http.Response(
               jsonEncode({
-                'track': {
-                  'id': '998877',
-                  'title': 'Saved Remote Song',
-                  'artist': 'Miku',
-                  'platform': 'netease',
-                  'durationMs': 180000,
-                },
-                'audioUrl': 'https://cdn.example.com/refreshed_998877.mp3',
-                'rawLrc': '[00:02.00] Remote line',
-                'translatedLrc': '',
-                'lines': [],
+                'code': 200,
+                'songs': [
+                  {
+                    'id': 998877,
+                    'name': 'Saved Remote Song',
+                    'ar': [
+                      {'name': 'Miku'},
+                    ],
+                    'dt': 180000,
+                  },
+                ],
+              }),
+              200,
+            );
+          }
+          if (req.url.path == '/eapi/song/enhance/player/url/v1') {
+            return http.Response(
+              jsonEncode({
+                'code': 200,
+                'data': [
+                  {'url': 'https://cdn.example.com/refreshed_998877.mp3'},
+                ],
               }),
               200,
             );
@@ -662,7 +673,7 @@ void main() {
         }),
       );
       final neteaseController = CallbookController(
-        apiClient: onlineApi,
+        neteaseDirectClient: directNetease,
         enableAudioOutput: true,
       );
       await neteaseController.init();

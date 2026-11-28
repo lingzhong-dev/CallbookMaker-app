@@ -6,7 +6,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:live_call_studio/models/callbook_models.dart';
-import 'package:live_call_studio/services/api_client.dart';
 import 'package:live_call_studio/services/lrclib_direct_client.dart';
 import 'package:live_call_studio/services/netease_direct_client.dart';
 import 'package:live_call_studio/state/callbook_controller.dart';
@@ -260,10 +259,6 @@ void main() {
     test('loadRemoteTrack respects filterLrcHeaderCredits, fills empty credits, and clears restorable lines on archive switch', () async {
       SharedPreferences.setMockInitialValues({'cbm_onboarding_done': true});
       final controller = CallbookController(
-        apiClient: CallbookApiClient(
-          baseUrl: 'http://127.0.0.1:8000',
-          httpClient: MockClient((_) async => http.Response('offline', 503)),
-        ),
         neteaseDirectClient: NeteaseDirectClient(
           httpClient: MockClient((_) async => http.Response('offline', 503)),
         ),

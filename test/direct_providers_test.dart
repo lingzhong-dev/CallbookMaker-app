@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
@@ -8,12 +9,11 @@ import 'package:http/testing.dart';
 import 'package:live_call_studio/data/default_songs.dart';
 import 'package:live_call_studio/main.dart';
 import 'package:live_call_studio/models/callbook_models.dart';
-import 'package:live_call_studio/services/api_client.dart';
-import 'package:live_call_studio/services/desktop_service_launcher.dart';
 import 'package:live_call_studio/services/lrclib_direct_client.dart';
 import 'package:live_call_studio/services/netease_direct_client.dart';
 import 'package:live_call_studio/state/callbook_controller.dart';
 import 'package:live_call_studio/utils/lrc_ruby_parser.dart';
+import 'package:live_call_studio/utils/netease_cookie_utils.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 http.Response _jsonResp(Object data, [int statusCode = 200]) {
@@ -100,15 +100,19 @@ void main() {
       expect(actualHex.length % 32, 0);
     });
 
-    test('DesktopServiceLauncher.maskNeteaseCookie masks MUSIC_U safely', () {
-      expect(DesktopServiceLauncher.maskNeteaseCookie(''), '');
+    test('maskNeteaseCookie and normalizeNeteaseCookie handle MUSIC_U and full cookies safely', () {
+      expect(maskNeteaseCookie(''), '');
       expect(
-        DesktopServiceLauncher.maskNeteaseCookie('MUSIC_U=short; os=pc'),
+        maskNeteaseCookie('MUSIC_U=short; os=pc'),
         'MUSIC_U=***',
       );
       expect(
-        DesktopServiceLauncher.maskNeteaseCookie('abcd12345678wxyz'),
+        maskNeteaseCookie('abcd12345678wxyz'),
         'MUSIC_U=abcd***wxyz',
+      );
+      expect(
+        normalizeNeteaseCookie('Cookie: MUSIC_U=token987654321; __csrf=xyz'),
+        'MUSIC_U=token987654321; __csrf=xyz; os=pc',
       );
     });
 
@@ -319,7 +323,6 @@ void main() {
 
   group('CallbookController Pure-Dart & Hybrid Mode Integration', () {
     test('Standalone no-Node/no-backend mode searches, validates Cookie, and loads track cleanly', () async {
-      final offlineBackend = MockClient((_) async => http.Response('offline', 503));
       final neteaseHttp = MockClient((req) async {
         final path = req.url.path;
         if (path == '/eapi/w/nuser/account/get') {
@@ -380,10 +383,6 @@ void main() {
       });
 
       final controller = CallbookController(
-        apiClient: CallbookApiClient(
-          baseUrl: 'http://127.0.0.1:8000',
-          httpClient: offlineBackend,
-        ),
         neteaseDirectClient: NeteaseDirectClient(httpClient: neteaseHttp),
         lrclibDirectClient: LrclibDirectClient(
           httpClient: MockClient((_) async => _jsonResp([])),
@@ -392,14 +391,13 @@ void main() {
       );
       try {
         await controller.init();
-        expect(controller.backendOnline, isFalse);
-        expect(controller.gatewayStatus.nodeAvailable, isFalse);
+        expect(controller.gatewayStatus.cookieConfigured, isFalse);
 
         final verified = await controller.oneClickConfigureAndStartGateway(
           cookie: 'directcookie123456',
         );
         expect(verified, isTrue);
-        expect(controller.gatewayStatus.gatewayOnline, isTrue);
+        expect(controller.gatewayStatus.reachable, isTrue);
         expect(controller.gatewayStatus.neteaseAccount, 'DirectTester');
         expect(controller.gatewayStatus.cookieMasked, 'MUSIC_U=dire***3456');
 
@@ -419,10 +417,6 @@ void main() {
 
     test('Auto search returns empty results cleanly and points to 默认曲库 when all sources offline', () async {
       final controller = CallbookController(
-        apiClient: CallbookApiClient(
-          baseUrl: 'http://127.0.0.1:8000',
-          httpClient: MockClient((_) async => http.Response('offline', 503)),
-        ),
         neteaseDirectClient: NeteaseDirectClient(
           httpClient: MockClient((_) async => http.Response('error', 502)),
         ),
@@ -441,66 +435,48 @@ void main() {
       }
     });
 
-    test('Hybrid mode: FastAPI backend without Node still uses NeteaseDirectClient + enriches Ruby via /api/lyrics/parse', () async {
-      var rubyCalled = false;
-      final hybridBackend = MockClient((req) async {
-        final path = req.url.path;
-        if (path == '/health') {
-          return _jsonResp({
-            'status': 'ok',
-            'customProxyEnabled': false,
-            'providers': ['lrclib'],
-          });
-        }
-        if (path == '/api/site-copy') {
-          return _jsonResp({'entries': {}});
-        }
-        if (path == '/api/gateway/status') {
-          return _jsonResp({
-            'gatewayUrl': 'http://127.0.0.1:3000',
-            'gatewayOnline': false,
-            'customProxyEnabled': false,
-            'nodeAvailable': false,
-            'packageAvailable': false,
-            'message': 'No Node.js installed',
-          });
-        }
-        if (path == '/api/gateway/configure') {
-          return _jsonResp({
-            'gatewayUrl': 'http://127.0.0.1:3000',
-            'gatewayOnline': false,
-            'customProxyEnabled': false,
-            'nodeAvailable': false,
-            'packageAvailable': false,
-            'message': 'No Node.js',
-          });
-        }
-        if (path == '/api/lyrics/parse') {
-          rubyCalled = true;
-          return _jsonResp({
-            'lines': [
-              {
-                'id': 'ruby-1',
-                'startTimeMs': 8000,
-                'endTimeMs': 14000,
-                'kind': 'lyric',
-                'text': {
-                  'original': '星空を見上げて',
-                  'ruby': '<ruby>星空<rt>ほしぞら</rt></ruby>を<ruby>見上<rt>みあ</rt></ruby>げて',
-                  'romaji': 'hoshizora wo miagete',
-                  'translation': '仰望星空',
-                },
-              },
-            ],
-          });
-        }
-        return http.Response('Not found', 404);
+    test('In-place upgrade with legacy backend/gateway URLs preserves Cookie, archives & theme and makes zero loopback requests', () async {
+      const legacyArchive = CallbookArchiveEntry(
+        id: 'legacy-arc-1',
+        name: 'Legacy Preserved Song',
+        createdAt: 1700000000000,
+        savedAt: 1700000001000,
+        project: CallProject(
+          meta: CallProjectMeta(
+            title: 'Legacy Preserved Song',
+            artist: 'Stage Unit',
+            bpm: 150,
+          ),
+          lines: [
+            LyricLine(
+              id: 'legacy-1',
+              startTimeMs: 4000,
+              endTimeMs: 9000,
+              text: LyricText(original: '星を追いかけて'),
+            ),
+          ],
+        ),
+      );
+      SharedPreferences.setMockInitialValues({
+        'live_call_studio_onboarding_v1': true,
+        'live_call_studio_backend_url_v1': 'http://127.0.0.1:8000',
+        'live_call_studio_gateway_url_v1': 'http://127.0.0.1:3000',
+        'live_call_studio_netease_cookie_v1': 'MUSIC_U=legacycookie999999; os=pc',
+        'live_call_studio_theme_v1': jsonEncode({
+          'themeMode': 2,
+          'seedColor': 0xFF123456,
+          'offlineRubyEnabled': false,
+        }),
+        'live_call_studio_archives_v1': jsonEncode([legacyArchive.toJson()]),
       });
 
+      final blockedLoopbackRequests = <Uri>[];
+      final seenNeteaseHeaders = <String>[];
       final neteaseHttp = MockClient((req) async {
+        seenNeteaseHeaders.add(req.headers['Cookie'] ?? '');
         final path = req.url.path;
         if (path == '/eapi/w/nuser/account/get') {
-          return _jsonResp({'code': 200, 'profile': {'nickname': 'HybridUser'}});
+          return _jsonResp({'code': 200, 'profile': {'nickname': 'LegacyUser'}});
         }
         if (path == '/eapi/cloudsearch/pc') {
           return _jsonResp({
@@ -509,9 +485,9 @@ void main() {
               'songs': [
                 {
                   'id': 556677,
-                  'name': 'Hybrid Ruby Track',
+                  'name': 'Direct Upgrade Track',
                   'ar': [
-                    {'name': 'Ruby Unit'},
+                    {'name': 'Direct Unit'},
                   ],
                   'dt': 40000,
                 },
@@ -530,7 +506,7 @@ void main() {
           return _jsonResp({
             'code': 200,
             'songs': [
-              {'id': 556677, 'name': 'Hybrid Ruby Track', 'dt': 40000},
+              {'id': 556677, 'name': 'Direct Upgrade Track', 'dt': 40000},
             ],
           });
         }
@@ -540,47 +516,55 @@ void main() {
         return http.Response('Not found', 404);
       });
 
-      final controller = CallbookController(
-        apiClient: CallbookApiClient(
-          baseUrl: 'http://127.0.0.1:8000',
-          httpClient: hybridBackend,
-        ),
-        neteaseDirectClient: NeteaseDirectClient(httpClient: neteaseHttp),
-        lrclibDirectClient: LrclibDirectClient(
-          httpClient: MockClient((_) async => _jsonResp([])),
-        ),
-        enableAudioOutput: false,
+      await HttpOverrides.runZoned(
+        () async {
+          final controller = CallbookController(
+            neteaseDirectClient: NeteaseDirectClient(httpClient: neteaseHttp),
+            lrclibDirectClient: LrclibDirectClient(
+              httpClient: MockClient((_) async => _jsonResp([])),
+            ),
+            enableAudioOutput: false,
+          );
+          try {
+            await controller.init();
+            expect(blockedLoopbackRequests, isEmpty);
+            expect(controller.savedNeteaseCookie, 'MUSIC_U=legacycookie999999; os=pc');
+            expect(controller.gatewayStatus.cookieConfigured, isTrue);
+            expect(controller.archives.length, 1);
+            expect(controller.archives.first.id, 'legacy-arc-1');
+            expect(controller.seedColor.toARGB32(), 0xFF123456);
+            expect(controller.offlineRubyEnabled, isFalse);
+
+            await controller.refreshGatewayStatus(probeDirect: true);
+            expect(controller.gatewayStatus.reachable, isTrue);
+            expect(controller.gatewayStatus.neteaseAccount, 'LegacyUser');
+
+            await controller.searchTracks('Upgrade', source: 'custom_proxy');
+            expect(controller.searchResults.length, 1);
+
+            // Disabling offline Ruby must NOT fall back to any Python backend request.
+            await controller.loadRemoteTrack(controller.searchResults.first);
+            final lyric = controller.sortedLines.firstWhere(
+              (l) => l.kind == LyricLineKind.lyric,
+            );
+            expect(lyric.text.original, '星空を見上げて');
+            expect(lyric.text.ruby, isNull);
+            expect(
+              seenNeteaseHeaders.every((c) => c.contains('MUSIC_U=legacycookie999999')),
+              isTrue,
+            );
+
+            // Re-enabling offline Ruby uses built-in local annotator with zero loopback calls.
+            controller.setOfflineRubyEnabled(true);
+            await controller.importLrcText(lrc: '[00:08.00] 星空を見上げて');
+            expect(blockedLoopbackRequests, isEmpty);
+          } finally {
+            controller.dispose();
+          }
+        },
+        createHttpClient: (_) => _BlockingLoopbackHttpClient(blockedLoopbackRequests),
       );
-      try {
-        await controller.init();
-        expect(controller.backendOnline, isTrue);
-
-        final ok = await controller.oneClickConfigureAndStartGateway(
-          cookie: 'hybridcookie999999',
-        );
-        expect(ok, isTrue);
-        expect(controller.gatewayStatus.neteaseAccount, 'HybridUser');
-
-        await controller.searchTracks('Ruby', source: 'custom_proxy');
-        expect(controller.searchResults.length, 1);
-        expect(controller.searchResults.first.provider, 'netease_direct');
-
-        await controller.loadRemoteTrack(controller.searchResults.first);
-        // Built-in offline kuromoji annotator enriches Japanese lyrics locally first.
-        expect(rubyCalled, isFalse);
-        final lyric = controller.sortedLines.firstWhere(
-          (l) => l.kind == LyricLineKind.lyric,
-        );
-        expect(lyric.text.ruby, contains('<ruby>'));
-        expect((lyric.text.romaji ?? '').toLowerCase(), 'hoshizora wo miagete');
-
-        // Disabling built-in offline annotator falls back to optional backend /api/lyrics/parse.
-        controller.setOfflineRubyEnabled(false);
-        await controller.loadRemoteTrack(controller.searchResults.first);
-        expect(rubyCalled, isTrue);
-      } finally {
-        controller.dispose();
-      }
+      expect(blockedLoopbackRequests, isEmpty);
     });
 
     testWidgets(
@@ -588,10 +572,6 @@ void main() {
       timeout: const Timeout(Duration(seconds: 20)),
       (tester) async {
         final controller = CallbookController(
-          apiClient: CallbookApiClient(
-            baseUrl: 'http://127.0.0.1:8000',
-            httpClient: MockClient((_) async => http.Response('offline', 503)),
-          ),
           neteaseDirectClient: NeteaseDirectClient(
             httpClient: MockClient((_) async => _jsonResp({'code': 200})),
           ),
@@ -651,10 +631,6 @@ void main() {
       timeout: const Timeout(Duration(seconds: 20)),
       (tester) async {
         final controller = CallbookController(
-          apiClient: CallbookApiClient(
-            baseUrl: 'http://127.0.0.1:8000',
-            httpClient: MockClient((_) async => http.Response('offline', 503)),
-          ),
           neteaseDirectClient: NeteaseDirectClient(
             httpClient: MockClient((req) async {
               if (req.url.path == '/eapi/w/nuser/account/get') {
@@ -718,4 +694,27 @@ void main() {
       },
     );
   });
+}
+
+class _BlockingLoopbackHttpClient implements HttpClient {
+  _BlockingLoopbackHttpClient(this.recordedUris);
+
+  final List<Uri> recordedUris;
+
+  @override
+  Future<HttpClientRequest> openUrl(String method, Uri url) async {
+    recordedUris.add(url);
+    throw SocketException('Blocked unexpected loopback HTTP call to $url');
+  }
+
+  @override
+  Future<HttpClientRequest> getUrl(Uri url) => openUrl('GET', url);
+
+  @override
+  Future<HttpClientRequest> postUrl(Uri url) => openUrl('POST', url);
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) {
+    return super.noSuchMethod(invocation);
+  }
 }

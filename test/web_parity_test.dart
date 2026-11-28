@@ -12,8 +12,6 @@ import 'package:http/testing.dart';
 import 'package:live_call_studio/constants/app_info.dart';
 import 'package:live_call_studio/main.dart';
 import 'package:live_call_studio/models/callbook_models.dart';
-import 'package:live_call_studio/services/api_client.dart';
-import 'package:live_call_studio/services/desktop_service_launcher.dart';
 import 'package:live_call_studio/services/lrclib_direct_client.dart';
 import 'package:live_call_studio/services/netease_direct_client.dart';
 import 'package:live_call_studio/state/callbook_controller.dart';
@@ -26,6 +24,7 @@ import 'package:live_call_studio/ui/theme_view.dart';
 import 'package:live_call_studio/ui/widgets/archive_switcher_dialog.dart';
 import 'package:live_call_studio/ui/widgets/gateway_config_panel.dart';
 import 'package:live_call_studio/ui/widgets/timeline_editor_widget.dart';
+import 'package:live_call_studio/utils/netease_cookie_utils.dart';
 import 'package:live_call_studio/utils/xlsx_export.dart';
 import 'package:prism_ui/prism_ui.dart' as prism;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -119,7 +118,6 @@ void _setupHeadlessPluginMocks({
 }
 
 Future<CallbookController> _initController({
-  http.Client? httpClient,
   http.Client? neteaseHttpClient,
   http.Client? lrclibHttpClient,
   Map<String, Object> initialPrefs = const {
@@ -128,12 +126,6 @@ Future<CallbookController> _initController({
   bool enableAudioOutput = false,
 }) async {
   SharedPreferences.setMockInitialValues(initialPrefs);
-  final client =
-      httpClient ?? MockClient((req) async => http.Response('offline', 503));
-  final api = CallbookApiClient(
-    baseUrl: 'http://127.0.0.1:8000',
-    httpClient: client,
-  );
   final neteaseDirect = NeteaseDirectClient(
     httpClient:
         neteaseHttpClient ??
@@ -145,7 +137,6 @@ Future<CallbookController> _initController({
         MockClient((req) async => http.Response('offline', 503)),
   );
   final controller = CallbookController(
-    apiClient: api,
     neteaseDirectClient: neteaseDirect,
     lrclibDirectClient: lrclibDirect,
     enableAudioOutput: enableAudioOutput,
@@ -1391,126 +1382,72 @@ void main() {
     );
   });
 
-  group('7. Mocked Backend API, SiteCopy & NetEase Gateway Service', () {
+  group('7. Pure-Dart Direct Client, Local siteText & Cookie Verification', () {
     testWidgets(
-      'Hydrates backend & site copy, searches/loads remote track, configures & stops NetEase Gateway cleanly',
+      'Renders local UI copy, validates Netease Cookie, searches/loads remote track via pure-Dart direct client',
       timeout: const Timeout(Duration(seconds: 20)),
       (tester) async {
-        bool gatewayRunning = false;
-        String storedCookieMasked = '';
-
-        final mockHttp = MockClient((req) async {
+        final mockNeteaseHttp = MockClient((req) async {
           final path = req.url.path;
-          if (path == '/health') {
+          if (path == '/eapi/w/nuser/account/get') {
+            final cookie = req.headers['Cookie'] ?? '';
+            final loggedIn = cookie.contains('MUSIC_U=abc123token456');
             return http.Response(
               jsonEncode({
-                'status': 'ok',
-                'customProxyEnabled': gatewayRunning,
-                'providers': ['custom_proxy', 'lrclib'],
+                'code': 200,
+                'profile': loggedIn ? {'nickname': 'TestUserCN'} : null,
               }),
               200,
               headers: {'content-type': 'application/json; charset=utf-8'},
             );
           }
-          if (path == '/api/site-copy') {
+          if (path == '/eapi/cloudsearch/pc') {
             return http.Response(
               jsonEncode({
-                'entries': {
-                  'sidebar_dashboard': {
-                    'original': '主页',
-                    'value': '工作台',
-                  },
-                  'header_practice': {
-                    'original': '演练',
-                    'value': '舞台模式',
-                  },
+                'code': 200,
+                'result': {
+                  'songs': [
+                    {
+                      'id': 998877,
+                      'name': 'Remote Mirage',
+                      'ar': [
+                        {'name': 'Unit X'},
+                      ],
+                      'al': {'name': 'Single 1'},
+                      'dt': 42000,
+                      'bpm': 168,
+                    },
+                  ],
                 },
               }),
               200,
               headers: {'content-type': 'application/json; charset=utf-8'},
             );
           }
-          if (path == '/api/gateway/status') {
+          if (path == '/eapi/song/lyric/v1') {
             return http.Response(
               jsonEncode({
-                'gatewayUrl': 'http://127.0.0.1:3000',
-                'gatewayOnline': gatewayRunning,
-                'customProxyEnabled': gatewayRunning,
-                'cookieConfigured': storedCookieMasked.isNotEmpty,
-                'cookieMasked': storedCookieMasked,
-                'managedByBackend': gatewayRunning,
-                'pid': gatewayRunning ? 43210 : null,
-                'canSpawnLocal': true,
-                'nodeAvailable': true,
-                'packageAvailable': true,
-                'neteaseAccount': gatewayRunning ? 'TestUserCN' : null,
-                'message': gatewayRunning ? '网关在线运行中' : '网关未启动',
+                'code': 200,
+                'lrc': {'lyric': '[00:08.00] 夢を追いかけよう'},
+                'tlyric': {'lyric': '[00:08.00] 去追逐梦想吧'},
+                'romalrc': {'lyric': '[00:08.00] yume wo oikakeyou'},
               }),
               200,
               headers: {'content-type': 'application/json; charset=utf-8'},
             );
           }
-          if (path == '/api/gateway/configure') {
-            final body = jsonDecode(req.body) as Map<String, dynamic>;
-            final cookie = body['neteaseCookie']?.toString() ?? '';
-            gatewayRunning = cookie.contains('MUSIC_U=');
-            storedCookieMasked = 'MUSIC_U=***test';
+          if (path == '/eapi/v3/song/detail') {
             return http.Response(
               jsonEncode({
-                'gatewayUrl': body['gatewayUrl'] ?? 'http://127.0.0.1:3000',
-                'gatewayOnline': gatewayRunning,
-                'customProxyEnabled': gatewayRunning,
-                'cookieConfigured': true,
-                'cookieMasked': storedCookieMasked,
-                'managedByBackend': true,
-                'pid': 43210,
-                'canSpawnLocal': true,
-                'nodeAvailable': true,
-                'packageAvailable': true,
-                'neteaseAccount': 'TestUserCN',
-                'message': '网关已启动并登录成功',
-              }),
-              200,
-              headers: {'content-type': 'application/json; charset=utf-8'},
-            );
-          }
-          if (path == '/api/gateway/stop') {
-            gatewayRunning = false;
-            return http.Response(
-              jsonEncode({
-                'gatewayUrl': 'http://127.0.0.1:3000',
-                'gatewayOnline': false,
-                'customProxyEnabled': false,
-                'cookieConfigured': true,
-                'cookieMasked': storedCookieMasked,
-                'managedByBackend': false,
-                'canSpawnLocal': true,
-                'nodeAvailable': true,
-                'packageAvailable': true,
-                'message': '网关已停止',
-              }),
-              200,
-              headers: {'content-type': 'application/json; charset=utf-8'},
-            );
-          }
-          if (path == '/api/search') {
-            return http.Response(
-              jsonEncode({
-                'query': req.url.queryParameters['q'] ?? '',
-                'providerUsed': 'custom_proxy',
-                'fallbackTriggered': false,
-                'results': [
+                'code': 200,
+                'songs': [
                   {
-                    'id': '998877',
-                    'platform': 'netease',
-                    'title': 'Remote Mirage',
-                    'artist': 'Unit X',
-                    'album': 'Single 1',
-                    'durationMs': 42000,
-                    'bpm': 168,
-                    'hasSyncedLyrics': true,
-                    'hasAudioUrl': true,
-                    'provider': 'custom_proxy',
+                    'id': 998877,
+                    'name': 'Remote Mirage',
+                    'ar': [
+                      {'name': 'Unit X'},
+                    ],
+                    'dt': 42000,
                   },
                 ],
               }),
@@ -1518,37 +1455,12 @@ void main() {
               headers: {'content-type': 'application/json; charset=utf-8'},
             );
           }
-          if (path == '/api/track/custom_proxy/998877') {
+          if (path == '/eapi/song/enhance/player/url/v1') {
             return http.Response(
               jsonEncode({
-                'track': {
-                  'id': '998877',
-                  'platform': 'netease',
-                  'title': 'Remote Mirage',
-                  'artist': 'Unit X',
-                  'durationMs': 42000,
-                  'bpm': 168,
-                  'hasSyncedLyrics': true,
-                  'hasAudioUrl': true,
-                  'provider': 'custom_proxy',
-                },
-                'audioUrl': 'http://127.0.0.1:3000/song.mp3',
-                'rawLrc': '[00:08.00] 夢を追いかけよう',
-                'translatedLrc': '[00:08.00] 去追逐梦想吧',
-                'lines': [
-                  {
-                    'id': 'rem-1',
-                    'startTimeMs': 8000,
-                    'endTimeMs': 15000,
-                    'kind': 'lyric',
-                    'text': {
-                      'original': '夢を追いかけよう',
-                      'ruby':
-                          '<ruby>夢<rt>ゆめ</rt></ruby>を<ruby>追<rt>お</rt></ruby>いかけよう',
-                      'romaji': 'yume wo oikakeyou',
-                      'translation': '去追逐梦想吧',
-                    },
-                  },
+                'code': 200,
+                'data': [
+                  {'url': 'https://cdn.example.com/song.mp3'},
                 ],
               }),
               200,
@@ -1558,7 +1470,9 @@ void main() {
           return http.Response('Not found', 404);
         });
 
-        final controller = await _initController(httpClient: mockHttp);
+        final controller = await _initController(
+          neteaseHttpClient: mockNeteaseHttp,
+        );
         controller.setRoute(StudioRoute.export);
         try {
           await _pumpWithViewport(
@@ -1571,31 +1485,29 @@ void main() {
           );
           expect(tester.takeException(), isNull);
 
-          expect(controller.backendOnline, isTrue);
-          expect(controller.siteText('演练'), '舞台模式');
-          expect(controller.siteText('主页'), '工作台');
-          expect(find.text('工作台'), findsOneWidget);
-          // Gap vs Web: no SiteEditOverlay / '文字编辑' trigger in Flutter
+          // site-copy retired remotely; local siteText preserves default copy cleanly
+          expect(controller.siteText('演练'), '演练');
+          expect(controller.siteText('主页'), '主页');
+          expect(find.text('主页'), findsOneWidget);
           expect(find.text('文字编辑'), findsNothing);
 
-          // Cookie normalization + one-click gateway configure & start
+          // Cookie normalization + direct EAPI verification
           expect(
-            DesktopServiceLauncher.normalizeNeteaseCookie('abc123token456'),
+            normalizeNeteaseCookie('abc123token456'),
             'MUSIC_U=abc123token456; os=pc',
           );
           final gwOk = await controller.oneClickConfigureAndStartGateway(
             cookie: 'abc123token456',
-            gatewayUrl: 'http://127.0.0.1:3000',
           );
           expect(gwOk, isTrue);
-          expect(controller.gatewayStatus.gatewayOnline, isTrue);
+          expect(controller.gatewayStatus.reachable, isTrue);
           expect(controller.gatewayStatus.neteaseAccount, 'TestUserCN');
           expect(
             controller.savedNeteaseCookie,
             'MUSIC_U=abc123token456; os=pc',
           );
 
-          // Remote search & load track
+          // Direct search & load track
           await controller.searchTracks('Mirage', source: 'custom_proxy');
           expect(controller.searchResults.length, 1);
           expect(controller.searchResults.first.title, 'Remote Mirage');
@@ -1613,9 +1525,13 @@ void main() {
             isTrue,
           );
 
-          // Stop managed gateway
-          await controller.stopManagedGateway();
-          expect(controller.gatewayStatus.gatewayOnline, isFalse);
+          // Clear Cookie & re-probe switches cleanly back to unauthenticated guest mode
+          final clearedOk = await controller.oneClickConfigureAndStartGateway(
+            cookie: '',
+          );
+          expect(clearedOk, isTrue);
+          expect(controller.gatewayStatus.cookieConfigured, isFalse);
+          expect(controller.gatewayStatus.neteaseAccount, isNull);
           expect(tester.takeException(), isNull);
         } finally {
           await _disposeTestTree(tester, controller);
@@ -2042,30 +1958,41 @@ void main() {
       'Bug #4, #5 & #6: Single-tap archive switch, re-import line highlight, idle-0ms snap guard, and Ctrl+Z / button Undo',
       (tester) async {
         final mockClient = MockClient((req) async {
-          if (req.url.path == '/health') {
-            return http.Response('{"status":"ok","providers":["netease"]}', 200);
-          }
-          if (req.url.path == '/api/track/netease/777') {
+          if (req.url.path == '/eapi/song/lyric/v1') {
             return http.Response(
               jsonEncode({
-                'track': {
-                  'id': '777',
-                  'title': 'Reimported Track',
-                  'artist': 'Singer',
-                  'platform': 'netease',
-                  'durationMs': 90000,
+                'code': 200,
+                'lrc': {
+                  'lyric': '[00:02.00] First\r[00:06.00] Second\r[00:12.00] Third',
                 },
-                'audioUrl': '',
-                'rawLrc': '[00:02.00] First\r[00:06.00] Second\r[00:12.00] Third',
-                'translatedLrc': '',
-                'lines': [],
               }),
               200,
             );
           }
+          if (req.url.path == '/eapi/v3/song/detail') {
+            return http.Response(
+              jsonEncode({
+                'code': 200,
+                'songs': [
+                  {
+                    'id': 777,
+                    'name': 'Reimported Track',
+                    'ar': [
+                      {'name': 'Singer'},
+                    ],
+                    'dt': 90000,
+                  },
+                ],
+              }),
+              200,
+            );
+          }
+          if (req.url.path == '/eapi/song/enhance/player/url/v1') {
+            return http.Response(jsonEncode({'code': 200, 'data': []}), 200);
+          }
           return http.Response('offline', 404);
         });
-        final controller = await _initController(httpClient: mockClient);
+        final controller = await _initController(neteaseHttpClient: mockClient);
         try {
           // Save two distinct archives
           controller.updateMeta(title: 'Archive Alpha');

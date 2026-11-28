@@ -953,3 +953,34 @@ class ArchiveSessionState {
         hasFetchedExternalLyrics: json['hasFetchedExternalLyrics'] == true,
       );
 }
+
+/// Direct Netease account & Cookie connection status model.
+class GatewayStatusInfo {
+  const GatewayStatusInfo({
+    this.reachable = false,
+    this.cookieConfigured = false,
+    this.cookieMasked = '',
+    this.neteaseAccount,
+    this.message = '纯 Dart 直连就绪（免后端 · 支持网易云游客直连 / LRCLIB / 默认曲库）',
+  });
+
+  final bool reachable;
+  final bool cookieConfigured;
+  final String cookieMasked;
+  final String? neteaseAccount;
+  final String message;
+
+  GatewayStatusInfo copyWith({
+    bool? reachable,
+    bool? cookieConfigured,
+    String? cookieMasked,
+    String? neteaseAccount,
+    String? message,
+  }) => GatewayStatusInfo(
+    reachable: reachable ?? this.reachable,
+    cookieConfigured: cookieConfigured ?? this.cookieConfigured,
+    cookieMasked: cookieMasked ?? this.cookieMasked,
+    neteaseAccount: neteaseAccount ?? this.neteaseAccount,
+    message: message ?? this.message,
+  );
+}

@@ -8,7 +8,7 @@ import 'package:pointycastle/export.dart';
 
 import '../models/callbook_models.dart';
 import '../utils/lrc_ruby_parser.dart';
-import 'desktop_service_launcher.dart';
+import '../utils/netease_cookie_utils.dart';
 
 class NeteaseAccountProbeResult {
   const NeteaseAccountProbeResult({
@@ -88,7 +88,7 @@ class NeteaseDirectClient {
   }
 
   static String _buildCookieHeader(String rawCookie) {
-    final norm = DesktopServiceLauncher.normalizeNeteaseCookie(rawCookie);
+    final norm = normalizeNeteaseCookie(rawCookie);
     if (norm.isEmpty) {
       return 'os=pc; appver=2.9.7';
     }
@@ -147,9 +147,9 @@ class NeteaseDirectClient {
   }
 
   Future<NeteaseAccountProbeResult> probeAccount({String cookie = ''}) async {
-    final normCookie = DesktopServiceLauncher.normalizeNeteaseCookie(cookie);
+    final normCookie = normalizeNeteaseCookie(cookie);
     final cookieConfigured = normCookie.isNotEmpty;
-    final masked = DesktopServiceLauncher.maskNeteaseCookie(normCookie);
+    final masked = maskNeteaseCookie(normCookie);
     try {
       final res = await _postEapi(
         '/eapi/w/nuser/account/get',

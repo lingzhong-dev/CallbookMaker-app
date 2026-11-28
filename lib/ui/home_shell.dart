@@ -1347,7 +1347,7 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
                 listenable: c.gatewayListenable,
                 builder: (context, _) => Semantics(
                   button: true,
-                  label: c.backendOnline ? '后端在线，点击刷新' : '直接连接，点击刷新',
+                  label: '直接连接，点击刷新',
                   child: PressSurface(
                     fill: const Color(0x00000000),
                     shape: AppShape.sm,

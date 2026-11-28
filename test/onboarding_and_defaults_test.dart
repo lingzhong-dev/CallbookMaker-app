@@ -8,7 +8,6 @@ import 'package:http/testing.dart';
 import 'package:live_call_studio/data/default_songs.dart';
 import 'package:live_call_studio/main.dart';
 import 'package:live_call_studio/models/callbook_models.dart';
-import 'package:live_call_studio/services/api_client.dart';
 import 'package:live_call_studio/services/lrclib_direct_client.dart';
 import 'package:live_call_studio/services/netease_direct_client.dart';
 import 'package:live_call_studio/state/callbook_controller.dart';
@@ -67,10 +66,6 @@ CallbookController _buildOfflineController({
   bool enableAudioOutput = false,
 }) {
   return CallbookController(
-    apiClient: CallbookApiClient(
-      baseUrl: 'http://127.0.0.1:8000',
-      httpClient: MockClient((_) async => http.Response('offline', 503)),
-    ),
     neteaseDirectClient: NeteaseDirectClient(
       httpClient:
           neteaseHttpClient ??

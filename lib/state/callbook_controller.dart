@@ -8,15 +8,14 @@ import 'package:prism_ui/prism_ui.dart' as prism;
 
 import '../data/default_songs.dart';
 import '../models/callbook_models.dart';
-import '../services/api_client.dart';
 import '../services/audio_metronome_service.dart';
-import '../services/desktop_service_launcher.dart';
 import '../services/japanese_ruby_annotator.dart';
 import '../services/lrclib_direct_client.dart';
 import '../services/netease_direct_client.dart';
 import '../services/project_storage.dart';
 import '../utils/aligned_calls.dart';
 import '../utils/lrc_ruby_parser.dart';
+import '../utils/netease_cookie_utils.dart';
 import '../utils/section_detector.dart';
 import '../utils/shortcut_validator.dart';
 
@@ -129,19 +128,15 @@ class _TimelineUndoEntry {
 
 class CallbookController extends ChangeNotifier {
   CallbookController({
-    CallbookApiClient? apiClient,
     ProjectStorage? storage,
     NeteaseDirectClient? neteaseDirectClient,
     LrclibDirectClient? lrclibDirectClient,
-    DesktopServiceLauncher? desktopLauncher,
     JapaneseRubyAnnotator? rubyAnnotator,
     bool enableAudioOutput = true,
     MonotonicClock? audioClock,
-  }) : _api = apiClient ?? CallbookApiClient(),
-       _storage = storage ?? ProjectStorage(),
+  }) : _storage = storage ?? ProjectStorage(),
        _neteaseDirect = neteaseDirectClient ?? NeteaseDirectClient(),
        _lrclibDirect = lrclibDirectClient ?? LrclibDirectClient(),
-       _desktopLauncher = desktopLauncher ?? DesktopServiceLauncher(),
        _rubyAnnotator = rubyAnnotator ?? JapaneseRubyAnnotator.instance,
        _snapClock = audioClock {
     _snapClock?.start();
@@ -183,11 +178,9 @@ class CallbookController extends ChangeNotifier {
     _rebuildProjectCaches();
   }
 
-  late final CallbookApiClient _api;
   late final ProjectStorage _storage;
   late final NeteaseDirectClient _neteaseDirect;
   late final LrclibDirectClient _lrclibDirect;
-  late final DesktopServiceLauncher _desktopLauncher;
   late final JapaneseRubyAnnotator _rubyAnnotator;
   late final AudioMetronomeService _audio;
 
@@ -278,23 +271,18 @@ class CallbookController extends ChangeNotifier {
   SectionDetectThresholds _sectionThresholds = const SectionDetectThresholds();
   int _currentBar = 1;
   int _currentBeatInBar = 1;
-  bool _backendOnline = false;
-  bool _customProxyEnabled = false;
   bool _isSearching = false;
   bool _isFetchingLyrics = false;
   bool _isConfiguringGateway = false;
-  bool _isLaunchingBackend = false;
   bool _offlineRubyEnabled = true;
   bool _preferNeteaseRomaLrc = true;
   bool _filterLrcHeaderCredits = true;
   bool _isAnnotatingRuby = false;
   List<LyricLine> _restorableCreditLines = const [];
   GatewayStatusInfo _gatewayStatus = const GatewayStatusInfo();
-  String _savedGatewayUrl = 'http://127.0.0.1:3000';
   String _savedNeteaseCookie = '';
   String _statusMessage = '已就绪 · CallbookMaker';
   List<TrackSummary> _searchResults = const [];
-  Map<String, String> _siteCopyByOriginal = const {};
   List<CallbookArchiveEntry> _archives = const [];
   String? _activeArchiveId;
   bool _hasUnsavedChanges = false;
@@ -423,11 +411,8 @@ class CallbookController extends ChangeNotifier {
   }
   int get currentBar => _currentBar;
   int get currentBeatInBar => _currentBeatInBar;
-  bool get backendOnline => _backendOnline;
-  bool get customProxyEnabled => _customProxyEnabled;
   bool get isSearching => _isSearching;
   bool get isConfiguringGateway => _isConfiguringGateway;
-  bool get isLaunchingBackend => _isLaunchingBackend;
   bool get offlineRubyEnabled => _offlineRubyEnabled;
   bool get preferNeteaseRomaLrc => _preferNeteaseRomaLrc;
   bool get filterLrcHeaderCredits => _filterLrcHeaderCredits;
@@ -435,14 +420,11 @@ class CallbookController extends ChangeNotifier {
       List.unmodifiable(_restorableCreditLines);
   bool get hasRestorableCreditLines => _restorableCreditLines.isNotEmpty;
   bool get isAnnotatingRuby => _isAnnotatingRuby;
-  bool get isDesktopHost => _desktopLauncher.isDesktop;
   GatewayStatusInfo get gatewayStatus => _gatewayStatus;
-  String get savedGatewayUrl => _savedGatewayUrl;
   String get savedNeteaseCookie => _savedNeteaseCookie;
   String get statusMessage => _statusMessage;
-  String get backendUrl => _api.baseUrl;
   List<TrackSummary> get searchResults => _searchResults;
-  String siteText(String defaultText) => _siteCopyByOriginal[defaultText] ?? defaultText;
+  String siteText(String defaultText) => defaultText;
   List<double> get beatPulseSeries => List.unmodifiable(_beatPulseSeries);
   int get beatSeriesRevision => _beatSeriesRevision;
   List<double> get callDensitySeries => List.unmodifiable(_callDensitySeries);
@@ -751,29 +733,16 @@ class CallbookController extends ChangeNotifier {
               : '${meta.title} ${meta.artist}'.trim();
           if (query.isNotEmpty) {
             List<TrackSummary> matches = const [];
-            if (_backendOnline &&
-                (_customProxyEnabled || _gatewayStatus.gatewayOnline)) {
-              try {
-                final resp = await _api
-                    .searchTracks(query, source: 'custom_proxy')
-                    .timeout(const Duration(seconds: 5));
-                matches = resp.results;
-              } catch (_) {
-                matches = const [];
-              }
-            }
-            if (matches.isEmpty) {
-              try {
-                matches = await _neteaseDirect
-                    .searchTracks(
-                      query,
-                      limit: 5,
-                      cookie: _savedNeteaseCookie,
-                    )
-                    .timeout(const Duration(seconds: 5));
-              } catch (_) {
-                matches = const [];
-              }
+            try {
+              matches = await _neteaseDirect
+                  .searchTracks(
+                    query,
+                    limit: 5,
+                    cookie: _savedNeteaseCookie,
+                  )
+                  .timeout(const Duration(seconds: 5));
+            } catch (_) {
+              matches = const [];
             }
             if (isStale()) return;
             if (matches.isNotEmpty) {
@@ -792,16 +761,7 @@ class CallbookController extends ChangeNotifier {
         }
 
         if (trackId.isNotEmpty) {
-          if (_backendOnline) {
-            try {
-              refreshed = await _api
-                  .fetchTrackDetail('netease', trackId)
-                  .timeout(const Duration(seconds: 6));
-            } catch (_) {
-              refreshed = null;
-            }
-          }
-          refreshed ??= await _neteaseDirect
+          refreshed = await _neteaseDirect
               .fetchTrackDetail(
                 trackId,
                 cookie: _savedNeteaseCookie,
@@ -903,15 +863,6 @@ class CallbookController extends ChangeNotifier {
       );
     } catch (_) {
       // Ignore lifecycle binding errors in non-widget environments.
-    }
-    final savedUrl = await _storage.loadBackendUrl();
-    if (savedUrl != null && savedUrl.isNotEmpty) {
-      _api.setBaseUrl(savedUrl);
-    }
-    final savedGatewayUrl = await _storage.loadGatewayUrl();
-    if (savedGatewayUrl != null && savedGatewayUrl.trim().isNotEmpty) {
-      _savedGatewayUrl = savedGatewayUrl.trim();
-      _gatewayStatus = _gatewayStatus.copyWith(gatewayUrl: _savedGatewayUrl);
     }
     final savedCookie = await _storage.loadNeteaseCookie();
     if (savedCookie != null && savedCookie.trim().isNotEmpty) {
@@ -1049,7 +1000,7 @@ class CallbookController extends ChangeNotifier {
   }
 
   Future<void> _runPostInitNetworkSync(int initSeq) async {
-    await checkBackendHealth();
+    _refreshLocalDirectStatus();
     if (_disposed || initSeq != _sourceSwitchSeq) return;
     await _restoreAudioSourceForProject(
       _project,
@@ -1086,65 +1037,31 @@ class CallbookController extends ChangeNotifier {
     _textScale = ((map['textScale'] as num?)?.toDouble() ?? 1.0).clamp(0.85, 1.25);
   }
 
-  Future<void> checkBackendHealth() async {
-    final health = await _api.checkHealth();
-    _backendOnline = health.online;
-    _customProxyEnabled = health.customProxyEnabled;
-    if (health.online) {
-      _siteCopyByOriginal = await _api.fetchSiteCopyOverrides();
-      final gw = await _api.fetchGatewayStatus();
-      if (gw != null) {
-        _gatewayStatus = gw;
-        if (gw.gatewayUrl.isNotEmpty) {
-          _savedGatewayUrl = gw.gatewayUrl;
-        }
-      }
-      _setStatusInternal('已连接后端 (${_api.baseUrl}) · ${health.providers.join(", ")}');
-    } else {
-      final hasCookie = _savedNeteaseCookie.trim().isNotEmpty;
-      final masked = hasCookie
-          ? DesktopServiceLauncher.maskNeteaseCookie(_savedNeteaseCookie)
-          : '';
-      final prevAccount = (hasCookie && _gatewayStatus.cookieConfigured)
-          ? _gatewayStatus.neteaseAccount
-          : null;
-      _gatewayStatus = GatewayStatusInfo(
-        gatewayUrl: _savedGatewayUrl,
-        gatewayOnline: false,
-        customProxyEnabled: false,
-        cookieConfigured: hasCookie,
-        cookieMasked: masked,
-        managedByBackend: false,
-        pid: null,
-        canSpawnLocal: false,
-        nodeAvailable: false,
-        packageAvailable: false,
-        neteaseAccount: prevAccount,
-        message: hasCookie
-            ? '纯 Dart 直连就绪（免 Node · 已加载本地 Cookie${prevAccount != null && prevAccount.isNotEmpty ? " · $prevAccount" : ""}）'
-            : '纯 Dart 直连就绪（免 Node · 支持网易云游客直连 / LRCLIB / 默认曲库）',
-      );
-      _setStatusInternal('纯 Dart 直连模式 · 免 Node/后端直接搜歌演练');
-    }
+  void _refreshLocalDirectStatus() {
+    final hasCookie = _savedNeteaseCookie.trim().isNotEmpty;
+    final masked = hasCookie ? maskNeteaseCookie(_savedNeteaseCookie) : '';
+    final prevAccount = (hasCookie && _gatewayStatus.cookieConfigured)
+        ? _gatewayStatus.neteaseAccount
+        : null;
+    _gatewayStatus = GatewayStatusInfo(
+      reachable: _gatewayStatus.reachable,
+      cookieConfigured: hasCookie,
+      cookieMasked: masked,
+      neteaseAccount: prevAccount,
+      message: hasCookie
+          ? '纯 Dart 直连就绪（免后端 · 已加载本地 Cookie${prevAccount != null && prevAccount.isNotEmpty ? " · $prevAccount" : ""}）'
+          : '纯 Dart 直连就绪（免后端 · 支持网易云游客直连 / LRCLIB / 默认曲库）',
+    );
+    _setStatusInternal('纯 Dart 直连模式 · 免后端直接搜歌演练');
     _notifyGatewayChanged();
   }
 
-  Future<bool> _verifyDirectNetease({
-    required String cookie,
-    required String cleanUrl,
-  }) async {
+  Future<bool> _verifyDirectNetease({required String cookie}) async {
     final probe = await _neteaseDirect.probeAccount(cookie: cookie);
     _gatewayStatus = GatewayStatusInfo(
-      gatewayUrl: cleanUrl,
-      gatewayOnline: probe.reachable,
-      customProxyEnabled: false,
+      reachable: probe.reachable,
       cookieConfigured: probe.cookieConfigured,
       cookieMasked: probe.cookieMasked,
-      managedByBackend: false,
-      pid: null,
-      canSpawnLocal: false,
-      nodeAvailable: false,
-      packageAvailable: false,
       neteaseAccount: probe.nickname,
       message: probe.message,
     );
@@ -1154,45 +1071,18 @@ class CallbookController extends ChangeNotifier {
   }
 
   Future<void> refreshGatewayStatus({bool probeDirect = false}) async {
-    await checkBackendHealth();
-    if (probeDirect &&
-        (!_backendOnline ||
-            (!_gatewayStatus.gatewayOnline &&
-                (!_gatewayStatus.nodeAvailable ||
-                    !_gatewayStatus.packageAvailable)))) {
-      await _verifyDirectNetease(
-        cookie: _savedNeteaseCookie,
-        cleanUrl: _savedGatewayUrl,
-      );
-    }
-  }
-
-  Future<void> launchLocalBackendOnDesktop() async {
-    if (_isLaunchingBackend) return;
-    _isLaunchingBackend = true;
-    _setStatusInternal('正在启动可选 FastAPI 后端 (${_api.baseUrl})...');
-    _notifyGatewayChanged();
-    try {
-      final res = await _desktopLauncher.ensureBackendRunning(_api.baseUrl);
-      _setStatusInternal(res.message);
-      await checkBackendHealth();
-    } finally {
-      _isLaunchingBackend = false;
-      _notifyGatewayChanged();
+    _refreshLocalDirectStatus();
+    if (probeDirect) {
+      await _verifyDirectNetease(cookie: _savedNeteaseCookie);
     }
   }
 
   Future<bool> oneClickConfigureAndStartGateway({
     required String cookie,
-    String? gatewayUrl,
   }) async {
     if (_isConfiguringGateway) return false;
     _isConfiguringGateway = true;
-    final cleanUrl = DesktopServiceLauncher.normalizeGatewayUrl(
-      gatewayUrl ?? _savedGatewayUrl,
-    );
-    final normCookie = DesktopServiceLauncher.normalizeNeteaseCookie(cookie);
-    _savedGatewayUrl = cleanUrl;
+    final normCookie = normalizeNeteaseCookie(cookie);
     if (normCookie.isNotEmpty) {
       _savedNeteaseCookie = normCookie;
       await _storage.saveNeteaseCookie(normCookie);
@@ -1200,65 +1090,16 @@ class CallbookController extends ChangeNotifier {
       _savedNeteaseCookie = '';
       await _storage.saveNeteaseCookie('');
     }
-    await _storage.saveGatewayUrl(cleanUrl);
-    _setStatusInternal(
-      _backendOnline
-          ? '正在写入网易云 Cookie 并配置服务...'
-          : '正在保存 Cookie 并验证网易云纯 Dart 直连...',
-    );
+    _setStatusInternal('正在保存 Cookie 并验证网易云纯 Dart 直连...');
     _notifyGatewayChanged();
 
     try {
-      if (_backendOnline) {
-        final status = await _api.configureAndStartGateway(
-          neteaseCookie: normCookie,
-          gatewayUrl: cleanUrl,
-          autoStart: true,
-        );
-        _gatewayStatus = status;
-        await checkBackendHealth();
-        if (status.gatewayOnline) {
-          if (status.message.isNotEmpty) {
-            _setStatusInternal(status.message);
-          }
-          return true;
-        }
-        // FastAPI backend connected without Node/gateway package: verify pure-Dart direct mode seamlessly.
-        if (!status.nodeAvailable || !status.packageAvailable) {
-          return await _verifyDirectNetease(
-            cookie: normCookie,
-            cleanUrl: cleanUrl,
-          );
-        }
-        if (status.message.isNotEmpty) {
-          _setStatusInternal(status.message);
-        }
-        return false;
-      }
-
-      // Standalone pure-Dart mode: validate account/connection directly via EAPI (no Node or Python required).
-      return await _verifyDirectNetease(
-        cookie: normCookie,
-        cleanUrl: cleanUrl,
-      );
+      return await _verifyDirectNetease(cookie: normCookie);
     } catch (err) {
       _setStatusInternal('配置网易云直连失败：$err');
       return false;
     } finally {
       _isConfiguringGateway = false;
-      _notifyGatewayChanged();
-    }
-  }
-
-  Future<void> stopManagedGateway() async {
-    if (!_backendOnline) return;
-    try {
-      final status = await _api.stopGateway();
-      _gatewayStatus = status;
-      _setStatusInternal(status.message);
-      _notifyGatewayChanged();
-    } catch (err) {
-      _setStatusInternal('停止网关失败：$err');
       _notifyGatewayChanged();
     }
   }
@@ -3090,60 +2931,21 @@ class CallbookController extends ChangeNotifier {
     return true;
   }
 
-  // Backend search, LRC import & local audio
-  Future<void> setBackendUrl(String url) async {
-    _api.setBaseUrl(url);
-    await _storage.saveBackendUrl(_api.baseUrl);
-    await checkBackendHealth();
-  }
-
+  // Direct search, LRC import & local audio
   Future<void> searchTracks(String query, {String source = 'auto'}) async {
     final cleanQuery = query.trim();
     if (cleanQuery.isEmpty) return;
     _isSearching = true;
     notifyListeners();
     try {
-      final useBackendProxy =
-          _backendOnline &&
-          (_customProxyEnabled ||
-              _gatewayStatus.managedByBackend ||
-              (_gatewayStatus.gatewayOnline && _gatewayStatus.nodeAvailable));
-
       if (source == 'lrclib') {
-        List<TrackSummary> results;
-        String used = 'lrclib';
-        if (_backendOnline) {
-          try {
-            final resp = await _api.searchTracks(cleanQuery, source: 'lrclib');
-            results = resp.results;
-            used = resp.providerUsed.isNotEmpty ? resp.providerUsed : 'lrclib';
-          } catch (_) {
-            results = await _lrclibDirect.searchTracks(cleanQuery);
-            used = 'lrclib 直连';
-          }
-        } else {
-          results = await _lrclibDirect.searchTracks(cleanQuery);
-          used = 'lrclib 直连';
-        }
+        final results = await _lrclibDirect.searchTracks(cleanQuery);
         _searchResults = results;
-        setStatus('搜索完成 ($used) · ${results.length} 首');
+        setStatus('搜索完成 (LRCLIB 直连) · ${results.length} 首');
         return;
       }
 
       if (source == 'custom_proxy') {
-        if (useBackendProxy) {
-          try {
-            final resp = await _api.searchTracks(
-              cleanQuery,
-              source: 'custom_proxy',
-            );
-            _searchResults = resp.results;
-            setStatus('搜索完成 (${resp.providerUsed}) · ${resp.results.length} 首');
-            return;
-          } catch (_) {
-            // Fall through to pure-Dart Netease direct engine
-          }
-        }
         final directResults = await _neteaseDirect.searchTracks(
           cleanQuery,
           cookie: _savedNeteaseCookie,
@@ -3154,17 +2956,6 @@ class CallbookController extends ChangeNotifier {
       }
 
       // source == 'auto'
-      if (useBackendProxy) {
-        try {
-          final resp = await _api.searchTracks(cleanQuery, source: 'auto');
-          _searchResults = resp.results;
-          setStatus('搜索完成 (${resp.providerUsed}) · ${resp.results.length} 首');
-          return;
-        } catch (_) {
-          // Fall through to pure-Dart multi-source chain
-        }
-      }
-
       try {
         final neteaseResults = await _neteaseDirect.searchTracks(
           cleanQuery,
@@ -3180,9 +2971,7 @@ class CallbookController extends ChangeNotifier {
       }
 
       try {
-        final lrclibResults = _backendOnline
-            ? (await _api.searchTracks(cleanQuery, source: 'lrclib')).results
-            : await _lrclibDirect.searchTracks(cleanQuery);
+        final lrclibResults = await _lrclibDirect.searchTracks(cleanQuery);
         if (lrclibResults.isNotEmpty) {
           _searchResults = lrclibResults;
           setStatus('搜索完成 (LRCLIB 直连) · ${lrclibResults.length} 首');
@@ -3211,46 +3000,16 @@ class CallbookController extends ChangeNotifier {
           summary.provider.isNotEmpty ? summary.provider : summary.platform;
       TrackDetailResponse detail;
 
-      if (providerName == 'netease_direct') {
+      if (providerName == 'netease_direct' || summary.platform == 'netease') {
         detail = await _neteaseDirect.fetchTrackDetail(
           summary.id,
           cookie: _savedNeteaseCookie,
           fallbackSummary: summary,
         );
-      } else if (providerName == 'lrclib') {
-        if (_backendOnline) {
-          try {
-            detail = await _api.fetchTrackDetail('lrclib', summary.id);
-          } catch (_) {
-            detail = await _lrclibDirect.fetchTrackDetail(summary.id);
-          }
-        } else {
-          detail = await _lrclibDirect.fetchTrackDetail(summary.id);
-        }
+      } else if (providerName == 'lrclib' || summary.platform == 'lrclib') {
+        detail = await _lrclibDirect.fetchTrackDetail(summary.id);
       } else {
-        if (_backendOnline) {
-          try {
-            detail = await _api.fetchTrackDetail(providerName, summary.id);
-          } catch (_) {
-            if (summary.platform == 'netease') {
-              detail = await _neteaseDirect.fetchTrackDetail(
-                summary.id,
-                cookie: _savedNeteaseCookie,
-                fallbackSummary: summary,
-              );
-            } else {
-              rethrow;
-            }
-          }
-        } else if (summary.platform == 'netease') {
-          detail = await _neteaseDirect.fetchTrackDetail(
-            summary.id,
-            cookie: _savedNeteaseCookie,
-            fallbackSummary: summary,
-          );
-        } else {
-          throw Exception('后端离线且暂不支持直连该来源 ($providerName)');
-        }
+        throw Exception('暂不支持直连该来源 ($providerName)');
       }
 
       var rawLines = detail.lines;
@@ -3290,25 +3049,6 @@ class CallbookController extends ChangeNotifier {
           );
         } catch (_) {
           // Keep parsed LRC lines if offline annotator is unavailable
-        }
-      }
-
-      // Optional legacy backend fallback if online & still lacks Ruby markup.
-      if (_backendOnline &&
-          detail.rawLrc.trim().isNotEmpty &&
-          rawLines.isNotEmpty &&
-          rawLines.every((l) => l.text.ruby == null)) {
-        try {
-          final rubyLines = await _api.parseLyricsWithRuby(
-            lrc: detail.rawLrc,
-            translationLrc: detail.translatedLrc,
-            enableRuby: true,
-          );
-          if (rubyLines.isNotEmpty) {
-            rawLines = rubyLines;
-          }
-        } catch (_) {
-          // Keep offline LRC lines when backend parser is unavailable
         }
       }
 
@@ -3465,23 +3205,6 @@ class CallbookController extends ChangeNotifier {
           lines,
           preferExistingRomaji: _preferNeteaseRomaLrc,
         );
-      } catch (_) {
-        // Keep offline parsed lines
-      }
-    }
-    if (enableRuby &&
-        _backendOnline &&
-        lines.isNotEmpty &&
-        lines.every((l) => l.text.ruby == null)) {
-      try {
-        final backendLines = await _api.parseLyricsWithRuby(
-          lrc: lrc,
-          translationLrc: translationLrc,
-          enableRuby: enableRuby,
-        );
-        if (backendLines.isNotEmpty) {
-          lines = backendLines;
-        }
       } catch (_) {
         // Keep offline parsed lines
       }
@@ -4146,7 +3869,6 @@ class CallbookController extends ChangeNotifier {
     _lifecycleListener?.dispose();
     _lifecycleListener = null;
     unawaited(_audio.dispose());
-    _api.dispose();
     _neteaseDirect.dispose();
     _lrclibDirect.dispose();
     _themeNotifier.dispose();

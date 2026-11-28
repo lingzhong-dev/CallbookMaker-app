@@ -9,8 +9,6 @@ class ProjectStorage {
   static const _presetsKey = 'live_call_studio_custom_presets_v1';
   static const _layersKey = 'live_call_studio_display_layers_v1';
   static const _themeKey = 'live_call_studio_theme_v1';
-  static const _backendUrlKey = 'live_call_studio_backend_url_v1';
-  static const _gatewayUrlKey = 'live_call_studio_gateway_url_v1';
   static const _neteaseCookieKey = 'live_call_studio_netease_cookie_v1';
   static const _archivesKey = 'live_call_studio_archives_v1';
   static const _archiveSessionKey = 'live_call_studio_archive_session_v1';
@@ -116,26 +114,6 @@ class ProjectStorage {
   Future<void> saveThemePrefs(Map<String, dynamic> themeJson) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_themeKey, jsonEncode(themeJson));
-  }
-
-  Future<String?> loadBackendUrl() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_backendUrlKey);
-  }
-
-  Future<void> saveBackendUrl(String url) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_backendUrlKey, url);
-  }
-
-  Future<String?> loadGatewayUrl() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_gatewayUrlKey);
-  }
-
-  Future<void> saveGatewayUrl(String url) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_gatewayUrlKey, url);
   }
 
   Future<String?> loadNeteaseCookie() async {

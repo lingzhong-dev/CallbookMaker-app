@@ -8,7 +8,6 @@ import 'package:http/testing.dart';
 import 'package:kuromoji_dart/kuromoji_dart.dart';
 import 'package:live_call_studio/main.dart';
 import 'package:live_call_studio/models/callbook_models.dart';
-import 'package:live_call_studio/services/api_client.dart';
 import 'package:live_call_studio/services/japanese_ruby_annotator.dart';
 import 'package:live_call_studio/services/lrclib_direct_client.dart';
 import 'package:live_call_studio/services/netease_direct_client.dart';
@@ -145,9 +144,6 @@ void main() {
       );
 
       final controller = CallbookController(
-        apiClient: CallbookApiClient(
-          httpClient: MockClient((_) async => http.Response('offline', 503)),
-        ),
         neteaseDirectClient: neteaseClient,
         lrclibDirectClient: LrclibDirectClient(
           httpClient: MockClient((_) async => _jsonResp([])),
@@ -195,9 +191,6 @@ void main() {
         'live_call_studio_onboarding_v1': true,
       });
       final controller = CallbookController(
-        apiClient: CallbookApiClient(
-          httpClient: MockClient((_) async => http.Response('offline', 503)),
-        ),
         enableAudioOutput: false,
       );
       await controller.init(awaitBackgroundSync: false);
@@ -315,9 +308,6 @@ void main() {
         'live_call_studio_onboarding_v1': true,
       });
       final controller = CallbookController(
-        apiClient: CallbookApiClient(
-          httpClient: MockClient((_) async => http.Response('offline', 503)),
-        ),
         rubyAnnotator: JapaneseRubyAnnotator(tokenizer: tokenizer),
         enableAudioOutput: false,
       );

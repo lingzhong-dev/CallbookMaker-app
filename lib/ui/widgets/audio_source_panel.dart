@@ -203,13 +203,9 @@ class _AudioSourcePanelState extends State<AudioSourcePanel> {
                     ),
                   ),
                   TonalChip(
-                    label: c.backendOnline ? '服务在线' : '直接连接',
-                    color: c.backendOnline
-                        ? scheme.successContainer
-                        : scheme.primaryContainer,
-                    foregroundColor: c.backendOnline
-                        ? scheme.onSuccessContainer
-                        : scheme.onPrimaryContainer,
+                    label: '直接连接',
+                    color: scheme.primaryContainer,
+                    foregroundColor: scheme.onPrimaryContainer,
                   ),
                 ],
               ),
@@ -290,9 +286,7 @@ class _AudioSourcePanelState extends State<AudioSourcePanel> {
           onChanged: (v) => setState(() => _searchSource = v),
         ),
         if (_searchSource == 'custom_proxy' &&
-            !c.gatewayStatus.cookieConfigured &&
-            !c.gatewayStatus.gatewayOnline &&
-            !c.customProxyEnabled) ...[
+            !c.gatewayStatus.cookieConfigured) ...[
           const SizedBox(height: 6),
           Text(
             '直接连接网易云已就绪（游客模式可直接检索公开曲目与歌词；如需 VIP/完整音源可在下方粘贴 Cookie）。',
