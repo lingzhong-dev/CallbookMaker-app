@@ -1,8 +1,14 @@
 import 'dart:async';
+import 'dart:io' show Directory, File;
 import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/scheduler.dart' show SchedulerBinding;
+import 'package:path_provider/path_provider.dart';
+
+import '../platform/app_platform.dart';
 
 class BeatSnapshot {
   const BeatSnapshot({
@@ -23,19 +29,141 @@ class BpmEstimateResult {
   final double confidence;
 }
 
-class _CuePlayerState {
-  _CuePlayerState(this.player, this.wavBytes);
+/// Identifies each synthesized metronome or GT alert cue channel.
+enum CueKind {
+  accent,
+  sub,
+  alert,
+}
 
+/// Readiness lifecycle state for an individual cue audio player.
+enum CueStatus {
+  uninitialized,
+  ready,
+  failed,
+}
+
+/// Immutable diagnostic snapshot for a cue player.
+class CueDiagnosticEntry {
+  const CueDiagnosticEntry({
+    required this.kind,
+    required this.status,
+    this.cachedFilePath,
+    this.lastError,
+    this.failureCount = 0,
+    this.playCount = 0,
+  });
+
+  final CueKind kind;
+  final CueStatus status;
+  final String? cachedFilePath;
+  final String? lastError;
+  final int failureCount;
+  final int playCount;
+}
+
+typedef CueTempDirProvider = Future<Directory> Function();
+
+class _CuePlayerState {
+  _CuePlayerState(this.kind, this.player, this.wavBytes)
+      : fileName = AudioMetronomeService._cueFileName(kind, wavBytes);
+
+  final CueKind kind;
   final AudioPlayer? player;
   final Uint8List wavBytes;
+  final String fileName;
+  CueStatus status = CueStatus.uninitialized;
   bool prepared = false;
   bool inFlight = false;
+  Future<bool>? preloadFuture;
   double? lastVolume;
+  String? cachedFilePath;
+  String? lastError;
+  int failureCount = 0;
+  int playCount = 0;
+
+  CueDiagnosticEntry toDiagnostic() => CueDiagnosticEntry(
+        kind: kind,
+        status: status,
+        cachedFilePath: cachedFilePath,
+        lastError: lastError,
+        failureCount: failureCount,
+        playCount: playCount,
+      );
+}
+
+class _SafeFramePositionUpdater implements PositionUpdater {
+  _SafeFramePositionUpdater({required this.getPosition});
+
+  @override
+  final Future<Duration?> Function() getPosition;
+
+  final StreamController<Duration> _controller =
+      StreamController<Duration>.broadcast();
+  int? _frameCallbackId;
+  bool _isRunning = false;
+  bool _closed = false;
+
+  @override
+  Stream<Duration> get positionStream => _controller.stream;
+
+  @override
+  Future<void> update() async {
+    if (_closed) return;
+    try {
+      final position = await getPosition();
+      if (!_closed && position != null && !_controller.isClosed) {
+        _controller.add(position);
+      }
+    } catch (_) {
+      // Ignore transient position queries during teardown or source switching.
+    }
+  }
+
+  void _tick(Duration? timestamp) {
+    if (_isRunning && !_closed) {
+      unawaited(update());
+      _frameCallbackId = SchedulerBinding.instance.scheduleFrameCallback(_tick);
+    }
+  }
+
+  @override
+  void start() {
+    if (_closed) return;
+    _isRunning = true;
+    _tick(null);
+  }
+
+  @override
+  void stop() {
+    _isRunning = false;
+    final id = _frameCallbackId;
+    if (id != null) {
+      _frameCallbackId = null;
+      SchedulerBinding.instance.cancelFrameCallbackWithId(id);
+    }
+  }
+
+  @override
+  Future<void> stopAndUpdate() async {
+    stop();
+    await update();
+  }
+
+  @override
+  Future<void> dispose() async {
+    _closed = true;
+    stop();
+    if (!_controller.isClosed) {
+      await _controller.close();
+    }
+  }
 }
 
 /// Cross-platform Audio + High-Precision Metronome Clock for Flutter Desktop & Android.
-/// Uses synthesized PCM WAV click buffers played via low-latency AudioPlayers,
-/// plus a monotonic Stopwatch clock when running without external audio tracks.
+/// Uses synthesized PCM WAV click files materialized to app temp cache and played via
+/// platform-appropriate AudioPlayers (low-latency SoundPool on Android, mediaPlayer on
+/// Windows/other platforms), plus a monotonic clock when running without external tracks.
 class AudioMetronomeService {
   AudioMetronomeService({
     required this.onTimeUpdate,
@@ -44,7 +172,16 @@ class AudioMetronomeService {
     this.onDurationChanged,
     this.onEnded,
     this.enablePlatformAudio = true,
-  });
+    this.tempDirProvider,
+    bool? useLowLatencyCuesOverride,
+    this.onDiagnosticLog,
+  }) : _useSoundPoolCues = useLowLatencyCuesOverride ?? AppPlatform.isAndroid;
+
+  static int _nextInstanceId = 0;
+  static final Set<String> _verifiedCueFiles = <String>{};
+
+  final int _instanceId = ++_nextInstanceId;
+  int _musicPlayerSeq = 0;
 
   final void Function(int timeMs) onTimeUpdate;
   final void Function(BeatSnapshot snapshot) onBeatTrigger;
@@ -52,25 +189,43 @@ class AudioMetronomeService {
   final void Function(int durationMs)? onDurationChanged;
   final void Function()? onEnded;
   final bool enablePlatformAudio;
+  final CueTempDirProvider? tempDirProvider;
+  final bool _useSoundPoolCues;
+  final void Function(String message)? onDiagnosticLog;
 
   AudioPlayer? _musicPlayer;
-  late final AudioPlayer? _accentClickPlayer =
-      enablePlatformAudio ? AudioPlayer() : null;
-  late final AudioPlayer? _subClickPlayer =
-      enablePlatformAudio ? AudioPlayer() : null;
-  late final AudioPlayer? _alertBeepPlayer =
-      enablePlatformAudio ? AudioPlayer() : null;
+  AudioPlayer? _configuredMusicPlayer;
+  Future<void>? _musicConfigFuture;
+
+  late final AudioPlayer? _accentClickPlayer = enablePlatformAudio
+      ? AudioPlayer(playerId: 'callbook_cue_accent_$_instanceId')
+      : null;
+  late final AudioPlayer? _subClickPlayer = enablePlatformAudio
+      ? AudioPlayer(playerId: 'callbook_cue_sub_$_instanceId')
+      : null;
+  late final AudioPlayer? _alertBeepPlayer = enablePlatformAudio
+      ? AudioPlayer(playerId: 'callbook_cue_alert_$_instanceId')
+      : null;
 
   late final Uint8List _accentWav = _buildClickWav(freqHz: 1480, ms: 42, gain: 0.9);
   late final Uint8List _subWav = _buildClickWav(freqHz: 940, ms: 34, gain: 0.6);
   late final Uint8List _alertWav = _buildClickWav(freqHz: 1860, ms: 75, gain: 0.85);
 
-  late final _CuePlayerState _accentCue =
-      _CuePlayerState(_accentClickPlayer, _accentWav);
-  late final _CuePlayerState _subCue =
-      _CuePlayerState(_subClickPlayer, _subWav);
-  late final _CuePlayerState _alertCue =
-      _CuePlayerState(_alertBeepPlayer, _alertWav);
+  late final _CuePlayerState _accentCue = _CuePlayerState(
+    CueKind.accent,
+    _accentClickPlayer,
+    _accentWav,
+  );
+  late final _CuePlayerState _subCue = _CuePlayerState(
+    CueKind.sub,
+    _subClickPlayer,
+    _subWav,
+  );
+  late final _CuePlayerState _alertCue = _CuePlayerState(
+    CueKind.alert,
+    _alertBeepPlayer,
+    _alertWav,
+  );
 
   StreamSubscription<Duration>? _posSub;
   StreamSubscription<Duration>? _durSub;
@@ -82,6 +237,9 @@ class AudioMetronomeService {
   bool _disposed = false;
   bool _hasExternalAudio = false;
   bool _hasPreparedMusicSource = false;
+  bool _hasCompleted = false;
+  Source? _currentMusicSource;
+  String? _currentMusicSourceKey;
   bool _isPlaying = false;
   bool _metronomeEnabled = true;
   bool _gtBeepEnabled = true;
@@ -94,6 +252,7 @@ class AudioMetronomeService {
   int _currentTimeMs = 0;
 
   int _sourceLoadToken = 0;
+  int _playSeq = 0;
   Future<void> _sourceOpChain = Future<void>.value();
 
   bool _seekInFlight = false;
@@ -108,16 +267,81 @@ class AudioMetronomeService {
   DateTime _syntheticAnchorWall = DateTime.now();
   int _syntheticAnchorTrackMs = 0;
 
+  final List<String> _diagnosticLogs = <String>[];
+  String? _lastCueError;
+
   bool get isPlaying => _isPlaying;
   int get currentTimeMs => _currentTimeMs;
   int get durationMs => _durationMs;
   bool get hasExternalAudio => _hasExternalAudio;
+  bool get hasCompleted => _hasCompleted;
+  bool get areCuesReady =>
+      enablePlatformAudio &&
+      _accentCue.prepared &&
+      _subCue.prepared &&
+      _alertCue.prepared;
+  String? get lastCueError => _lastCueError;
+  List<String> get diagnosticLogs => List<String>.unmodifiable(_diagnosticLogs);
+
+  Map<CueKind, CueDiagnosticEntry> get cueDiagnostics =>
+      Map<CueKind, CueDiagnosticEntry>.unmodifiable({
+        CueKind.accent: _accentCue.toDiagnostic(),
+        CueKind.sub: _subCue.toDiagnostic(),
+        CueKind.alert: _alertCue.toDiagnostic(),
+      });
+
+  CueDiagnosticEntry cueDiagnostic(CueKind kind) {
+    return switch (kind) {
+      CueKind.accent => _accentCue.toDiagnostic(),
+      CueKind.sub => _subCue.toDiagnostic(),
+      CueKind.alert => _alertCue.toDiagnostic(),
+    };
+  }
+
+  void _recordDiagnostic(String message, {bool isCueFailure = false}) {
+    if (isCueFailure) {
+      _lastCueError = message;
+    }
+    _diagnosticLogs.add(message);
+    if (_diagnosticLogs.length > 50) {
+      _diagnosticLogs.removeAt(0);
+    }
+    onDiagnosticLog?.call(message);
+    debugPrint('[AudioMetronomeService] $message');
+  }
 
   AudioPlayer _createAndAttachMusicPlayer() {
-    final player = AudioPlayer();
+    final player = AudioPlayer(
+      playerId: 'callbook_music_${_instanceId}_${++_musicPlayerSeq}',
+    );
+    player.positionUpdater = _SafeFramePositionUpdater(
+      getPosition: player.getCurrentPosition,
+    );
     _musicPlayer = player;
+    _configuredMusicPlayer = null;
+    _musicConfigFuture = null;
     _attachMusicListeners(player);
     return player;
+  }
+
+  Future<void> _ensureMusicPlayerConfigured(AudioPlayer player) {
+    if (_configuredMusicPlayer == player && _musicConfigFuture != null) {
+      return _musicConfigFuture!;
+    }
+    _configuredMusicPlayer = player;
+    final future = () async {
+      await player.setPlayerMode(PlayerMode.mediaPlayer);
+      await player.setReleaseMode(ReleaseMode.stop);
+    }();
+    _musicConfigFuture = future.catchError((Object err, StackTrace st) {
+      if (_configuredMusicPlayer == player) {
+        _configuredMusicPlayer = null;
+        _musicConfigFuture = null;
+      }
+      _recordDiagnostic('Music player configuration failed: $err');
+      Error.throwWithStackTrace(err, st);
+    });
+    return _musicConfigFuture!;
   }
 
   void _attachMusicListeners(AudioPlayer music) {
@@ -129,6 +353,7 @@ class AudioMetronomeService {
       if (_disposed || !_hasExternalAudio || _musicPlayer != music) return;
       _lastPositionEventWall = DateTime.now();
       if (_seekInFlight || _pendingSeekMs != null) return;
+      if (_hasCompleted && !_isPlaying) return;
       final nextMs = pos.inMilliseconds;
       if (nextMs == _currentTimeMs) return;
       _currentTimeMs = nextMs;
@@ -149,16 +374,21 @@ class AudioMetronomeService {
     _completeSub = music.onPlayerComplete.listen((_) {
       if (_disposed || _musicPlayer != music) return;
       _isPlaying = false;
+      _hasCompleted = true;
+      ++_playSeq;
       _clockTimer?.cancel();
       _positionWatchdogTimer?.cancel();
       onEnded?.call();
     });
   }
 
-  AudioPlayer? _recreateMusicPlayer() {
+  Future<AudioPlayer?> _recreateMusicPlayer() async {
     if (!enablePlatformAudio || _disposed) return null;
     final old = _musicPlayer;
     _hasPreparedMusicSource = false;
+    _hasCompleted = false;
+    _configuredMusicPlayer = null;
+    _musicConfigFuture = null;
     unawaited(_posSub?.cancel());
     unawaited(_durSub?.cancel());
     unawaited(_completeSub?.cancel());
@@ -175,31 +405,108 @@ class AudioMetronomeService {
             .whenComplete(() => old.dispose().catchError((Object _) {})),
       );
     }
-    return _createAndAttachMusicPlayer();
+    final next = _createAndAttachMusicPlayer();
+    await _ensureMusicPlayerConfigured(next);
+    if (_disposed || _musicPlayer != next) return null;
+    return next;
   }
 
   Future<void> init() async {
-    if (!enablePlatformAudio) return;
-    _musicPlayer ??= AudioPlayer();
-    final music = _musicPlayer!;
-    // Configure click/alert players without awaiting setSource() so headless
-    // test mocks that do not emit audio.onPrepared never hang during init().
-    for (final cuePlayer in [
-      _accentClickPlayer,
-      _subClickPlayer,
-      _alertBeepPlayer,
-    ]) {
-      if (cuePlayer == null) continue;
-      cuePlayer.positionUpdater = null;
-      try {
-        await cuePlayer.setPlayerMode(PlayerMode.lowLatency);
-        await cuePlayer.setReleaseMode(ReleaseMode.stop);
-      } catch (_) {
-        // Ignore platform configuration errors during headless initialization.
-      }
-    }
+    if (!enablePlatformAudio || _disposed) return;
+    final music = _musicPlayer ?? _createAndAttachMusicPlayer();
+    await Future.wait([
+      _ensureMusicPlayerConfigured(music),
+      _preloadCue(_accentCue),
+      _preloadCue(_subCue),
+      _preloadCue(_alertCue),
+    ]);
+  }
 
-    _attachMusicListeners(music);
+  Future<bool> _preloadCue(_CuePlayerState cue) {
+    final player = cue.player;
+    if (_disposed || !enablePlatformAudio || player == null) {
+      return Future<bool>.value(false);
+    }
+    if (cue.prepared && player.source != null) {
+      return Future<bool>.value(true);
+    }
+    final existing = cue.preloadFuture;
+    if (existing != null) return existing;
+
+    final future = _performPreloadCue(cue).whenComplete(() {
+      if (identical(cue.preloadFuture, null)) return;
+      cue.preloadFuture = null;
+    });
+    cue.preloadFuture = future;
+    return future;
+  }
+
+  Future<bool> _performPreloadCue(_CuePlayerState cue) async {
+    final player = cue.player;
+    if (_disposed || player == null) return false;
+    try {
+      player.positionUpdater = null;
+      await player.setPlayerMode(
+        _useSoundPoolCues ? PlayerMode.lowLatency : PlayerMode.mediaPlayer,
+      );
+      await player.setReleaseMode(ReleaseMode.stop);
+      if (_disposed) return false;
+
+      final filePath = await _materializeCueWavFile(cue);
+      if (_disposed) return false;
+      cue.cachedFilePath = filePath;
+
+      await player
+          .setSource(DeviceFileSource(filePath))
+          .timeout(const Duration(seconds: 5));
+      if (_disposed) return false;
+      if (player.source == null) {
+        throw StateError('Cue source was not bound for ${cue.kind.name}');
+      }
+
+      cue.prepared = true;
+      cue.status = CueStatus.ready;
+      cue.lastError = null;
+      return true;
+    } catch (err) {
+      cue.prepared = false;
+      cue.status = CueStatus.failed;
+      cue.failureCount++;
+      cue.lastError = err.toString();
+      _recordDiagnostic(
+        'Cue preload failed (${cue.kind.name}): $err',
+        isCueFailure: true,
+      );
+      return false;
+    }
+  }
+
+  Future<String> _materializeCueWavFile(_CuePlayerState cue) async {
+    final baseDir = tempDirProvider != null
+        ? await tempDirProvider!()
+        : await getTemporaryDirectory();
+    final cueDir = Directory(
+      '${baseDir.path}${AppPlatform.pathSeparator}callbook_cues',
+    );
+    if (!cueDir.existsSync()) {
+      cueDir.createSync(recursive: true);
+    }
+    final filePath =
+        '${cueDir.path}${AppPlatform.pathSeparator}${cue.fileName}';
+    final file = File(filePath);
+    final expectedBytes = cue.wavBytes.length;
+    if (!_verifiedCueFiles.contains(filePath) ||
+        !file.existsSync() ||
+        file.lengthSync() != expectedBytes) {
+      file.writeAsBytesSync(cue.wavBytes, flush: true);
+      if (!file.existsSync() || file.lengthSync() != expectedBytes) {
+        throw StateError(
+          'Cached cue WAV verification failed for ${cue.kind.name} at $filePath',
+        );
+      }
+      _verifiedCueFiles.add(filePath);
+    }
+    return file.path;
   }
 
   void configure({
@@ -247,7 +554,9 @@ class AudioMetronomeService {
     int? fallbackDurationMs,
   }) {
     final token = ++_sourceLoadToken;
+    ++_playSeq;
     _isPlaying = false;
+    _hasCompleted = false;
     _clockTimer?.cancel();
     _positionWatchdogTimer?.cancel();
     _pendingSeekMs = null;
@@ -284,6 +593,9 @@ class AudioMetronomeService {
     _beepedAlerts.clear();
     _lastTriggeredBeatIndex = -999999;
     _currentTimeMs = 0;
+    _hasCompleted = false;
+    _currentMusicSource = null;
+    _currentMusicSourceKey = null;
 
     final resolvedFallback =
         (fallbackDurationMs != null && fallbackDurationMs > 1000)
@@ -295,7 +607,7 @@ class AudioMetronomeService {
 
     if (!hasLocal && !hasUrl) {
       if (_hasPreparedMusicSource && _musicPlayer != null) {
-        _recreateMusicPlayer();
+        await _recreateMusicPlayer();
       } else if (_musicPlayer != null) {
         try {
           await _musicPlayer!.stop().timeout(
@@ -306,6 +618,8 @@ class AudioMetronomeService {
       }
       if (_disposed || token != _sourceLoadToken) return;
       _hasExternalAudio = false;
+      _hasPreparedMusicSource = false;
+      _hasCompleted = false;
       _durationMs = resolvedFallback;
       onDurationChanged?.call(_durationMs);
       onTimeUpdate(0);
@@ -317,8 +631,9 @@ class AudioMetronomeService {
     var player = _musicPlayer;
     if (enablePlatformAudio) {
       if (_hasPreparedMusicSource || player == null) {
-        player = _recreateMusicPlayer();
+        player = await _recreateMusicPlayer();
       } else {
+        await _ensureMusicPlayerConfigured(player);
         try {
           await player.stop().timeout(
             const Duration(milliseconds: 500),
@@ -329,26 +644,33 @@ class AudioMetronomeService {
     }
     if (_disposed || token != _sourceLoadToken) return;
 
+    final source = hasLocal
+        ? DeviceFileSource(localPath) as Source
+        : UrlSource(url!);
+    final sourceKey = hasLocal ? 'file:$localPath' : 'url:$url';
+
     try {
       _hasExternalAudio = true;
       if (player != null) {
-        final source = hasLocal
-            ? DeviceFileSource(localPath) as Source
-            : UrlSource(url!);
         await player.setSource(source).timeout(const Duration(seconds: 12));
+        if (_disposed || token != _sourceLoadToken) return;
         _hasPreparedMusicSource = true;
       }
-      if (_disposed || token != _sourceLoadToken) return;
+      _currentMusicSource = source;
+      _currentMusicSourceKey = sourceKey;
       _durationMs = (fallbackDurationMs != null && fallbackDurationMs > 0)
           ? fallbackDurationMs
           : _durationMs;
     } catch (_) {
-      if (enablePlatformAudio && !_disposed) {
-        _recreateMusicPlayer();
+      if (enablePlatformAudio && !_disposed && token == _sourceLoadToken) {
+        await _recreateMusicPlayer();
       }
       if (_disposed || token != _sourceLoadToken) return;
       _hasExternalAudio = false;
       _hasPreparedMusicSource = false;
+      _hasCompleted = false;
+      _currentMusicSource = null;
+      _currentMusicSourceKey = null;
       _durationMs = resolvedFallback;
       onDurationChanged?.call(_durationMs);
       onTimeUpdate(0);
@@ -406,27 +728,68 @@ class AudioMetronomeService {
     if (_disposed) return false;
     if (_isPlaying) return true;
     _isPlaying = true;
+    final playSeq = ++_playSeq;
 
     final music = _musicPlayer;
     if (_hasExternalAudio && music != null) {
+      final loadToken = _sourceLoadToken;
+      final sourceKey = _currentMusicSourceKey;
+      final cachedSource = _currentMusicSource;
+      final replayingFromCompleted = _hasCompleted;
+      if (replayingFromCompleted) {
+        _hasCompleted = false;
+        _currentTimeMs = 0;
+        _lastTriggeredBeatIndex = -999999;
+        _beepedAlerts.clear();
+        onTimeUpdate(0);
+      }
+
+      bool isAborted() =>
+          _disposed ||
+          !_isPlaying ||
+          _playSeq != playSeq ||
+          !_hasExternalAudio ||
+          _sourceLoadToken != loadToken ||
+          _currentMusicSourceKey != sourceKey;
+
       try {
-        if (_durationMs > 0 && _currentTimeMs >= _durationMs - 150) {
-          _currentTimeMs = 0;
-          _lastTriggeredBeatIndex = -999999;
-          _beepedAlerts.clear();
-          onTimeUpdate(0);
-          await music.seek(Duration.zero);
+        final started = await _playOrRecoverExternalMusic(
+          music: music,
+          replayingFromCompleted: replayingFromCompleted,
+          cachedSource: cachedSource,
+          sourceKey: sourceKey,
+          loadToken: loadToken,
+          isAborted: isAborted,
+        );
+        if (!started || isAborted()) {
+          if (!_disposed &&
+              _playSeq == playSeq &&
+              _sourceLoadToken == loadToken) {
+            _isPlaying = false;
+            _clockTimer?.cancel();
+            _positionWatchdogTimer?.cancel();
+          }
+          return false;
         }
-        await music.setPlaybackRate(_playbackRate);
-        await music.resume();
-      } catch (_) {
-        _isPlaying = false;
-        _clockTimer?.cancel();
-        _positionWatchdogTimer?.cancel();
+      } catch (err) {
+        _recordDiagnostic('Music play failed: $err');
+        if (!_disposed &&
+            _playSeq == playSeq &&
+            _sourceLoadToken == loadToken) {
+          _isPlaying = false;
+          _hasCompleted = false;
+          _clockTimer?.cancel();
+          _positionWatchdogTimer?.cancel();
+        }
+        return false;
+      }
+
+      final activePlayer = _musicPlayer;
+      if (activePlayer == null || isAborted()) {
         return false;
       }
       _clockTimer?.cancel();
-      _startPositionWatchdog(music);
+      _startPositionWatchdog(activePlayer);
       return true;
     }
 
@@ -456,8 +819,145 @@ class AudioMetronomeService {
     return true;
   }
 
+  Future<bool> _playOrRecoverExternalMusic({
+    required AudioPlayer music,
+    required bool replayingFromCompleted,
+    required Source? cachedSource,
+    required String? sourceKey,
+    required int loadToken,
+    required bool Function() isAborted,
+  }) async {
+    final pendingSeek = _seekCompleter?.future;
+    if (pendingSeek != null) {
+      await pendingSeek;
+      if (isAborted()) return false;
+    }
+
+    final currentMusic = _musicPlayer;
+    if (currentMusic == null) return false;
+    await _ensureMusicPlayerConfigured(currentMusic);
+    if (isAborted() || _musicPlayer != currentMusic) return false;
+
+    // Fast path: reuse the retained source without re-fetching remote URLs.
+    if (currentMusic.source != null && _hasPreparedMusicSource) {
+      try {
+        if (replayingFromCompleted) {
+          final pos = await currentMusic.getCurrentPosition().timeout(
+            const Duration(milliseconds: 500),
+            onTimeout: () => null,
+          );
+          if (isAborted() || _musicPlayer != currentMusic) return false;
+          if (pos == null || pos.inMilliseconds != 0) {
+            await currentMusic
+                .seek(Duration.zero)
+                .timeout(const Duration(seconds: 3));
+            if (isAborted() || _musicPlayer != currentMusic) return false;
+          }
+        }
+        await currentMusic.setPlaybackRate(_playbackRate);
+        if (isAborted() || _musicPlayer != currentMusic) return false;
+        await currentMusic.resume();
+        if (isAborted() || _musicPlayer != currentMusic) {
+          if (!_disposed && !_isPlaying && _musicPlayer == currentMusic) {
+            unawaited(currentMusic.pause().catchError((Object _) {}));
+          }
+          return false;
+        }
+        return true;
+      } catch (err) {
+        _recordDiagnostic(
+          'Music source reuse failed (${replayingFromCompleted ? "EOF" : "resume"}), attempting bounded reload: $err',
+        );
+        if (isAborted() || _musicPlayer != currentMusic) return false;
+      }
+    }
+
+    // Bounded single-attempt reload using cached source when resume/reuse fails.
+    if (cachedSource == null || sourceKey == null) {
+      return false;
+    }
+    final recovered = await _recoverMusicPlayerWithCachedSource(
+      cachedSource: cachedSource,
+      sourceKey: sourceKey,
+      loadToken: loadToken,
+      targetPositionMs: replayingFromCompleted ? 0 : _currentTimeMs,
+    );
+    if (recovered == null || isAborted() || _musicPlayer != recovered) {
+      return false;
+    }
+    await recovered.setPlaybackRate(_playbackRate);
+    if (isAborted() || _musicPlayer != recovered) return false;
+    await recovered.resume();
+    if (isAborted() || _musicPlayer != recovered) {
+      if (!_disposed && !_isPlaying && _musicPlayer == recovered) {
+        unawaited(recovered.pause().catchError((Object _) {}));
+      }
+      return false;
+    }
+    return true;
+  }
+
+  Future<AudioPlayer?> _recoverMusicPlayerWithCachedSource({
+    required Source cachedSource,
+    required String sourceKey,
+    required int loadToken,
+    required int targetPositionMs,
+  }) async {
+    if (_disposed ||
+        !_hasExternalAudio ||
+        _sourceLoadToken != loadToken ||
+        _currentMusicSourceKey != sourceKey) {
+      return null;
+    }
+    final player = await _recreateMusicPlayer();
+    if (player == null ||
+        _disposed ||
+        !_hasExternalAudio ||
+        _sourceLoadToken != loadToken ||
+        _currentMusicSourceKey != sourceKey ||
+        _musicPlayer != player) {
+      return null;
+    }
+    try {
+      await player
+          .setSource(cachedSource)
+          .timeout(const Duration(seconds: 12));
+      if (_disposed ||
+          !_hasExternalAudio ||
+          _sourceLoadToken != loadToken ||
+          _currentMusicSourceKey != sourceKey ||
+          _musicPlayer != player) {
+        return null;
+      }
+      _hasPreparedMusicSource = true;
+      if (targetPositionMs > 0) {
+        await player
+            .seek(Duration(milliseconds: targetPositionMs))
+            .timeout(const Duration(seconds: 3));
+        if (_disposed ||
+            !_hasExternalAudio ||
+            _sourceLoadToken != loadToken ||
+            _currentMusicSourceKey != sourceKey ||
+            _musicPlayer != player) {
+          return null;
+        }
+      }
+      return player;
+    } catch (err) {
+      _recordDiagnostic('Music cached source recovery failed: $err');
+      if (!_disposed &&
+          _musicPlayer == player &&
+          _sourceLoadToken == loadToken) {
+        _hasPreparedMusicSource = false;
+        _hasCompleted = false;
+      }
+      return null;
+    }
+  }
+
   Future<void> pause() async {
     _positionWatchdogTimer?.cancel();
+    ++_playSeq;
     if (!_isPlaying) return;
     _isPlaying = false;
     _clockTimer?.cancel();
@@ -473,6 +973,7 @@ class AudioMetronomeService {
   Future<void> seek(int ms) {
     if (_disposed) return Future.value();
     final target = ms.clamp(0, math.max<int>(1000, _durationMs)).toInt();
+    _hasCompleted = false;
     _currentTimeMs = target;
     _lastTriggeredBeatIndex = -999999;
     _beepedAlerts.clear();
@@ -498,13 +999,14 @@ class AudioMetronomeService {
   }
 
   Future<void> _drainPendingSeeks() async {
-    final music = _musicPlayer;
-    if (music == null) {
+    final initialMusic = _musicPlayer;
+    if (initialMusic == null) {
       _pendingSeekMs = null;
       _seekCompleter?.complete();
       _seekCompleter = null;
       return;
     }
+    var music = initialMusic;
     _seekInFlight = true;
     try {
       while (!_disposed &&
@@ -512,10 +1014,44 @@ class AudioMetronomeService {
           _musicPlayer == music) {
         final nextTarget = _pendingSeekMs!;
         _pendingSeekMs = null;
+        final loadToken = _sourceLoadToken;
+        final sourceKey = _currentMusicSourceKey;
+        final cachedSource = _currentMusicSource;
         try {
-          await music.seek(Duration(milliseconds: nextTarget));
-        } catch (_) {
-          // Ignore seek errors when source is not yet prepared or player disposed.
+          if (music.source == null &&
+              cachedSource != null &&
+              sourceKey != null) {
+            final recovered = await _recoverMusicPlayerWithCachedSource(
+              cachedSource: cachedSource,
+              sourceKey: sourceKey,
+              loadToken: loadToken,
+              targetPositionMs: nextTarget,
+            );
+            if (recovered != null) {
+              music = recovered;
+            }
+            continue;
+          }
+          await music
+              .seek(Duration(milliseconds: nextTarget))
+              .timeout(const Duration(seconds: 3));
+        } catch (err) {
+          if (!_disposed &&
+              _musicPlayer == music &&
+              cachedSource != null &&
+              sourceKey != null) {
+            final recovered = await _recoverMusicPlayerWithCachedSource(
+              cachedSource: cachedSource,
+              sourceKey: sourceKey,
+              loadToken: loadToken,
+              targetPositionMs: nextTarget,
+            );
+            if (recovered != null) {
+              music = recovered;
+              continue;
+            }
+          }
+          _recordDiagnostic('Music seek failed: $err');
         }
       }
     } finally {
@@ -530,6 +1066,11 @@ class AudioMetronomeService {
 
   Future<void> testMetronomeClick({bool accent = true}) async {
     await _playClick(accent: accent);
+  }
+
+  Future<void> testGtAlertBeep() async {
+    final vol = (_metronomeVolume / 1.5).clamp(0.15, 1.0);
+    await _triggerCue(_alertCue, vol);
   }
 
   /// Tap Tempo estimator with double/half-time octave normalization into 70..195 BPM.
@@ -609,25 +1150,55 @@ class AudioMetronomeService {
 
   Future<void> _triggerCue(_CuePlayerState cue, double volume) async {
     final player = cue.player;
-    if (_disposed || player == null || cue.inFlight) return;
+    if (_disposed || !enablePlatformAudio || player == null || cue.inFlight) {
+      return;
+    }
     cue.inFlight = true;
     try {
+      if (!cue.prepared || player.source == null) {
+        final ready = await _preloadCue(cue);
+        if (!ready || _disposed) return;
+      }
       if (cue.lastVolume == null || (cue.lastVolume! - volume).abs() > 0.005) {
         await player.setVolume(volume);
         cue.lastVolume = volume;
+        if (_disposed) return;
       }
-      if (!cue.prepared) {
-        await player.setSource(BytesSource(cue.wavBytes));
-        cue.prepared = true;
-      } else if (player.state == PlayerState.playing) {
-        await player.seek(Duration.zero);
+      final needsStopBeforeReplay = _useSoundPoolCues
+          ? player.state != PlayerState.stopped
+          : (player.state == PlayerState.playing ||
+                player.state == PlayerState.paused);
+      if (needsStopBeforeReplay) {
+        await player.stop().timeout(const Duration(milliseconds: 500));
+        if (_disposed) return;
       }
-      await player.resume();
-    } catch (_) {
+      await player.resume().timeout(const Duration(seconds: 2));
+      if (_disposed) return;
+      cue.playCount++;
+      cue.status = CueStatus.ready;
+      cue.lastError = null;
+    } catch (err) {
       cue.prepared = false;
+      cue.status = CueStatus.failed;
+      cue.failureCount++;
+      cue.lastError = err.toString();
+      _recordDiagnostic(
+        'Cue playback failed (${cue.kind.name}): $err',
+        isCueFailure: true,
+      );
     } finally {
       cue.inFlight = false;
     }
+  }
+
+  static String _cueFileName(CueKind kind, Uint8List wavBytes) {
+    var hash = 0x811c9dc5;
+    for (final byte in wavBytes) {
+      hash ^= byte;
+      hash = (hash * 0x01000193) & 0xffffffff;
+    }
+    final hex = hash.toRadixString(16).padLeft(8, '0');
+    return 'cue_${kind.name}_$hex.wav';
   }
 
   static Uint8List _buildClickWav({
@@ -675,6 +1246,8 @@ class AudioMetronomeService {
 
   Future<void> dispose() async {
     _disposed = true;
+    ++_sourceLoadToken;
+    ++_playSeq;
     _clockTimer?.cancel();
     _positionWatchdogTimer?.cancel();
     _pendingSeekMs = null;

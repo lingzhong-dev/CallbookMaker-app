@@ -30,6 +30,8 @@ import 'package:live_call_studio/utils/xlsx_export.dart';
 import 'package:prism_ui/prism_ui.dart' as prism;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'support/mock_audioplayers_harness.dart';
+
 class _TestUiLocalizations implements prism.UiLocalizations {
   const _TestUiLocalizations();
 
@@ -95,63 +97,10 @@ void _setupHeadlessPluginMocks({
   ValueSetter<String>? onClipboardWrite,
   String Function()? onClipboardRead,
 }) {
+  MockAudioplayersHarness().install();
+
   final messenger =
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-  final registeredEventChannels = <String>{};
-
-  void ensureEventChannelMock(String channelName) {
-    if (!registeredEventChannels.add(channelName)) return;
-    messenger.setMockMessageHandler(channelName, (ByteData? message) async {
-      if (message == null) return null;
-      final decoded = const StandardMethodCodec().decodeMethodCall(message);
-      if (decoded.method == 'listen' || decoded.method == 'cancel') {
-        return const StandardMethodCodec().encodeSuccessEnvelope(null);
-      }
-      return null;
-    });
-  }
-
-  ensureEventChannelMock('xyz.luan/audioplayers.global/events');
-
-  messenger.setMockMethodCallHandler(
-    const MethodChannel('xyz.luan/audioplayers.global'),
-    (MethodCall call) async => null,
-  );
-
-  messenger.setMockMethodCallHandler(
-    const MethodChannel('xyz.luan/audioplayers'),
-    (MethodCall call) async {
-      final args = call.arguments;
-      if (args is Map) {
-        final playerId = args['playerId']?.toString();
-        if (playerId != null && playerId.isNotEmpty) {
-          ensureEventChannelMock('xyz.luan/audioplayers/events/$playerId');
-        }
-      }
-      switch (call.method) {
-        case 'getCurrentPosition':
-        case 'getDuration':
-          return 0;
-        default:
-          return null;
-      }
-    },
-  );
-
-  messenger.setMockMethodCallHandler(
-    const MethodChannel('miguelruivo.flutter.plugins.filepicker'),
-    (MethodCall call) async => null,
-  );
-
-  messenger.setMockMethodCallHandler(
-    const MethodChannel('dev.fluttercommunity.plus/share'),
-    (MethodCall call) async => 'dev.fluttercommunity.plus/share/unavailable',
-  );
-
-  messenger.setMockMethodCallHandler(
-    const MethodChannel('plugins.flutter.io/url_launcher'),
-    (MethodCall call) async => true,
-  );
 
   messenger.setMockMethodCallHandler(SystemChannels.platform, (
     MethodCall call,
