@@ -220,6 +220,38 @@ class _AudioSourcePanelState extends State<AudioSourcePanel> {
               value: _sourceTab,
               onChanged: (v) => setState(() => _sourceTab = v),
             ),
+            if (c.hasRestorableCreditLines) ...[
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
+                ),
+                decoration: ShapeDecoration(
+                  color: scheme.secondaryContainer.withValues(alpha: 0.65),
+                  shape: AppShape.md,
+                ),
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Text(
+                      '已过滤 ${c.restorableCreditLines.length} 行片头制作信息',
+                      style: AppTextStyle.caption1.of(context).copyWith(
+                        color: scheme.onSecondaryContainer,
+                      ),
+                    ),
+                    TonalChip(
+                      label: '恢复被过滤的制作信息行',
+                      color: scheme.primaryContainer,
+                      foregroundColor: scheme.onPrimaryContainer,
+                      onPressed: () => c.restoreFilteredCreditLines(),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             const SizedBox(height: 12),
             if (_sourceTab == 'search') _buildSearchTab(context, c, scheme),
             if (_sourceTab == 'local') _buildLocalTab(context, c, scheme),
@@ -453,6 +485,32 @@ class _AudioSourcePanelState extends State<AudioSourcePanel> {
               child: Text(_showTranslationBox ? '收起翻译框' : '+ 中文翻译 LRC'),
             ),
           ],
+        ),
+        PressSurface(
+          fill: const Color(0x00000000),
+          shape: AppShape.sm,
+          tapTarget: AppTokens.minTapTargetSize,
+          onPressed: () => c.setFilterLrcHeaderCredits(!c.filterLrcHeaderCredits),
+          child: Row(
+            children: [
+              Switch(
+                value: c.filterLrcHeaderCredits,
+                onChanged: c.setFilterLrcHeaderCredits,
+                semanticLabel: '过滤片头制作信息',
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  '过滤片头制作信息（仅前 10 行且在前 20 秒内）',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTextStyle.caption1.of(context).copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
         if (_showTranslationBox) ...[
           const SizedBox(height: 6),

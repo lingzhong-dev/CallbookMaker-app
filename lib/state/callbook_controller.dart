@@ -286,7 +286,9 @@ class CallbookController extends ChangeNotifier {
   bool _isLaunchingBackend = false;
   bool _offlineRubyEnabled = true;
   bool _preferNeteaseRomaLrc = true;
+  bool _filterLrcHeaderCredits = true;
   bool _isAnnotatingRuby = false;
+  List<LyricLine> _restorableCreditLines = const [];
   GatewayStatusInfo _gatewayStatus = const GatewayStatusInfo();
   String _savedGatewayUrl = 'http://127.0.0.1:3000';
   String _savedNeteaseCookie = '';
@@ -428,6 +430,10 @@ class CallbookController extends ChangeNotifier {
   bool get isLaunchingBackend => _isLaunchingBackend;
   bool get offlineRubyEnabled => _offlineRubyEnabled;
   bool get preferNeteaseRomaLrc => _preferNeteaseRomaLrc;
+  bool get filterLrcHeaderCredits => _filterLrcHeaderCredits;
+  List<LyricLine> get restorableCreditLines =>
+      List.unmodifiable(_restorableCreditLines);
+  bool get hasRestorableCreditLines => _restorableCreditLines.isNotEmpty;
   bool get isAnnotatingRuby => _isAnnotatingRuby;
   bool get isDesktopHost => _desktopLauncher.isDesktop;
   GatewayStatusInfo get gatewayStatus => _gatewayStatus;
@@ -1076,6 +1082,7 @@ class CallbookController extends ChangeNotifier {
     _autoAdvanceOnTag = map['autoAdvanceOnTag'] == true;
     _offlineRubyEnabled = map['offlineRubyEnabled'] != false;
     _preferNeteaseRomaLrc = map['preferNeteaseRomaLrc'] != false;
+    _filterLrcHeaderCredits = map['filterLrcHeaderCredits'] != false;
     _textScale = ((map['textScale'] as num?)?.toDouble() ?? 1.0).clamp(0.85, 1.25);
   }
 
@@ -1437,6 +1444,14 @@ class CallbookController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setFilterLrcHeaderCredits(bool v) {
+    if (_filterLrcHeaderCredits == v) return;
+    _filterLrcHeaderCredits = v;
+    _saveThemePrefs();
+    _gatewayNotifier.notifyListeners();
+    notifyListeners();
+  }
+
   /// Runs the built-in offline Japanese morphological annotator on the current
   /// project's lyric lines, preserving existing romaji when [preferNeteaseRomaLrc]
   /// is enabled unless [overwriteExistingRomaji] is explicitly true.
@@ -1500,6 +1515,7 @@ class CallbookController extends ChangeNotifier {
         'autoAdvanceOnTag': _autoAdvanceOnTag,
         'offlineRubyEnabled': _offlineRubyEnabled,
         'preferNeteaseRomaLrc': _preferNeteaseRomaLrc,
+        'filterLrcHeaderCredits': _filterLrcHeaderCredits,
         'textScale': _textScale,
       }),
     );
@@ -3238,19 +3254,30 @@ class CallbookController extends ChangeNotifier {
       }
 
       var rawLines = detail.lines;
-      if (rawLines.isEmpty && detail.rawLrc.trim().isNotEmpty) {
-        rawLines = parseLrcOffline(
+      var filteredCredits = const <LyricLine>[];
+      var extractedMeta = const LrcExtractedMeta();
+      if (detail.rawLrc.trim().isNotEmpty &&
+          (rawLines.isEmpty || rawLines.every((l) => l.text.ruby == null))) {
+        final parsed = parseLrcOfflineDetailed(
           detail.rawLrc,
           translationLrc: detail.translatedLrc,
           romaLrc: _preferNeteaseRomaLrc ? detail.romaLrc : '',
+          filterHeaderCredits: _filterLrcHeaderCredits,
         );
+        rawLines = parsed.lines;
+        filteredCredits = parsed.filteredCreditLines;
+        extractedMeta = parsed.extractedMeta;
       } else if (!_preferNeteaseRomaLrc && detail.romaLrc.trim().isNotEmpty) {
         // User opted out of Netease romalrc; re-parse without romalrc so built-in
         // offline engine (or blank) controls romaji cleanly.
-        rawLines = parseLrcOffline(
+        final parsed = parseLrcOfflineDetailed(
           detail.rawLrc,
           translationLrc: detail.translatedLrc,
+          filterHeaderCredits: _filterLrcHeaderCredits,
         );
+        rawLines = parsed.lines;
+        filteredCredits = parsed.filteredCreditLines;
+        extractedMeta = parsed.extractedMeta;
       }
 
       if (_offlineRubyEnabled &&
@@ -3269,6 +3296,7 @@ class CallbookController extends ChangeNotifier {
       // Optional legacy backend fallback if online & still lacks Ruby markup.
       if (_backendOnline &&
           detail.rawLrc.trim().isNotEmpty &&
+          rawLines.isNotEmpty &&
           rawLines.every((l) => l.text.ruby == null)) {
         try {
           final rubyLines = await _api.parseLyricsWithRuby(
@@ -3295,25 +3323,29 @@ class CallbookController extends ChangeNotifier {
         totalDurationMs:
             _knownAudioDurationMs > 0 ? _knownAudioDurationMs : null,
       );
+      final baseMeta = CallProjectMeta(
+        title: detail.track.title,
+        artist: detail.track.artist,
+        vocalist: detail.track.artist,
+        showTuner: false,
+        platform: detail.track.platform,
+        trackId: detail.track.id,
+        audioUrl: detail.audioUrl,
+        bpm: detail.track.bpm ?? _project.meta.bpm,
+        timeSignature: _project.meta.timeSignature,
+        offsetMs: 0,
+      );
       final nextProject = CallProject(
-        meta: CallProjectMeta(
-          title: detail.track.title,
-          artist: detail.track.artist,
-          vocalist: detail.track.artist,
-          showTuner: false,
-          platform: detail.track.platform,
-          trackId: detail.track.id,
-          audioUrl: detail.audioUrl,
-          bpm: detail.track.bpm ?? _project.meta.bpm,
-          timeSignature: _project.meta.timeSignature,
-          offsetMs: 0,
-        ),
+        meta: _filterLrcHeaderCredits
+            ? _mergeExtractedCreditsMeta(baseMeta, extractedMeta)
+            : baseMeta,
         alerts: const [],
         lines: detected.lines,
       );
       final switchSeq = ++_sourceSwitchSeq;
       _clearTapSession(notify: false);
       _clearUndoHistory();
+      _restorableCreditLines = List<LyricLine>.unmodifiable(filteredCredits);
       _currentTimeMs = 0;
       _setPlayingState(false);
       _durationMs = _computeProjectDurationMs(
@@ -3356,11 +3388,22 @@ class CallbookController extends ChangeNotifier {
           : (detail.audioUrl.isEmpty && detail.track.platform == 'netease'
                 ? '（该曲目暂无可用直链音源，可搭配本地音频或节拍器演练）'
                 : '');
+      final filterHint = filteredCredits.isNotEmpty
+          ? '（已过滤 ${filteredCredits.length} 行片头制作信息）'
+          : '';
       _setStatusInternal(
         totalDetected > 0
-            ? '已导入曲目：${detail.track.title}（自动识别前/间/尾奏：前${detected.stats.intro}·间${detected.stats.interlude}·尾${detected.stats.outro}）$audioHint'
-            : '已导入曲目：${detail.track.title}$audioHint',
+            ? '已导入曲目：${detail.track.title}（自动识别前/间/尾奏：前${detected.stats.intro}·间${detected.stats.interlude}·尾${detected.stats.outro}）$filterHint$audioHint'
+            : '已导入曲目：${detail.track.title}$filterHint$audioHint',
       );
+      if (filteredCredits.isNotEmpty) {
+        notify(
+          '已过滤 ${filteredCredits.length} 行片头制作信息（点此可恢复）',
+          level: prism.BannerLevel.info,
+          actionLabel: '恢复被过滤的制作信息行',
+          onAction: () => restoreFilteredCreditLines(),
+        );
+      }
     } catch (err) {
       _setStatusInternal('导入曲目失败：$err');
       notify(
@@ -3377,17 +3420,45 @@ class CallbookController extends ChangeNotifier {
     notifyListeners();
   }
 
+  CallProjectMeta _mergeExtractedCreditsMeta(
+    CallProjectMeta base,
+    LrcExtractedMeta extracted,
+  ) {
+    if (extracted.isEmpty) return base;
+    return base.copyWith(
+      lyricist: base.lyricist.trim().isEmpty && extracted.lyricist.isNotEmpty
+          ? extracted.lyricist
+          : null,
+      composer: base.composer.trim().isEmpty && extracted.composer.isNotEmpty
+          ? extracted.composer
+          : null,
+      arranger: base.arranger.trim().isEmpty && extracted.arranger.isNotEmpty
+          ? extracted.arranger
+          : null,
+      mixer: base.mixer.trim().isEmpty && extracted.mixer.isNotEmpty
+          ? extracted.mixer
+          : null,
+      vocalist: base.vocalist.trim().isEmpty && extracted.vocalist.isNotEmpty
+          ? extracted.vocalist
+          : null,
+    );
+  }
+
   Future<void> importLrcText({
     required String lrc,
     String translationLrc = '',
     String romaLrc = '',
     bool enableRuby = true,
+    bool? filterHeaderCredits,
   }) async {
-    var lines = parseLrcOffline(
+    final useCreditFilter = filterHeaderCredits ?? _filterLrcHeaderCredits;
+    final parsed = parseLrcOfflineDetailed(
       lrc,
       translationLrc: translationLrc,
       romaLrc: _preferNeteaseRomaLrc ? romaLrc : '',
+      filterHeaderCredits: useCreditFilter,
     );
+    var lines = parsed.lines;
     if (enableRuby && _offlineRubyEnabled && lines.isNotEmpty) {
       try {
         lines = await _rubyAnnotator.annotateLines(
@@ -3400,6 +3471,7 @@ class CallbookController extends ChangeNotifier {
     }
     if (enableRuby &&
         _backendOnline &&
+        lines.isNotEmpty &&
         lines.every((l) => l.text.ruby == null)) {
       try {
         final backendLines = await _api.parseLyricsWithRuby(
@@ -3427,6 +3499,8 @@ class CallbookController extends ChangeNotifier {
     );
     _clearTapSession(notify: false);
     _clearUndoHistory();
+    _restorableCreditLines =
+        List<LyricLine>.unmodifiable(parsed.filteredCreditLines);
     await _audio.pause();
     await _audio.seek(0);
     _setPlayingState(false);
@@ -3434,7 +3508,11 @@ class CallbookController extends ChangeNotifier {
     if (!hasMeasuredExternalAudio) {
       _knownAudioDurationMs = 0;
     }
+    final nextMeta = useCreditFilter
+        ? _mergeExtractedCreditsMeta(_project.meta, parsed.extractedMeta)
+        : _project.meta;
     final nextProject = _project.copyWith(
+      meta: nextMeta,
       lines: detected.lines,
       alerts: const [],
     );
@@ -3456,13 +3534,85 @@ class CallbookController extends ChangeNotifier {
         detected.stats.intro +
         detected.stats.interlude +
         detected.stats.outro;
+    final filterNote = parsed.filteredCreditLines.isNotEmpty
+        ? '（已过滤 ${parsed.filteredCreditLines.length} 行制作信息）'
+        : '';
     _setStatusInternal(
       totalDetected > 0
-          ? '已解析 ${lines.length} 行 LRC · 自动识别前奏 ${detected.stats.intro} / 间奏 ${detected.stats.interlude}${detected.stats.outro > 0 ? ' / 尾奏 ${detected.stats.outro}' : ''}'
-          : '已解析 ${lines.length} 行 LRC 歌词（未触发前/间/尾奏空档阈值）',
+          ? '已解析 ${lines.length} 行 LRC · 自动识别前奏 ${detected.stats.intro} / 间奏 ${detected.stats.interlude}${detected.stats.outro > 0 ? ' / 尾奏 ${detected.stats.outro}' : ''}$filterNote'
+          : '已解析 ${lines.length} 行 LRC 歌词$filterNote',
     );
+    if (parsed.filteredCreditLines.isNotEmpty) {
+      notify(
+        '已过滤 ${parsed.filteredCreditLines.length} 行片头制作信息（点此可恢复）',
+        level: prism.BannerLevel.info,
+        actionLabel: '恢复被过滤的制作信息行',
+        onAction: () => restoreFilteredCreditLines(),
+      );
+    }
+    _gatewayNotifier.notifyListeners();
     _archiveNotifier.notifyListeners();
     _notifyProjectChanged();
+  }
+
+  /// Restores header credit lines filtered during the most recent LRC import
+  /// without changing `offsetMs` or shifting any existing lyric timestamps.
+  int restoreFilteredCreditLines() {
+    if (_restorableCreditLines.isEmpty) return 0;
+    final existingIds = {for (final l in _project.lines) l.id};
+    final toRestore = [
+      for (final l in _restorableCreditLines)
+        if (!existingIds.contains(l.id)) l,
+    ];
+    _restorableCreditLines = const [];
+    if (toRestore.isEmpty) {
+      _gatewayNotifier.notifyListeners();
+      return 0;
+    }
+
+    final earliestRestoredStart = toRestore
+        .map((l) => l.startTimeMs)
+        .reduce((a, b) => a < b ? a : b);
+    final orderedBefore = sortedLines;
+    final protectedIds = <String>{
+      for (final a in _project.alerts)
+        if (resolveGtAlertTargetLineId(a, orderedBefore) != null)
+          resolveGtAlertTargetLineId(a, orderedBefore)!,
+    };
+
+    final nextLines = <LyricLine>[];
+    for (final line in _project.lines) {
+      if (line.kind == LyricLineKind.intro &&
+          line.startTimeMs == 0 &&
+          line.endTimeMs > earliestRestoredStart &&
+          isAutoMaintainableSection(line, protectedIds)) {
+        if (earliestRestoredStart >= _sectionThresholds.introThresholdMs) {
+          final shrunkDur = earliestRestoredStart - line.startTimeMs;
+          nextLines.add(
+            line.copyWith(
+              endTimeMs: earliestRestoredStart,
+              text: line.text.copyWith(
+                translation: buildSectionSummary(LyricLineKind.intro, shrunkDur),
+              ),
+            ),
+          );
+        }
+        // If shorter than intro threshold, drop the auto-only intro cleanly.
+        continue;
+      }
+      nextLines.add(line);
+    }
+
+    nextLines.addAll(toRestore);
+    nextLines.sort((a, b) => a.startTimeMs.compareTo(b.startTimeMs));
+
+    _setProject(_project.copyWith(lines: nextLines));
+    _refreshTimelineAfterMutation();
+    schedulePersist();
+    _setStatusInternal('已恢复 ${toRestore.length} 行片头制作信息');
+    _gatewayNotifier.notifyListeners();
+    _notifyProjectChanged();
+    return toRestore.length;
   }
 
   Future<void> loadLocalAudioFile(String filePath, String fileName) async {
@@ -3513,6 +3663,8 @@ class CallbookController extends ChangeNotifier {
     final switchSeq = ++_sourceSwitchSeq;
     _clearTapSession(notify: false);
     _clearUndoHistory();
+    _restorableCreditLines = const [];
+    _gatewayNotifier.notifyListeners();
     await _audio.pause();
     await _audio.seek(0);
 
@@ -3671,6 +3823,8 @@ class CallbookController extends ChangeNotifier {
       final switchSeq = ++_sourceSwitchSeq;
       _clearTapSession(notify: false);
       _clearUndoHistory();
+      _restorableCreditLines = const [];
+      _gatewayNotifier.notifyListeners();
       final normalized = _normalizeProjectAlerts(parsed);
       _setProject(normalized);
       _knownAudioDurationMs = _resolveKnownDurationMs(normalized);
@@ -3797,6 +3951,8 @@ class CallbookController extends ChangeNotifier {
     final switchSeq = ++_sourceSwitchSeq;
     _clearTapSession(notify: false);
     _clearUndoHistory();
+    _restorableCreditLines = const [];
+    _gatewayNotifier.notifyListeners();
     final restored = _normalizeProjectAlerts(
       CallProject.fromJson(found.project.toJson()),
     );

@@ -74,18 +74,141 @@ LyricLineKind? detectExplicitSectionKind(String rawText) {
   return null;
 }
 
-/// Pure-Dart LRC parser supporting optional translation (`tlyric`) and
-/// romaji (`romalrc`) tracks aligned by nearest timestamp.
-List<LyricLine> parseLrcOffline(
+class LrcExtractedMeta {
+  const LrcExtractedMeta({
+    this.lyricist = '',
+    this.composer = '',
+    this.arranger = '',
+    this.mixer = '',
+    this.vocalist = '',
+  });
+
+  final String lyricist;
+  final String composer;
+  final String arranger;
+  final String mixer;
+  final String vocalist;
+
+  bool get isEmpty =>
+      lyricist.isEmpty &&
+      composer.isEmpty &&
+      arranger.isEmpty &&
+      mixer.isEmpty &&
+      vocalist.isEmpty;
+}
+
+class LrcParseResult {
+  const LrcParseResult({
+    required this.lines,
+    required this.originalLines,
+    required this.filteredCreditLines,
+    required this.extractedMeta,
+  });
+
+  /// Active timeline lines after optional header credit filtering.
+  final List<LyricLine> lines;
+
+  /// Complete parsed lines preserving source order before filtering.
+  final List<LyricLine> originalLines;
+
+  /// Header credit lines filtered from the active timeline (recoverable).
+  final List<LyricLine> filteredCreditLines;
+
+  /// Extracted credit metadata from matched header credit lines.
+  final LrcExtractedMeta extractedMeta;
+}
+
+enum _CreditField {
+  lyricist,
+  composer,
+  lyricistAndComposer,
+  arranger,
+  mixer,
+  vocalist,
+  other,
+}
+
+final List<({_CreditField field, RegExp pattern})> _creditLabelRules = [
+  (
+    field: _CreditField.lyricistAndComposer,
+    pattern: RegExp(
+      r'^\s*(?:词曲|詞曲|作词\s*[/／&]\s*作曲|作詞\s*[/／&]\s*作曲|词\s*[/／&]\s*曲|詞\s*[/／&]\s*曲)\s*[:：]\s*(.+?)\s*$',
+      caseSensitive: false,
+    ),
+  ),
+  (
+    field: _CreditField.lyricist,
+    pattern: RegExp(
+      r'^\s*(?:作词|作詞|lyricist|lyrics(?:\s+by)?|words(?:\s+by)?)\s*[:：]\s*(.+?)\s*$',
+      caseSensitive: false,
+    ),
+  ),
+  (
+    field: _CreditField.composer,
+    pattern: RegExp(
+      r'^\s*(?:作曲|composer|music(?:\s+by)?)\s*[:：]\s*(.+?)\s*$',
+      caseSensitive: false,
+    ),
+  ),
+  (
+    field: _CreditField.arranger,
+    pattern: RegExp(
+      r'^\s*(?:编曲|編曲|arranger|arrangement|arranged(?:\s+by)?)\s*[:：]\s*(.+?)\s*$',
+      caseSensitive: false,
+    ),
+  ),
+  (
+    field: _CreditField.mixer,
+    pattern: RegExp(
+      r'^\s*(?:混音师|混音師|混音|母带处理|母带后期|母带|母帶|mixing|mix|mastering|mixed(?:\s+by)?|mastered(?:\s+by)?)\s*[:：]\s*(.+?)\s*$',
+      caseSensitive: false,
+    ),
+  ),
+  (
+    field: _CreditField.vocalist,
+    pattern: RegExp(
+      r'^\s*(?:演唱|原唱|vocals|vocal)\s*[:：]\s*(.+?)\s*$',
+      caseSensitive: false,
+    ),
+  ),
+  (
+    field: _CreditField.other,
+    pattern: RegExp(
+      r'^\s*(?:制作人|製作人|producer|produced(?:\s+by)?|和声|和聲|backing\s+vocals|录音|錄音|recording|监制|監製|统筹|統籌)\s*[:：]\s*(.+?)\s*$',
+      caseSensitive: false,
+    ),
+  ),
+];
+
+({_CreditField field, String value})? _matchHeaderCredit(String text) {
+  final trimmed = text.trim();
+  if (trimmed.isEmpty) return null;
+  for (final rule in _creditLabelRules) {
+    final m = rule.pattern.firstMatch(trimmed);
+    if (m != null) {
+      final value = (m.group(1) ?? '').trim();
+      if (value.isNotEmpty && RegExp(r'[^\s:：]').hasMatch(value)) {
+        return (field: rule.field, value: value);
+      }
+      return null;
+    }
+  }
+  return null;
+}
+
+/// Pure-Dart LRC parser returning structured lines, filtered header credit
+/// candidates, and extracted metadata while preserving untimestamped plain text.
+LrcParseResult parseLrcOfflineDetailed(
   String lrcText, {
   String translationLrc = '',
   String romaLrc = '',
   int defaultDurationMs = 3000,
+  bool filterHeaderCredits = true,
 }) {
   final transMap = _parseAuxiliaryLrcMap(translationLrc);
   final romaMap = _parseAuxiliaryLrcMap(romaLrc);
 
-  final entries = <({int ms, int seq, String text})>[];
+  final entries = <({int ms, int seq, String text, bool hasTimestamp})>[];
   final rawLines = lrcText.split(RegExp(r'\r\n|\r|\n'));
   var fallbackCursor = 0;
   for (final rawLine in rawLines) {
@@ -99,14 +222,24 @@ List<LyricLine> parseLrcOffline(
     final content = trimmed.replaceAll(_lrcTimestampPattern, '').trim();
     if (matches.isEmpty) {
       if (content.isNotEmpty) {
-        entries.add((ms: fallbackCursor, seq: entries.length, text: content));
+        entries.add((
+          ms: fallbackCursor,
+          seq: entries.length,
+          text: content,
+          hasTimestamp: false,
+        ));
         fallbackCursor += defaultDurationMs;
       }
       continue;
     }
     if (content.isEmpty) continue;
     for (final m in matches) {
-      entries.add((ms: _matchToMs(m), seq: entries.length, text: content));
+      entries.add((
+        ms: _matchToMs(m),
+        seq: entries.length,
+        text: content,
+        hasTimestamp: true,
+      ));
     }
   }
 
@@ -114,7 +247,7 @@ List<LyricLine> parseLrcOffline(
     final cmp = a.ms.compareTo(b.ms);
     return cmp != 0 ? cmp : a.seq.compareTo(b.seq);
   });
-  final result = <LyricLine>[];
+  final built = <({LyricLine line, bool hasTimestamp})>[];
   var i = 0;
   while (i < entries.length) {
     final groupMs = entries[i].ms;
@@ -151,8 +284,8 @@ List<LyricLine> parseLrcOffline(
 
       final sectionKind = detectExplicitSectionKind(originalText);
       if (sectionKind != null) {
-        result.add(
-          LyricLine(
+        built.add((
+          line: LyricLine(
             id: 'lrc-sec-$k-${current.ms}',
             startTimeMs: current.ms,
             endTimeMs: endMs,
@@ -163,12 +296,13 @@ List<LyricLine> parseLrcOffline(
               translation: buildSectionSummary(sectionKind, endMs - current.ms),
             ),
           ),
-        );
+          hasTimestamp: current.hasTimestamp,
+        ));
         continue;
       }
 
-      result.add(
-        LyricLine(
+      built.add((
+        line: LyricLine(
           id: 'lrc-$k-${current.ms}',
           startTimeMs: current.ms,
           endTimeMs: endMs,
@@ -178,11 +312,92 @@ List<LyricLine> parseLrcOffline(
             translation: matchedTranslation,
           ),
         ),
-      );
+        hasTimestamp: current.hasTimestamp,
+      ));
     }
     i = groupEnd;
   }
-  return result;
+
+  var lyricist = '';
+  var composer = '';
+  var arranger = '';
+  var mixer = '';
+  var vocalist = '';
+  final filteredIndices = <int>{};
+  final inspectLimit = built.length < 10 ? built.length : 10;
+  for (var idx = 0; idx < inspectLimit; idx++) {
+    final item = built[idx];
+    if (!item.hasTimestamp ||
+        item.line.startTimeMs > 20000 ||
+        item.line.kind.isSection) {
+      continue;
+    }
+    final credit = _matchHeaderCredit(item.line.text.original);
+    if (credit == null) continue;
+    switch (credit.field) {
+      case _CreditField.lyricist:
+        if (lyricist.isEmpty) lyricist = credit.value;
+      case _CreditField.composer:
+        if (composer.isEmpty) composer = credit.value;
+      case _CreditField.lyricistAndComposer:
+        if (lyricist.isEmpty) lyricist = credit.value;
+        if (composer.isEmpty) composer = credit.value;
+      case _CreditField.arranger:
+        if (arranger.isEmpty) arranger = credit.value;
+      case _CreditField.mixer:
+        if (mixer.isEmpty) mixer = credit.value;
+      case _CreditField.vocalist:
+        if (vocalist.isEmpty) vocalist = credit.value;
+      case _CreditField.other:
+        break;
+    }
+    if (filterHeaderCredits) {
+      filteredIndices.add(idx);
+    }
+  }
+
+  final originalLines = [for (final item in built) item.line];
+  final filteredCreditLines = [
+    for (var idx = 0; idx < built.length; idx++)
+      if (filteredIndices.contains(idx)) built[idx].line,
+  ];
+  final activeLines = filterHeaderCredits
+      ? [
+          for (var idx = 0; idx < built.length; idx++)
+            if (!filteredIndices.contains(idx)) built[idx].line,
+        ]
+      : originalLines;
+
+  return LrcParseResult(
+    lines: activeLines,
+    originalLines: originalLines,
+    filteredCreditLines: filteredCreditLines,
+    extractedMeta: LrcExtractedMeta(
+      lyricist: lyricist,
+      composer: composer,
+      arranger: arranger,
+      mixer: mixer,
+      vocalist: vocalist,
+    ),
+  );
+}
+
+/// Pure-Dart LRC parser supporting optional translation (`tlyric`) and
+/// romaji (`romalrc`) tracks aligned by nearest timestamp.
+List<LyricLine> parseLrcOffline(
+  String lrcText, {
+  String translationLrc = '',
+  String romaLrc = '',
+  int defaultDurationMs = 3000,
+  bool filterHeaderCredits = false,
+}) {
+  return parseLrcOfflineDetailed(
+    lrcText,
+    translationLrc: translationLrc,
+    romaLrc: romaLrc,
+    defaultDurationMs: defaultDurationMs,
+    filterHeaderCredits: filterHeaderCredits,
+  ).lines;
 }
 
 Map<int, String> _parseAuxiliaryLrcMap(String rawLrc) {
