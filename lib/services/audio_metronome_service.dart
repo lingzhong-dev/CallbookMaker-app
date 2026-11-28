@@ -4,11 +4,36 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:audioplayers/audioplayers.dart';
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 import 'package:flutter/scheduler.dart' show SchedulerBinding;
 import 'package:path_provider/path_provider.dart';
 
+import '../models/callbook_models.dart';
 import '../platform/app_platform.dart';
+
+/// Monotonic microsecond clock abstraction for deterministic scheduling tests.
+abstract interface class MonotonicClock {
+  int get elapsedMicroseconds;
+  void start();
+  void stop();
+  void reset();
+}
+
+class _SystemStopwatchClock implements MonotonicClock {
+  final Stopwatch _watch = Stopwatch();
+
+  @override
+  int get elapsedMicroseconds => _watch.elapsedMicroseconds;
+
+  @override
+  void start() => _watch.start();
+
+  @override
+  void stop() => _watch.stop();
+
+  @override
+  void reset() => _watch.reset();
+}
 
 class BeatSnapshot {
   const BeatSnapshot({
@@ -23,10 +48,17 @@ class BeatSnapshot {
 }
 
 class BpmEstimateResult {
-  const BpmEstimateResult({required this.bpm, required this.confidence});
+  const BpmEstimateResult({
+    required this.bpm,
+    required this.confidence,
+    this.sampleCount = 0,
+    this.validIntervalCount = 0,
+  });
 
   final int bpm;
   final double confidence;
+  final int sampleCount;
+  final int validIntervalCount;
 }
 
 /// Identifies each synthesized metronome or GT alert cue channel.
@@ -175,8 +207,15 @@ class AudioMetronomeService {
     this.tempDirProvider,
     bool? useLowLatencyCuesOverride,
     this.onDiagnosticLog,
-  }) : _useSoundPoolCues = useLowLatencyCuesOverride ?? AppPlatform.isAndroid;
+    MonotonicClock? clock,
+    this.driftThresholdMs = defaultDriftThresholdMs,
+  }) : _useSoundPoolCues = useLowLatencyCuesOverride ?? AppPlatform.isAndroid,
+       _clock = clock ?? _SystemStopwatchClock() {
+    _clock.start();
+  }
 
+  static const int defaultDriftThresholdMs = 25;
+  static const int maxBufferExtrapolationMs = 350;
   static int _nextInstanceId = 0;
   static final Set<String> _verifiedCueFiles = <String>{};
 
@@ -192,6 +231,8 @@ class AudioMetronomeService {
   final CueTempDirProvider? tempDirProvider;
   final bool _useSoundPoolCues;
   final void Function(String message)? onDiagnosticLog;
+  final MonotonicClock _clock;
+  final int driftThresholdMs;
 
   AudioPlayer? _musicPlayer;
   AudioPlayer? _configuredMusicPlayer;
@@ -232,7 +273,7 @@ class AudioMetronomeService {
   StreamSubscription<void>? _completeSub;
   Timer? _clockTimer;
   Timer? _positionWatchdogTimer;
-  DateTime _lastPositionEventWall = DateTime.fromMillisecondsSinceEpoch(0);
+  int _lastPositionEventClockUs = 0;
 
   bool _disposed = false;
   bool _hasExternalAudio = false;
@@ -249,6 +290,7 @@ class AudioMetronomeService {
   int _bpm = 175;
   int _beatsPerBar = 4;
   int _offsetMs = 0;
+  int _cueOutputCompensationMs = 0;
   int _durationMs = 48000;
   int _currentTimeMs = 0;
 
@@ -260,13 +302,17 @@ class AudioMetronomeService {
   int? _pendingSeekMs;
   Completer<void>? _seekCompleter;
 
-  int _lastTriggeredBeatIndex = -999999;
+  int _lastDisplayedBeatIndex = -999999;
+  int _lastTriggeredAudioBeatIndex = -999999;
   final Set<String> _beepedAlerts = <String>{};
   List<({String id, int triggerTimeMs, int leadBeats})> _alerts = const [];
 
   final List<int> _tapHistoryMs = <int>[];
-  DateTime _syntheticAnchorWall = DateTime.now();
-  int _syntheticAnchorTrackMs = 0;
+  int _anchorClockUs = 0;
+  int _anchorMediaMs = 0;
+  int _lastConfirmedPlayerPosMs = 0;
+  int _lastConfirmedPlayerClockUs = 0;
+  bool _bufferStalled = false;
 
   final List<String> _diagnosticLogs = <String>[];
   String? _lastCueError;
@@ -277,6 +323,8 @@ class AudioMetronomeService {
   bool get hasExternalAudio => _hasExternalAudio;
   bool get hasMeasuredExternalDuration => _hasMeasuredExternalDuration;
   bool get hasCompleted => _hasCompleted;
+  int get tapSampleCount => _tapHistoryMs.length;
+  int get cueOutputCompensationMs => _cueOutputCompensationMs;
   bool get areCuesReady =>
       enablePlatformAudio &&
       _accentCue.prepared &&
@@ -346,6 +394,76 @@ class AudioMetronomeService {
     return _musicConfigFuture!;
   }
 
+  int _nowUs() => _clock.elapsedMicroseconds;
+
+  int _computeInterpolatedTimeMs(int nowUs) {
+    final elapsedUs = math.max(0, nowUs - _anchorClockUs);
+    final deltaMs = (elapsedUs * _playbackRate / 1000.0).round();
+    return (_anchorMediaMs + deltaMs).clamp(0, _durationMs).toInt();
+  }
+
+  void _rebuildAnchor(int trackMs, {int? nowUs}) {
+    final ts = nowUs ?? _nowUs();
+    _anchorMediaMs = trackMs.clamp(0, _durationMs).toInt();
+    _anchorClockUs = ts;
+  }
+
+  void _handlePlatformPosition(int reportedMs) {
+    if (_disposed || !_hasExternalAudio) return;
+    if (_seekInFlight || _pendingSeekMs != null) return;
+    if (_hasCompleted && !_isPlaying) return;
+
+    final nowUs = _nowUs();
+    _lastPositionEventClockUs = nowUs;
+    final posMs = reportedMs.clamp(0, _durationMs).toInt();
+
+    if (!_isPlaying) {
+      _lastConfirmedPlayerPosMs = posMs;
+      _lastConfirmedPlayerClockUs = nowUs;
+      if (posMs != _currentTimeMs) {
+        _currentTimeMs = posMs;
+        _rebuildAnchor(posMs, nowUs: nowUs);
+        onTimeUpdate(_currentTimeMs);
+      }
+      return;
+    }
+
+    // Ignore out-of-order backward callbacks during active playback.
+    if (posMs < _lastConfirmedPlayerPosMs) {
+      return;
+    }
+
+    if (posMs == _lastConfirmedPlayerPosMs) {
+      if ((nowUs - _lastConfirmedPlayerClockUs) >=
+          maxBufferExtrapolationMs * 1000) {
+        _bufferStalled = true;
+        _rebuildAnchor(_currentTimeMs, nowUs: nowUs);
+      }
+      return;
+    }
+
+    _lastConfirmedPlayerPosMs = posMs;
+    _lastConfirmedPlayerClockUs = nowUs;
+    _bufferStalled = false;
+
+    final predictedMs = _computeInterpolatedTimeMs(nowUs);
+    final driftMs = (posMs - predictedMs).abs();
+    if (driftMs > driftThresholdMs) {
+      _rebuildAnchor(posMs, nowUs: nowUs);
+    }
+
+    if (posMs > _currentTimeMs) {
+      _currentTimeMs = posMs;
+      onTimeUpdate(_currentTimeMs);
+      _evaluateClocks(_currentTimeMs);
+    }
+  }
+
+  @visibleForTesting
+  void debugHandleExternalPositionMs(int positionMs) {
+    _handlePlatformPosition(positionMs);
+  }
+
   void _attachMusicListeners(AudioPlayer music) {
     unawaited(_posSub?.cancel());
     unawaited(_durSub?.cancel());
@@ -353,16 +471,7 @@ class AudioMetronomeService {
 
     _posSub = music.onPositionChanged.listen((pos) {
       if (_disposed || !_hasExternalAudio || _musicPlayer != music) return;
-      _lastPositionEventWall = DateTime.now();
-      if (_seekInFlight || _pendingSeekMs != null) return;
-      if (_hasCompleted && !_isPlaying) return;
-      final nextMs = pos.inMilliseconds;
-      if (nextMs == _currentTimeMs) return;
-      _currentTimeMs = nextMs;
-      onTimeUpdate(_currentTimeMs);
-      if (_isPlaying) {
-        _evaluateClocks(_currentTimeMs);
-      }
+      _handlePlatformPosition(pos.inMilliseconds);
     });
 
     _durSub = music.onDurationChanged.listen((dur) {
@@ -378,9 +487,11 @@ class AudioMetronomeService {
       if (_disposed || _musicPlayer != music) return;
       _isPlaying = false;
       _hasCompleted = true;
+      _bufferStalled = false;
       ++_playSeq;
       _clockTimer?.cancel();
       _positionWatchdogTimer?.cancel();
+      _rebuildAnchor(_currentTimeMs);
       onEnded?.call();
     });
   }
@@ -512,32 +623,90 @@ class AudioMetronomeService {
     return file.path;
   }
 
+  void _resyncBeatGridAt(
+    int trackMs, {
+    required bool triggerIfOnBoundary,
+  }) {
+    if (!_isPlaying) {
+      final hadDisplayedBeat = _lastDisplayedBeatIndex != -999999;
+      _lastTriggeredAudioBeatIndex = -999999;
+      if (hadDisplayedBeat) {
+        _lastDisplayedBeatIndex = -999999;
+        _evaluateClocks(trackMs, playAudio: false);
+      }
+      return;
+    }
+    _lastDisplayedBeatIndex = -999999;
+
+    _evaluateClocks(trackMs, playAudio: false);
+    final beatDurationMs = 60000.0 / math.max(30, _bpm);
+    final mediaLeadMs = (_cueOutputCompensationMs * _playbackRate).round();
+    final relCueMs = trackMs + mediaLeadMs - _offsetMs;
+    if (relCueMs < 0) {
+      _lastTriggeredAudioBeatIndex = -999999;
+      return;
+    }
+    final curBeat = (relCueMs / beatDurationMs).floor();
+    final msPastBoundary = relCueMs - (curBeat * beatDurationMs);
+    final edgeToleranceMs = math.max(35.0, 40.0 * _playbackRate);
+    _lastTriggeredAudioBeatIndex =
+        (triggerIfOnBoundary && msPastBoundary <= edgeToleranceMs)
+        ? (curBeat - 1)
+        : curBeat;
+  }
+
   void configure({
     required int bpm,
     required int beatsPerBar,
     required int offsetMs,
+    int cueOutputCompensationMs = 0,
     required bool metronomeEnabled,
     required double metronomeVolume,
     required bool gtBeepEnabled,
     required double playbackRate,
   }) {
-    _bpm = bpm.clamp(30, 300);
-    _beatsPerBar = beatsPerBar <= 3 ? 3 : 4;
-    _offsetMs = offsetMs;
+    final nextBpm = bpm.clamp(30, 300);
+    final nextBeatsPerBar = beatsPerBar <= 3 ? 3 : 4;
+    final nextOffsetMs = clampSongOffsetMs(offsetMs);
+    final nextCompMs = clampCueOutputCompensationMs(cueOutputCompensationMs);
+    final gridChanged =
+        _bpm != nextBpm ||
+        _beatsPerBar != nextBeatsPerBar ||
+        _offsetMs != nextOffsetMs ||
+        _cueOutputCompensationMs != nextCompMs;
+
+    _bpm = nextBpm;
+    _beatsPerBar = nextBeatsPerBar;
+    _offsetMs = nextOffsetMs;
+    _cueOutputCompensationMs = nextCompMs;
     _metronomeEnabled = metronomeEnabled;
     _metronomeVolume = metronomeVolume.clamp(0.05, 1.5);
     _gtBeepEnabled = gtBeepEnabled;
+
     if ((_playbackRate - playbackRate).abs() > 0.001) {
-      _playbackRate = playbackRate.clamp(0.5, 2.0);
-      if (_isPlaying && !_hasExternalAudio) {
-        _syntheticAnchorTrackMs = _currentTimeMs;
-        _syntheticAnchorWall = DateTime.now();
+      final nowUs = _nowUs();
+      if (_isPlaying) {
+        final current = _computeInterpolatedTimeMs(nowUs);
+        if (current > _currentTimeMs) {
+          _currentTimeMs = current;
+        }
+        _rebuildAnchor(_currentTimeMs, nowUs: nowUs);
+        _lastConfirmedPlayerClockUs = nowUs;
       }
+      _playbackRate = playbackRate.clamp(0.5, 2.0);
+      clearTapSamples();
       if (_hasExternalAudio) {
         final future = _musicPlayer?.setPlaybackRate(_playbackRate);
         if (future != null) {
           unawaited(future.catchError((Object _) {}));
         }
+      }
+    }
+
+    if (gridChanged) {
+      _resyncBeatGridAt(_currentTimeMs, triggerIfOnBoundary: true);
+      if (_isPlaying && _metronomeEnabled) {
+        _evaluateClocks(_currentTimeMs);
       }
     }
   }
@@ -551,9 +720,9 @@ class AudioMetronomeService {
     _durationMs = durationMs;
     if (_currentTimeMs > _durationMs) {
       _currentTimeMs = _durationMs;
-      _syntheticAnchorTrackMs = _currentTimeMs;
-      _syntheticAnchorWall = DateTime.now();
-      _lastTriggeredBeatIndex = -999999;
+      _rebuildAnchor(_currentTimeMs);
+      _lastDisplayedBeatIndex = -999999;
+      _lastTriggeredAudioBeatIndex = -999999;
       _beepedAlerts.clear();
       onTimeUpdate(_currentTimeMs);
       _evaluateClocks(_currentTimeMs, playAudio: false);
@@ -569,6 +738,8 @@ class AudioMetronomeService {
     ++_playSeq;
     _isPlaying = false;
     _hasCompleted = false;
+    _bufferStalled = false;
+    clearTapSamples();
     _clockTimer?.cancel();
     _positionWatchdogTimer?.cancel();
     _pendingSeekMs = null;
@@ -603,8 +774,13 @@ class AudioMetronomeService {
     if (_disposed || token != _sourceLoadToken) return;
 
     _beepedAlerts.clear();
-    _lastTriggeredBeatIndex = -999999;
+    _lastDisplayedBeatIndex = -999999;
+    _lastTriggeredAudioBeatIndex = -999999;
     _currentTimeMs = 0;
+    _rebuildAnchor(0);
+    _lastConfirmedPlayerPosMs = 0;
+    _lastConfirmedPlayerClockUs = _anchorClockUs;
+    _bufferStalled = false;
     _hasCompleted = false;
     _hasMeasuredExternalDuration = false;
     _currentMusicSource = null;
@@ -696,7 +872,7 @@ class AudioMetronomeService {
 
   void _startPositionWatchdog(AudioPlayer music) {
     _positionWatchdogTimer?.cancel();
-    _lastPositionEventWall = DateTime.now();
+    _lastPositionEventClockUs = _nowUs();
     _positionWatchdogTimer = Timer.periodic(
       const Duration(milliseconds: 350),
       (_) async {
@@ -708,10 +884,9 @@ class AudioMetronomeService {
             _pendingSeekMs != null) {
           return;
         }
-        final sinceLastEvent = DateTime.now()
-            .difference(_lastPositionEventWall)
-            .inMilliseconds;
-        if (sinceLastEvent < 320) return;
+        final sinceLastEventMs =
+            (_nowUs() - _lastPositionEventClockUs) ~/ 1000;
+        if (sinceLastEventMs < 320) return;
         try {
           final pos = await music.getCurrentPosition();
           if (_disposed ||
@@ -723,13 +898,7 @@ class AudioMetronomeService {
               pos == null) {
             return;
           }
-          _lastPositionEventWall = DateTime.now();
-          final nextMs = pos.inMilliseconds;
-          if (nextMs != _currentTimeMs) {
-            _currentTimeMs = nextMs;
-            onTimeUpdate(_currentTimeMs);
-            _evaluateClocks(_currentTimeMs);
-          }
+          _handlePlatformPosition(pos.inMilliseconds);
         } catch (_) {
           // Ignore transient platform position query failures.
         }
@@ -752,7 +921,11 @@ class AudioMetronomeService {
       if (replayingFromCompleted) {
         _hasCompleted = false;
         _currentTimeMs = 0;
-        _lastTriggeredBeatIndex = -999999;
+        _rebuildAnchor(0);
+        _lastConfirmedPlayerPosMs = 0;
+        _lastConfirmedPlayerClockUs = _anchorClockUs;
+        _lastDisplayedBeatIndex = -999999;
+        _lastTriggeredAudioBeatIndex = -999999;
         _beepedAlerts.clear();
         onTimeUpdate(0);
       }
@@ -801,29 +974,66 @@ class AudioMetronomeService {
       if (activePlayer == null || isAborted()) {
         return false;
       }
+      final startUs = _nowUs();
+      _rebuildAnchor(_currentTimeMs, nowUs: startUs);
+      _lastConfirmedPlayerPosMs = _currentTimeMs;
+      _lastConfirmedPlayerClockUs = startUs;
+      _bufferStalled = false;
+      _evaluateClocks(_currentTimeMs, isInitialPlayEvaluation: true);
+
       _clockTimer?.cancel();
+      _clockTimer = Timer.periodic(const Duration(milliseconds: 16), (_) {
+        if (!_isPlaying ||
+            _disposed ||
+            !_hasExternalAudio ||
+            _seekInFlight ||
+            _pendingSeekMs != null ||
+            _bufferStalled) {
+          return;
+        }
+        final nowUs = _nowUs();
+        var next = _computeInterpolatedTimeMs(nowUs);
+        final maxAllowed = (_lastConfirmedPlayerPosMs +
+                (maxBufferExtrapolationMs * _playbackRate).round())
+            .clamp(0, _durationMs)
+            .toInt();
+        if (next >= maxAllowed) {
+          next = maxAllowed;
+          _bufferStalled = true;
+          _rebuildAnchor(next, nowUs: nowUs);
+        }
+        if (next > _currentTimeMs) {
+          _currentTimeMs = next;
+          onTimeUpdate(_currentTimeMs);
+          _evaluateClocks(_currentTimeMs);
+        }
+      });
       _startPositionWatchdog(activePlayer);
       return true;
     }
 
     _positionWatchdogTimer?.cancel();
-    _syntheticAnchorTrackMs = _currentTimeMs;
-    _syntheticAnchorWall = DateTime.now();
+    _bufferStalled = false;
+    _rebuildAnchor(_currentTimeMs);
+    _evaluateClocks(_currentTimeMs, isInitialPlayEvaluation: true);
     _clockTimer?.cancel();
     _clockTimer = Timer.periodic(const Duration(milliseconds: 16), (_) {
       if (!_isPlaying || _disposed) return;
-      final elapsedMs =
-          DateTime.now().difference(_syntheticAnchorWall).inMicroseconds /
-          1000.0;
-      var next = _syntheticAnchorTrackMs + (elapsedMs * _playbackRate).round();
+      final nowUs = _nowUs();
+      final elapsedUs = math.max(0, nowUs - _anchorClockUs);
+      var next = _anchorMediaMs + (elapsedUs * _playbackRate / 1000.0).round();
       if (next >= _durationMs) {
         next = 0;
-        _syntheticAnchorTrackMs = 0;
-        _syntheticAnchorWall = DateTime.now();
+        _rebuildAnchor(0, nowUs: nowUs);
         _beepedAlerts.clear();
-        _lastTriggeredBeatIndex = -999999;
+        _lastDisplayedBeatIndex = -999999;
+        _lastTriggeredAudioBeatIndex = -999999;
+        _currentTimeMs = 0;
+        onTimeUpdate(0);
+        _evaluateClocks(0, isInitialPlayEvaluation: true);
+        return;
       }
-      if (next != _currentTimeMs) {
+      if (next > _currentTimeMs) {
         _currentTimeMs = next;
         onTimeUpdate(_currentTimeMs);
         _evaluateClocks(_currentTimeMs);
@@ -972,6 +1182,15 @@ class AudioMetronomeService {
     _positionWatchdogTimer?.cancel();
     ++_playSeq;
     if (!_isPlaying) return;
+    final nowUs = _nowUs();
+    if (!_bufferStalled) {
+      final interpolated = _computeInterpolatedTimeMs(nowUs);
+      if (interpolated > _currentTimeMs) {
+        _currentTimeMs = interpolated;
+        onTimeUpdate(_currentTimeMs);
+      }
+    }
+    _rebuildAnchor(_currentTimeMs, nowUs: nowUs);
     _isPlaying = false;
     _clockTimer?.cancel();
     if (_hasExternalAudio) {
@@ -983,17 +1202,53 @@ class AudioMetronomeService {
     }
   }
 
+  /// Rebuilds the monotonic anchor after returning from OS background sleep.
+  Future<void> onAppResumed() async {
+    if (_disposed || !_isPlaying) return;
+    if (_hasExternalAudio && _musicPlayer != null) {
+      try {
+        final pos = await _musicPlayer!.getCurrentPosition().timeout(
+          const Duration(milliseconds: 500),
+          onTimeout: () => null,
+        );
+        if (_disposed || !_isPlaying) return;
+        final nowUs = _nowUs();
+        if (pos != null) {
+          final clamped = pos.inMilliseconds.clamp(0, _durationMs).toInt();
+          _lastConfirmedPlayerPosMs = clamped;
+          _lastConfirmedPlayerClockUs = nowUs;
+          _bufferStalled = false;
+          _rebuildAnchor(clamped, nowUs: nowUs);
+          if (clamped != _currentTimeMs) {
+            _currentTimeMs = clamped;
+            onTimeUpdate(_currentTimeMs);
+            _resyncBeatGridAt(clamped, triggerIfOnBoundary: false);
+          }
+          return;
+        }
+      } catch (_) {}
+    }
+    if (_disposed || !_isPlaying) return;
+    _bufferStalled = false;
+    _rebuildAnchor(_currentTimeMs, nowUs: _nowUs());
+  }
+
   Future<void> seek(int ms) {
     if (_disposed) return Future.value();
     final target = ms.clamp(0, math.max<int>(1000, _durationMs)).toInt();
+    final nowUs = _nowUs();
     _hasCompleted = false;
     _currentTimeMs = target;
-    _lastTriggeredBeatIndex = -999999;
+    _rebuildAnchor(target, nowUs: nowUs);
+    _lastConfirmedPlayerPosMs = target;
+    _lastConfirmedPlayerClockUs = nowUs;
+    _bufferStalled = false;
+    _lastDisplayedBeatIndex = -999999;
+    _lastTriggeredAudioBeatIndex = -999999;
     _beepedAlerts.clear();
+    clearTapSamples();
 
     if (!_hasExternalAudio || _musicPlayer == null) {
-      _syntheticAnchorTrackMs = target;
-      _syntheticAnchorWall = DateTime.now();
       onTimeUpdate(target);
       _evaluateClocks(target, playAudio: false);
       return Future.value();
@@ -1086,63 +1341,135 @@ class AudioMetronomeService {
     await _triggerCue(_alertCue, vol);
   }
 
-  /// Tap Tempo estimator with double/half-time octave normalization into 70..195 BPM.
-  int? tapTempo() {
-    final nowMs = DateTime.now().millisecondsSinceEpoch;
+  void clearTapSamples() {
+    _tapHistoryMs.clear();
+  }
+
+  /// Accumulates monotonic Tap Tempo samples and returns a candidate BPM with
+  /// confidence starting at the 4th tap after filtering outlier intervals.
+  BpmEstimateResult? recordTapSample() {
+    final nowMs = _nowUs() ~/ 1000;
     if (_tapHistoryMs.isNotEmpty && nowMs - _tapHistoryMs.last > 2400) {
       _tapHistoryMs.clear();
     }
     _tapHistoryMs.add(nowMs);
-    if (_tapHistoryMs.length > 8) {
+    if (_tapHistoryMs.length > 12) {
       _tapHistoryMs.removeAt(0);
     }
-    if (_tapHistoryMs.length < 2) return null;
+    if (_tapHistoryMs.length < 4) return null;
 
-    final intervals = <int>[];
+    final rawIntervals = <int>[];
     for (var i = 1; i < _tapHistoryMs.length; i++) {
       final delta = _tapHistoryMs[i] - _tapHistoryMs[i - 1];
       if (delta >= 180 && delta <= 2000) {
-        intervals.add(delta);
+        rawIntervals.add(delta);
       }
     }
-    if (intervals.isEmpty) return null;
+    if (rawIntervals.length < 2) return null;
 
-    intervals.sort();
-    final medianMs = intervals[intervals.length ~/ 2];
-    var bpm = (60000 / medianMs).round();
+    final sorted = [...rawIntervals]..sort();
+    final medianMs = sorted[sorted.length ~/ 2].toDouble();
+    final inliers = rawIntervals
+        .where((d) => (d - medianMs).abs() <= medianMs * 0.25)
+        .toList();
+    if (inliers.length < 2) return null;
+
+    final meanMs =
+        inliers.reduce((a, b) => a + b) / inliers.length;
+    var bpm = (60000.0 / meanMs).round();
     while (bpm > 195) {
       bpm = (bpm / 2).round();
     }
     while (bpm < 70) {
       bpm = bpm * 2;
     }
-    return bpm.clamp(40, 260);
+
+    var sqDiffSum = 0.0;
+    for (final v in inliers) {
+      final diff = v - meanMs;
+      sqDiffSum += diff * diff;
+    }
+    final stdDev = math.sqrt(sqDiffSum / inliers.length);
+    final cv = stdDev / math.max(1.0, meanMs);
+    final consistencyScore = (1.0 - (cv / 0.18)).clamp(0.0, 1.0);
+    final inlierRatio = inliers.length / rawIntervals.length;
+    final sampleFactor = (inliers.length / 5.0).clamp(0.6, 1.0);
+    final confidence =
+        (consistencyScore * 0.7 + inlierRatio * 0.3) * sampleFactor;
+
+    return BpmEstimateResult(
+      bpm: bpm.clamp(30, 300),
+      confidence: confidence.clamp(0.05, 0.99),
+      sampleCount: _tapHistoryMs.length,
+      validIntervalCount: inliers.length,
+    );
   }
 
-  void _evaluateClocks(int trackMs, {bool playAudio = true}) {
+  int? tapTempo() => recordTapSample()?.bpm;
+
+  void _evaluateClocks(
+    int trackMs, {
+    bool playAudio = true,
+    bool isInitialPlayEvaluation = false,
+  }) {
     final beatDurationMs = 60000.0 / math.max(30, _bpm);
-    final relativeMs = trackMs - _offsetMs;
-    if (relativeMs >= 0) {
-      final beatIndex = (relativeMs / beatDurationMs).floor();
-      final bar = (beatIndex ~/ _beatsPerBar) + 1;
-      final beatInBar = (beatIndex % _beatsPerBar) + 1;
-      if (beatIndex != _lastTriggeredBeatIndex) {
-        _lastTriggeredBeatIndex = beatIndex;
+    final relativeDisplayMs = trackMs - _offsetMs;
+    if (relativeDisplayMs >= 0) {
+      final displayBeatIndex = (relativeDisplayMs / beatDurationMs).floor();
+      if (displayBeatIndex > _lastDisplayedBeatIndex) {
+        _lastDisplayedBeatIndex = displayBeatIndex;
+        final bar = (displayBeatIndex ~/ _beatsPerBar) + 1;
+        final beatInBar = (displayBeatIndex % _beatsPerBar) + 1;
         onBeatTrigger(
-          BeatSnapshot(beatIndex: beatIndex, bar: bar, beatInBar: beatInBar),
+          BeatSnapshot(beatIndex: displayBeatIndex, bar: bar, beatInBar: beatInBar),
         );
-        if (playAudio && _metronomeEnabled) {
-          unawaited(_playClick(accent: beatInBar == 1));
+      }
+    }
+
+    if (playAudio && _metronomeEnabled) {
+      final mediaLeadMs = (_cueOutputCompensationMs * _playbackRate).round();
+      final cueScheduleMs = trackMs + mediaLeadMs;
+      final relativeCueMs = cueScheduleMs - _offsetMs;
+      if (relativeCueMs >= 0) {
+        final cueBeatIndex = (relativeCueMs / beatDurationMs).floor();
+        if (cueBeatIndex > _lastTriggeredAudioBeatIndex) {
+          final msPastBoundary =
+              relativeCueMs - (cueBeatIndex * beatDurationMs);
+          final edgeToleranceMs = math.max(35.0, 40.0 * _playbackRate);
+          final jumpedMultipleBeats =
+              _lastTriggeredAudioBeatIndex >= 0 &&
+              (cueBeatIndex - _lastTriggeredAudioBeatIndex) > 1;
+          final shouldSkipMidBeatInitial =
+              isInitialPlayEvaluation &&
+              _lastTriggeredAudioBeatIndex < 0 &&
+              relativeDisplayMs >= 0 &&
+              (relativeDisplayMs -
+                      (relativeDisplayMs / beatDurationMs).floor() *
+                          beatDurationMs) >
+                  edgeToleranceMs &&
+              cueBeatIndex == (relativeDisplayMs / beatDurationMs).floor();
+          final shouldSkipExpiredJump =
+              jumpedMultipleBeats &&
+              msPastBoundary > math.max(80.0, 50.0 * _playbackRate);
+
+          _lastTriggeredAudioBeatIndex = cueBeatIndex;
+          if (!shouldSkipMidBeatInitial && !shouldSkipExpiredJump) {
+            final beatInBar = (cueBeatIndex % _beatsPerBar) + 1;
+            unawaited(_playClick(accent: beatInBar == 1));
+          }
         }
       }
     }
 
     if (playAudio && _gtBeepEnabled) {
+      final mediaLeadMs = (_cueOutputCompensationMs * _playbackRate).round();
+      final cueTrackMs = trackMs + mediaLeadMs;
       for (final alert in _alerts) {
         if (_beepedAlerts.contains(alert.id)) continue;
         final leadMs = (alert.leadBeats * beatDurationMs).round();
         final warnStart = alert.triggerTimeMs - leadMs;
-        if (trackMs >= warnStart && trackMs <= alert.triggerTimeMs + 250) {
+        if (cueTrackMs >= warnStart &&
+            cueTrackMs <= alert.triggerTimeMs + 250) {
           _beepedAlerts.add(alert.id);
           final vol = (_metronomeVolume / 1.5).clamp(0.15, 1.0);
           unawaited(_triggerCue(_alertCue, vol));

@@ -15,6 +15,22 @@ class ProjectStorage {
   static const _archivesKey = 'live_call_studio_archives_v1';
   static const _archiveSessionKey = 'live_call_studio_archive_session_v1';
   static const _onboardingKey = 'live_call_studio_onboarding_v1';
+  static const _cueOutputCompensationMsKey =
+      'live_call_studio_cue_output_offset_ms_v1';
+
+  Future<int> loadCueOutputCompensationMs() async {
+    final prefs = await SharedPreferences.getInstance();
+    final value = prefs.getInt(_cueOutputCompensationMsKey) ?? 0;
+    return clampCueOutputCompensationMs(value);
+  }
+
+  Future<void> saveCueOutputCompensationMs(int ms) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(
+      _cueOutputCompensationMsKey,
+      clampCueOutputCompensationMs(ms),
+    );
+  }
 
   Future<bool> hasSavedProjectKey() async {
     final prefs = await SharedPreferences.getInstance();

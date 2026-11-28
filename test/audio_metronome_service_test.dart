@@ -402,13 +402,14 @@ void main() {
       await service.pause();
       expect(service.isPlaying, isFalse);
       expect(service.hasCompleted, isFalse);
-      expect(service.currentTimeMs, 24930);
+      final pausedTime = service.currentTimeMs;
+      expect(pausedTime, inInclusiveRange(24930, 24999));
 
       observedTimes.clear();
       audioHarness.calls.clear();
       expect(await service.play(), isTrue);
       expect(service.isPlaying, isTrue);
-      expect(service.currentTimeMs, 24930);
+      expect(service.currentTimeMs, inInclusiveRange(pausedTime, 25000));
       expect(observedTimes.contains(0), isFalse);
       expect(
         audioHarness.calls.any(
@@ -553,7 +554,13 @@ void main() {
       expect(await service.play(), isTrue);
       audioHarness.mockMusicPositionMs = 4321;
       await Future<void>.delayed(const Duration(milliseconds: 420));
-      expect(service.currentTimeMs, 4321);
+      expect(
+        service.currentTimeMs,
+        inInclusiveRange(
+          4321,
+          4321 + AudioMetronomeService.maxBufferExtrapolationMs,
+        ),
+      );
 
       await service.pause();
       await service.dispose();

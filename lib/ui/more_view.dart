@@ -7,6 +7,7 @@ import 'package:prism_ui/prism_ui.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../constants/app_info.dart';
+import '../models/callbook_models.dart';
 import '../platform/app_platform.dart';
 import '../state/callbook_controller.dart';
 import 'theme/app_tokens.dart';
@@ -233,8 +234,93 @@ class _MoreViewState extends State<MoreView> {
               ],
             ),
           ),
+          const SizedBox(height: 12),
+          _buildAudioCompensationCard(context, c, scheme),
         ],
       ),
+    );
+  }
+
+  Widget _buildAudioCompensationCard(
+    BuildContext context,
+    CallbookController c,
+    ColorScheme scheme,
+  ) {
+    return ListenableBuilder(
+      listenable: c.alignmentListenable,
+      builder: (context, _) {
+        final compMs = c.cueOutputCompensationMs;
+        final label = '${compMs > 0 ? "+" : ""}${compMs}ms';
+        return Card(
+          inert: true,
+          radius: AppTokens.radiusCard,
+          padding: const EdgeInsets.all(AppTokens.s16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '音频与节拍器',
+                      style: AppTextStyle.headline
+                          .of(context, emphasized: true)
+                          .copyWith(color: scheme.onSurface),
+                    ),
+                  ),
+                  TonalChip(
+                    label: label,
+                    color: compMs == 0
+                        ? scheme.surfaceContainerHigh
+                        : scheme.primaryContainer,
+                    foregroundColor: compMs == 0
+                        ? scheme.onSurfaceVariant
+                        : scheme.onPrimaryContainer,
+                  ),
+                  const SizedBox(width: 6),
+                  TonalButton(
+                    size: TonalButtonSize.compact,
+                    label: '归零',
+                    onPressed: compMs == 0
+                        ? null
+                        : () => c.setCueOutputCompensationMs(0),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Text(
+                '提示音输出补偿 (ms)：仅调整节拍器滴答声输出提前/延后量（随倍速自动换算），不影响歌曲首拍锚点与歌词进度。',
+                style: AppTextStyle.caption1.of(context).copyWith(
+                  color: scheme.onSurfaceVariant,
+                  height: 1.4,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Slider(
+                value: compMs.toDouble(),
+                min: kMinCueOutputCompensationMs.toDouble(),
+                max: kMaxCueOutputCompensationMs.toDouble(),
+                onChanged: (v) => c.setCueOutputCompensationMs(v.round()),
+              ),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final delta in const [-10, -1, 1, 10])
+                    TonalChip(
+                      label: '${delta > 0 ? "+" : ""}${delta}ms',
+                      color: scheme.surfaceContainerHigh,
+                      foregroundColor: scheme.onSurface,
+                      onPressed: () =>
+                          c.setCueOutputCompensationMs(compMs + delta),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 

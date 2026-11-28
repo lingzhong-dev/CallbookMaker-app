@@ -513,6 +513,18 @@ class LyricLine {
   }
 }
 
+const int kMinSongOffsetMs = -60000;
+const int kMaxSongOffsetMs = 60000;
+const int kMinCueOutputCompensationMs = -200;
+const int kMaxCueOutputCompensationMs = 200;
+
+int clampSongOffsetMs(int value) =>
+    value.clamp(kMinSongOffsetMs, kMaxSongOffsetMs).toInt();
+
+int clampCueOutputCompensationMs(int value) => value
+    .clamp(kMinCueOutputCompensationMs, kMaxCueOutputCompensationMs)
+    .toInt();
+
 class CallProjectMeta {
   const CallProjectMeta({
     required this.title,
@@ -625,7 +637,7 @@ class CallProjectMeta {
     audioUrl: json['audioUrl']?.toString() ?? '',
     bpm: ((json['bpm'] as num?)?.round() ?? 128).clamp(30, 300),
     timeSignature: json['timeSignature'] == '3/4' ? '3/4' : '4/4',
-    offsetMs: (json['offsetMs'] as num?)?.round() ?? 0,
+    offsetMs: clampSongOffsetMs((json['offsetMs'] as num?)?.round() ?? 0),
     composer: json['composer']?.toString() ?? '',
     lyricist: json['lyricist']?.toString() ?? '',
     arranger: json['arranger']?.toString() ?? '',

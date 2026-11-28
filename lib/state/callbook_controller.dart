@@ -136,6 +136,7 @@ class CallbookController extends ChangeNotifier {
     DesktopServiceLauncher? desktopLauncher,
     JapaneseRubyAnnotator? rubyAnnotator,
     bool enableAudioOutput = true,
+    MonotonicClock? audioClock,
   }) : _api = apiClient ?? CallbookApiClient(),
        _storage = storage ?? ProjectStorage(),
        _neteaseDirect = neteaseDirectClient ?? NeteaseDirectClient(),
@@ -144,6 +145,7 @@ class CallbookController extends ChangeNotifier {
        _rubyAnnotator = rubyAnnotator ?? JapaneseRubyAnnotator.instance {
     _audio = AudioMetronomeService(
       enablePlatformAudio: enableAudioOutput,
+      clock: audioClock,
       onTimeUpdate: _handleTimeUpdate,
       onBeatTrigger: _handleBeatTrigger,
       onGtAlertBeep: (_) {},
@@ -192,6 +194,7 @@ class CallbookController extends ChangeNotifier {
   final ChangeNotifier _archiveNotifier = ChangeNotifier();
   final ChangeNotifier _gatewayNotifier = ChangeNotifier();
   final ChangeNotifier _playbackNotifier = ChangeNotifier();
+  final ChangeNotifier _alignmentNotifier = ChangeNotifier();
   final ChangeNotifier _playbackSyncNotifier = ChangeNotifier();
   final ChangeNotifier _beatNotifier = ChangeNotifier();
   final ChangeNotifier _initNotifier = ChangeNotifier();
@@ -261,6 +264,9 @@ class CallbookController extends ChangeNotifier {
   bool _metronomeEnabled = true;
   double _metronomeVolume = 0.95;
   double _playbackRate = 1.0;
+  int _cueOutputCompensationMs = 0;
+  BpmEstimateResult? _tapBpmCandidate;
+  bool _lockBpmCalibrateDownbeat = false;
   int _currentTimeMs = 0;
   int _durationMs = defaultPrimarySong.durationMs;
   int _knownAudioDurationMs = defaultPrimarySong.durationMs;
@@ -297,6 +303,7 @@ class CallbookController extends ChangeNotifier {
   int _callDensityRevision = 0;
 
   Timer? _persistTimer;
+  AppLifecycleListener? _lifecycleListener;
 
   // Scoped listenables
   Listenable get themeListenable => _themeNotifier;
@@ -305,6 +312,7 @@ class CallbookController extends ChangeNotifier {
   Listenable get archiveListenable => _archiveNotifier;
   Listenable get gatewayListenable => _gatewayNotifier;
   Listenable get playbackListenable => _playbackNotifier;
+  Listenable get alignmentListenable => _alignmentNotifier;
   Listenable get playbackSyncListenable => _playbackSyncNotifier;
   Listenable get beatListenable => _beatNotifier;
   Listenable get initListenable => _initNotifier;
@@ -374,6 +382,10 @@ class CallbookController extends ChangeNotifier {
   bool get metronomeEnabled => _metronomeEnabled;
   double get metronomeVolume => _metronomeVolume;
   double get playbackRate => _playbackRate;
+  int get cueOutputCompensationMs => _cueOutputCompensationMs;
+  BpmEstimateResult? get tapBpmCandidate => _tapBpmCandidate;
+  int get tapSampleCount => _audio.tapSampleCount;
+  bool get lockBpmCalibrateDownbeat => _lockBpmCalibrateDownbeat;
   int get currentTimeMs => _currentTimeMs;
   int get durationMs => _durationMs;
   int get knownAudioDurationMs => _knownAudioDurationMs;
@@ -622,12 +634,16 @@ class CallbookController extends ChangeNotifier {
   }
 
   CallProject _normalizeProjectAlerts(CallProject proj) {
-    if (proj.alerts.isEmpty || proj.lines.isEmpty) return proj;
-    final ordered = [...proj.lines]
+    final clampedOffset = clampSongOffsetMs(proj.meta.offsetMs);
+    var nextProj = clampedOffset == proj.meta.offsetMs
+        ? proj
+        : proj.copyWith(meta: proj.meta.copyWith(offsetMs: clampedOffset));
+    if (nextProj.alerts.isEmpty || nextProj.lines.isEmpty) return nextProj;
+    final ordered = [...nextProj.lines]
       ..sort((a, b) => a.startTimeMs.compareTo(b.startTimeMs));
     final seenTargets = <String>{};
     final normalized = <GtAlert>[];
-    for (final alert in proj.alerts) {
+    for (final alert in nextProj.alerts) {
       final targetId = resolveGtAlertTargetLineId(alert, ordered);
       if (targetId == null || seenTargets.contains(targetId)) continue;
       seenTargets.add(targetId);
@@ -637,7 +653,7 @@ class CallbookController extends ChangeNotifier {
             : alert.copyWith(targetLineId: targetId),
       );
     }
-    return proj.copyWith(alerts: normalized);
+    return nextProj.copyWith(alerts: normalized);
   }
 
   int _resolveKnownDurationMs(CallProject proj) {
@@ -862,6 +878,13 @@ class CallbookController extends ChangeNotifier {
 
   Future<void> init({bool awaitBackgroundSync = true}) async {
     await _audio.init();
+    try {
+      _lifecycleListener ??= AppLifecycleListener(
+        onResume: () => unawaited(onAppResumed()),
+      );
+    } catch (_) {
+      // Ignore lifecycle binding errors in non-widget environments.
+    }
     final savedUrl = await _storage.loadBackendUrl();
     if (savedUrl != null && savedUrl.isNotEmpty) {
       _api.setBaseUrl(savedUrl);
@@ -880,6 +903,7 @@ class CallbookController extends ChangeNotifier {
       _applySavedThemeMap(savedTheme);
       _invalidateThemeCache();
     }
+    _cueOutputCompensationMs = await _storage.loadCueOutputCompensationMs();
 
     final hasRawSavedProject = await _storage.hasSavedProjectKey();
     final savedProj = await _storage.loadProject();
@@ -1494,7 +1518,10 @@ class CallbookController extends ChangeNotifier {
     }
   }
 
+  Future<void> onAppResumed() => _audio.onAppResumed();
+
   Future<void> seek(int ms) async {
+    _clearTapSession(notify: true);
     await _audio.seek(ms);
     if (!_disposed) {
       syncPlaybackState(forceNotify: true);
@@ -1504,11 +1531,42 @@ class CallbookController extends ChangeNotifier {
     }
   }
 
+  void _clearTapSession({bool notify = true}) {
+    final hadTap = _tapBpmCandidate != null || _audio.tapSampleCount > 0;
+    _tapBpmCandidate = null;
+    _audio.clearTapSamples();
+    if (notify && hadTap && !_disposed) {
+      _alignmentNotifier.notifyListeners();
+      _playbackNotifier.notifyListeners();
+      notifyListeners();
+    }
+  }
+
+  void clearTapSamples() {
+    _clearTapSession(notify: true);
+  }
+
+  void setLockBpmCalibrateDownbeat(bool locked) {
+    if (_lockBpmCalibrateDownbeat == locked) return;
+    _lockBpmCalibrateDownbeat = locked;
+    _setStatusInternal(
+      locked ? '已锁定 BPM，仅校准首拍位置' : '已解除 BPM 锁定',
+    );
+    _alignmentNotifier.notifyListeners();
+    _playbackNotifier.notifyListeners();
+    notifyListeners();
+  }
+
   void setBpm(int bpm) {
+    if (_lockBpmCalibrateDownbeat) {
+      setStatus('已锁定 BPM，仅校准首拍位置');
+      return;
+    }
     final clamped = bpm.clamp(30, 300);
     _setProject(_project.copyWith(meta: _project.meta.copyWith(bpm: clamped)));
     _syncEngine();
     schedulePersist();
+    _alignmentNotifier.notifyListeners();
     _playbackNotifier.notifyListeners();
     _notifyProjectChanged();
   }
@@ -1522,33 +1580,70 @@ class CallbookController extends ChangeNotifier {
     );
     _syncEngine();
     schedulePersist();
+    _alignmentNotifier.notifyListeners();
     _playbackNotifier.notifyListeners();
     _notifyProjectChanged();
   }
 
   void adjustOffset(int deltaMs) {
+    final nextOffset = clampSongOffsetMs(_project.meta.offsetMs + deltaMs);
     _setProject(
       _project.copyWith(
-        meta: _project.meta.copyWith(offsetMs: _project.meta.offsetMs + deltaMs),
+        meta: _project.meta.copyWith(offsetMs: nextOffset),
       ),
     );
     _syncEngine();
     schedulePersist();
+    _alignmentNotifier.notifyListeners();
     _playbackNotifier.notifyListeners();
     _notifyProjectChanged();
   }
 
   void setOffset(int ms) {
-    _setProject(_project.copyWith(meta: _project.meta.copyWith(offsetMs: ms)));
+    final clamped = clampSongOffsetMs(ms);
+    _setProject(
+      _project.copyWith(meta: _project.meta.copyWith(offsetMs: clamped)),
+    );
     _syncEngine();
     schedulePersist();
+    _alignmentNotifier.notifyListeners();
     _playbackNotifier.notifyListeners();
     _notifyProjectChanged();
   }
 
+  void nudgeOffsetHalfBeat(int direction) {
+    final sign = direction < 0 ? -1 : 1;
+    final halfBeatMs = (30000.0 / math.max(30, _project.meta.bpm)).round();
+    adjustOffset(sign * halfBeatMs);
+  }
+
+  void setCurrentTimeAsBeatOne() {
+    final beatDurationMs = 60000.0 / math.max(30, _project.meta.bpm);
+    final barDurationMs = beatDurationMs * _project.meta.beatsPerBar;
+    final targetOffset = _currentTimeMs <= kMaxSongOffsetMs
+        ? _currentTimeMs
+        : (_currentTimeMs % barDurationMs).round();
+    setOffset(targetOffset);
+    setStatus('已设当前位置 (${_currentTimeMs}ms) 为第 1 拍');
+  }
+
+  void setCueOutputCompensationMs(int ms) {
+    final clamped = clampCueOutputCompensationMs(ms);
+    if (clamped == _cueOutputCompensationMs) return;
+    _cueOutputCompensationMs = clamped;
+    _syncEngine();
+    unawaited(_storage.saveCueOutputCompensationMs(clamped));
+    _alignmentNotifier.notifyListeners();
+    _playbackNotifier.notifyListeners();
+    notifyListeners();
+  }
+
   void setPlaybackRate(double rate) {
     _playbackRate = rate.clamp(0.5, 2.0);
+    _tapBpmCandidate = null;
+    _audio.clearTapSamples();
     _syncEngine();
+    _alignmentNotifier.notifyListeners();
     _playbackNotifier.notifyListeners();
     notifyListeners();
   }
@@ -1571,13 +1666,44 @@ class CallbookController extends ChangeNotifier {
   }
 
   void tapTempo() {
-    final detected = _audio.tapTempo();
-    if (detected != null) {
-      setBpm(detected);
-      setStatus('Tap 测速：$detected BPM');
-    } else {
-      setStatus('继续连按 Tap 2 次以上计算 BPM...');
+    if (_lockBpmCalibrateDownbeat) {
+      if (!_isPlaying) {
+        setStatus('已暂停：不能用静止进度推算首拍，请播放后校准');
+        return;
+      }
+      setCurrentTimeAsBeatOne();
+      return;
     }
+    final candidate = _audio.recordTapSample();
+    if (candidate != null) {
+      _tapBpmCandidate = candidate;
+      _setStatusInternal(
+        'Tap 候选：${candidate.bpm} BPM（置信度 ${(candidate.confidence * 100).round()}%），点击应用生效',
+      );
+    } else {
+      _tapBpmCandidate = null;
+      _setStatusInternal(
+        'Tap 已采样 ${_audio.tapSampleCount}/4 次，继续连按以生成候选 BPM',
+      );
+    }
+    _alignmentNotifier.notifyListeners();
+    _playbackNotifier.notifyListeners();
+    notifyListeners();
+  }
+
+  void applyTapBpmCandidate() {
+    if (_lockBpmCalibrateDownbeat) {
+      setStatus('已锁定 BPM，仅校准首拍位置');
+      return;
+    }
+    final candidate = _tapBpmCandidate;
+    if (candidate == null) return;
+    _tapBpmCandidate = null;
+    _audio.clearTapSamples();
+    setBpm(candidate.bpm);
+    setStatus(
+      '已应用 Tap 候选：${candidate.bpm} BPM（置信度 ${(candidate.confidence * 100).round()}%）',
+    );
   }
 
   void updateMeta({
@@ -2951,6 +3077,7 @@ class CallbookController extends ChangeNotifier {
         lines: detected.lines,
       );
       final switchSeq = ++_sourceSwitchSeq;
+      _clearTapSession(notify: false);
       _clearUndoHistory();
       _currentTimeMs = 0;
       _setPlayingState(false);
@@ -3063,6 +3190,7 @@ class CallbookController extends ChangeNotifier {
       thresholds: _sectionThresholds,
       totalDurationMs: durationForOutro,
     );
+    _clearTapSession(notify: false);
     _clearUndoHistory();
     await _audio.pause();
     await _audio.seek(0);
@@ -3104,6 +3232,7 @@ class CallbookController extends ChangeNotifier {
 
   Future<void> loadLocalAudioFile(String filePath, String fileName) async {
     final switchSeq = ++_sourceSwitchSeq;
+    _clearTapSession(notify: false);
     _knownAudioDurationMs = 0;
     _durationMs = _computeProjectDurationMs(
       _project,
@@ -3147,6 +3276,7 @@ class CallbookController extends ChangeNotifier {
   }) async {
     final spec = findDefaultSongById(songId) ?? defaultPrimarySong;
     final switchSeq = ++_sourceSwitchSeq;
+    _clearTapSession(notify: false);
     _clearUndoHistory();
     await _audio.pause();
     await _audio.seek(0);
@@ -3304,6 +3434,7 @@ class CallbookController extends ChangeNotifier {
       }
 
       final switchSeq = ++_sourceSwitchSeq;
+      _clearTapSession(notify: false);
       _clearUndoHistory();
       final normalized = _normalizeProjectAlerts(parsed);
       _setProject(normalized);
@@ -3429,6 +3560,7 @@ class CallbookController extends ChangeNotifier {
     }
 
     final switchSeq = ++_sourceSwitchSeq;
+    _clearTapSession(notify: false);
     _clearUndoHistory();
     final restored = _normalizeProjectAlerts(
       CallProject.fromJson(found.project.toJson()),
@@ -3566,6 +3698,7 @@ class CallbookController extends ChangeNotifier {
       bpm: _project.meta.bpm,
       beatsPerBar: _project.meta.beatsPerBar,
       offsetMs: _project.meta.offsetMs,
+      cueOutputCompensationMs: _cueOutputCompensationMs,
       metronomeEnabled: _metronomeEnabled,
       metronomeVolume: _metronomeVolume,
       gtBeepEnabled: false,
@@ -3619,6 +3752,8 @@ class CallbookController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _persistTimer?.cancel();
+    _lifecycleListener?.dispose();
+    _lifecycleListener = null;
     unawaited(_audio.dispose());
     _api.dispose();
     _neteaseDirect.dispose();
@@ -3629,6 +3764,7 @@ class CallbookController extends ChangeNotifier {
     _archiveNotifier.dispose();
     _gatewayNotifier.dispose();
     _playbackNotifier.dispose();
+    _alignmentNotifier.dispose();
     _playbackSyncNotifier.dispose();
     _beatNotifier.dispose();
     _initNotifier.dispose();

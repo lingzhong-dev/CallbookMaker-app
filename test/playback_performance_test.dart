@@ -1,10 +1,33 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:live_call_studio/main.dart';
+import 'package:live_call_studio/services/audio_metronome_service.dart';
 import 'package:live_call_studio/state/callbook_controller.dart';
 import 'package:live_call_studio/utils/lrc_ruby_parser.dart';
 
 import 'support/mock_audioplayers_harness.dart';
+
+class _PumpSyncedClock implements MonotonicClock {
+  int _elapsedUs = 0;
+
+  @override
+  int get elapsedMicroseconds => _elapsedUs;
+
+  @override
+  void start() {}
+
+  @override
+  void stop() {}
+
+  @override
+  void reset() {
+    _elapsedUs = 0;
+  }
+
+  void advanceMs(int ms) {
+    _elapsedUs += ms * 1000;
+  }
+}
 
 Future<void> _disposeApp(
   WidgetTester tester,
@@ -198,8 +221,10 @@ void main() {
       'Mobile quick-tray live clock updates during playback without rebuilding HomeShell or PrismApp',
       timeout: const Timeout(Duration(seconds: 25)),
       (tester) async {
+        final clock = _PumpSyncedClock();
         final controller = await createTestCallbookController(
           enableAudioOutput: false,
+          audioClock: clock,
         );
         tester.view.physicalSize = const Size(390, 844);
         tester.view.devicePixelRatio = 1.0;
@@ -209,6 +234,7 @@ void main() {
         await tester.pump(const Duration(milliseconds: 100));
 
         await controller.togglePlay();
+        clock.advanceMs(500);
         await tester.pump(const Duration(milliseconds: 500));
 
         final prevRebuildHook = debugOnRebuildDirtyWidget;
@@ -225,11 +251,13 @@ void main() {
           rebuildCounts.clear();
 
           for (var i = 0; i < 15; i++) {
+            clock.advanceMs(16);
             await tester.pump(const Duration(milliseconds: 16));
           }
 
           expect(rebuildCounts['PrismApp'] ?? 0, 0);
           expect(rebuildCounts['HomeShell'] ?? 0, 0);
+          expect(controller.currentTimeMs, greaterThanOrEqualTo(12200));
           expect(find.textContaining('00:12.'), findsWidgets);
         } finally {
           debugOnRebuildDirtyWidget = prevRebuildHook;

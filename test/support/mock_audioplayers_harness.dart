@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:live_call_studio/services/api_client.dart';
+import 'package:live_call_studio/services/audio_metronome_service.dart';
 import 'package:live_call_studio/services/lrclib_direct_client.dart';
 import 'package:live_call_studio/services/netease_direct_client.dart';
 import 'package:live_call_studio/state/callbook_controller.dart';
@@ -475,6 +476,7 @@ class MockAudioplayersHarness {
 
 Future<CallbookController> createTestCallbookController({
   bool enableAudioOutput = true,
+  MonotonicClock? audioClock,
   Map<String, Object> initialPrefs = const {
     'live_call_studio_onboarding_v1': true,
   },
@@ -503,6 +505,7 @@ Future<CallbookController> createTestCallbookController({
     neteaseDirectClient: neteaseDirect,
     lrclibDirectClient: lrclibDirect,
     enableAudioOutput: enableAudioOutput,
+    audioClock: audioClock,
   );
   await controller.init();
   return controller;

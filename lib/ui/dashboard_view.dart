@@ -931,39 +931,95 @@ class _DashboardViewState extends State<DashboardView> {
           ),
           if (_showOffsetTools) ...[
             const SizedBox(height: 8),
-            Row(
-              children: [
-                for (final delta in const [-100, -20]) ...[
-                  Expanded(
-                    child: _OffsetChipButton(
-                      label: '$delta',
-                      color: scheme.surfaceContainerLow,
-                      foreground: scheme.onSurface,
-                      onTap: () => c.adjustOffset(delta),
-                    ),
+            ListenableBuilder(
+              listenable: c.alignmentListenable,
+              builder: (context, _) => Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      for (final delta in const [-100, -20]) ...[
+                        Expanded(
+                          child: _OffsetChipButton(
+                            label: '$delta',
+                            color: scheme.surfaceContainerLow,
+                            foreground: scheme.onSurface,
+                            onTap: () => c.adjustOffset(delta),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                      ],
+                      Expanded(
+                        child: _OffsetChipButton(
+                          label: '归零',
+                          color: scheme.surfaceContainerLow,
+                          foreground: scheme.onSurfaceVariant,
+                          onTap: () => c.setOffset(0),
+                        ),
+                      ),
+                      for (final delta in const [20, 100]) ...[
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: _OffsetChipButton(
+                            label: '+$delta',
+                            color: scheme.surfaceContainerLow,
+                            foreground: scheme.onSurface,
+                            onTap: () => c.adjustOffset(delta),
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
-                  const SizedBox(width: 6),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      for (final delta in const [-10, -1, 1, 10]) ...[
+                        if (delta != -10) const SizedBox(width: 6),
+                        Expanded(
+                          child: _OffsetChipButton(
+                            label: delta > 0 ? '+$delta' : '$delta',
+                            color: scheme.surfaceContainerLow,
+                            foreground: scheme.onSurface,
+                            onTap: () => c.adjustOffset(delta),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      TonalChip(
+                        label: '−半拍',
+                        color: scheme.surfaceContainerHigh,
+                        foregroundColor: scheme.onSurface,
+                        onPressed: () => c.nudgeOffsetHalfBeat(-1),
+                      ),
+                      TonalChip(
+                        label: '+半拍',
+                        color: scheme.surfaceContainerHigh,
+                        foregroundColor: scheme.onSurface,
+                        onPressed: () => c.nudgeOffsetHalfBeat(1),
+                      ),
+                      TonalChip(
+                        label: '设当前为第 1 拍',
+                        color: scheme.primaryContainer,
+                        foregroundColor: scheme.onPrimaryContainer,
+                        onPressed: c.setCurrentTimeAsBeatOne,
+                      ),
+                      _DisplayFilterChip(
+                        label: '锁定 BPM 仅校准首拍',
+                        selected: c.lockBpmCalibrateDownbeat,
+                        onPressed: () => c.setLockBpmCalibrateDownbeat(
+                          !c.lockBpmCalibrateDownbeat,
+                        ),
+                      ),
+                    ],
+                  ),
                 ],
-                Expanded(
-                  child: _OffsetChipButton(
-                    label: '归零',
-                    color: scheme.surfaceContainerLow,
-                    foreground: scheme.onSurfaceVariant,
-                    onTap: () => c.setOffset(0),
-                  ),
-                ),
-                for (final delta in const [20, 100]) ...[
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: _OffsetChipButton(
-                      label: '+$delta',
-                      color: scheme.surfaceContainerLow,
-                      foreground: scheme.onSurface,
-                      onTap: () => c.adjustOffset(delta),
-                    ),
-                  ),
-                ],
-              ],
+              ),
             ),
           ],
           const SizedBox(height: 10),
@@ -1466,96 +1522,181 @@ class _DashboardViewState extends State<DashboardView> {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
+              child: ListenableBuilder(
+                listenable: c.alignmentListenable,
+                builder: (context, _) {
+                  final tapCand = c.tapBpmCandidate;
+                  final tapCount = c.tapSampleCount;
+                  final bpmLocked = c.lockBpmCalibrateDownbeat;
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(
-                        child: Text(
-                          '节拍速率 (BPM)',
-                          style: AppTextStyle.caption1
-                              .of(context, emphasized: true)
-                              .copyWith(color: scheme.onSurfaceVariant),
-                        ),
-                      ),
-                      TonalChip(
-                        label: 'Tap',
-                        color: scheme.surfaceContainerHigh,
-                        foregroundColor: scheme.onSurface,
-                        onPressed: c.tapTempo,
-                      ),
-                      const SizedBox(width: 6),
-                      TonalChip(
-                        label: c.project.meta.timeSignature,
-                        color: scheme.surfaceContainerHigh,
-                        foregroundColor: scheme.onSurface,
-                        onPressed: () => c.setTimeSignature(
-                          c.project.meta.timeSignature == '4/4' ? '3/4' : '4/4',
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      SizedBox(
-                        width: 72,
-                        child: TextField(
-                          controller: _bpmCtrl,
-                          focusNode: _bpmFocus,
-                          keyboardType: TextInputType.number,
-                          inputFormatters: [
-                            FilteringTextInputFormatter.digitsOnly,
-                          ],
-                          decoration: const InputDecoration.collapsed(
-                            hintText: '120',
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '节拍速率 (BPM)',
+                              style: AppTextStyle.caption1
+                                  .of(context, emphasized: true)
+                                  .copyWith(color: scheme.onSurfaceVariant),
+                            ),
                           ),
-                          style: AppTextStyle.title1
-                              .of(context, emphasized: true)
-                              .copyWith(
-                                fontFamily: 'GoogleSans',
-                                fontFeatures: const [
-                                  FontFeature.tabularFigures(),
-                                ],
-                                color: scheme.onSurface,
+                          if (bpmLocked) ...[
+                            TonalChip(
+                              label: '已锁定',
+                              color: scheme.secondaryContainer,
+                              foregroundColor: scheme.onSecondaryContainer,
+                            ),
+                            const SizedBox(width: 6),
+                          ],
+                          TonalChip(
+                            label: 'Tap',
+                            color: scheme.surfaceContainerHigh,
+                            foregroundColor: scheme.onSurface,
+                            onPressed: c.tapTempo,
+                          ),
+                          const SizedBox(width: 6),
+                          TonalChip(
+                            label: c.project.meta.timeSignature,
+                            color: scheme.surfaceContainerHigh,
+                            foregroundColor: scheme.onSurface,
+                            onPressed: () => c.setTimeSignature(
+                              c.project.meta.timeSignature == '4/4'
+                                  ? '3/4'
+                                  : '4/4',
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          SizedBox(
+                            width: 72,
+                            child: TextField(
+                              controller: _bpmCtrl,
+                              focusNode: _bpmFocus,
+                              readOnly: bpmLocked,
+                              keyboardType: TextInputType.number,
+                              inputFormatters: [
+                                FilteringTextInputFormatter.digitsOnly,
+                              ],
+                              decoration: const InputDecoration.collapsed(
+                                hintText: '120',
                               ),
-                          onChanged: (v) {
-                            final parsed = int.tryParse(v.trim());
-                            if (parsed != null &&
-                                parsed >= 30 &&
-                                parsed <= 300) {
-                              c.setBpm(parsed);
-                            }
-                          },
-                          onSubmitted: (v) => _commitBpmInput(c, v),
-                          onEditingComplete: () =>
-                              _commitBpmInput(c, _bpmCtrl.text),
+                              style: AppTextStyle.title1
+                                  .of(context, emphasized: true)
+                                  .copyWith(
+                                    fontFamily: 'GoogleSans',
+                                    fontFeatures: const [
+                                      FontFeature.tabularFigures(),
+                                    ],
+                                    color: bpmLocked
+                                        ? scheme.onSurfaceVariant
+                                        : scheme.onSurface,
+                                  ),
+                              onChanged: (v) {
+                                if (bpmLocked) return;
+                                final parsed = int.tryParse(v.trim());
+                                if (parsed != null &&
+                                    parsed >= 30 &&
+                                    parsed <= 300) {
+                                  c.setBpm(parsed);
+                                }
+                              },
+                              onSubmitted: (v) {
+                                if (!bpmLocked) _commitBpmInput(c, v);
+                              },
+                              onEditingComplete: () {
+                                if (!bpmLocked) {
+                                  _commitBpmInput(c, _bpmCtrl.text);
+                                }
+                              },
+                            ),
+                          ),
+                          Text(
+                            'BPM',
+                            style: AppTextStyle.caption1
+                                .of(context, emphasized: true)
+                                .copyWith(color: scheme.onSurfaceVariant),
+                          ),
+                          const Spacer(),
+                          Opacity(
+                            opacity: bpmLocked ? 0.45 : 1.0,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                TonalChip(
+                                  label: '−',
+                                  color: scheme.surfaceContainerHigh,
+                                  foregroundColor: scheme.onSurface,
+                                  onPressed: () =>
+                                      c.setBpm(c.project.meta.bpm - 1),
+                                ),
+                                const SizedBox(width: 6),
+                                TonalChip(
+                                  label: '+',
+                                  color: scheme.surfaceContainerHigh,
+                                  foregroundColor: scheme.onSurface,
+                                  onPressed: () =>
+                                      c.setBpm(c.project.meta.bpm + 1),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (tapCount > 0 || tapCand != null) ...[
+                        const SizedBox(height: 8),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 8,
+                          ),
+                          decoration: BoxDecoration(
+                            color: scheme.surfaceContainerLow,
+                            borderRadius: AppRadius.md,
+                          ),
+                          child: Wrap(
+                            spacing: 6,
+                            runSpacing: 6,
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            children: [
+                              if (tapCand == null)
+                                Text(
+                                  'Tap 采样 $tapCount/4（第 4 下起输出候选）',
+                                  style: AppTextStyle.caption2
+                                      .of(context)
+                                      .copyWith(color: scheme.onSurfaceVariant),
+                                )
+                              else ...[
+                                Text(
+                                  '候选 ${tapCand.bpm} BPM · 置信度 ${(tapCand.confidence * 100).round()}%',
+                                  style: AppTextStyle.caption1
+                                      .of(context, emphasized: true)
+                                      .copyWith(color: scheme.onSurface),
+                                ),
+                                TonalChip(
+                                  label: '应用 BPM',
+                                  color: scheme.primaryContainer,
+                                  foregroundColor: scheme.onPrimaryContainer,
+                                  onPressed: c.applyTapBpmCandidate,
+                                ),
+                              ],
+                              TonalChip(
+                                label: '清除',
+                                color: scheme.surfaceContainerHigh,
+                                foregroundColor: scheme.onSurfaceVariant,
+                                onPressed: c.clearTapSamples,
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
-                      Text(
-                        'BPM',
-                        style: AppTextStyle.caption1
-                            .of(context, emphasized: true)
-                            .copyWith(color: scheme.onSurfaceVariant),
-                      ),
-                      const Spacer(),
-                      TonalChip(
-                        label: '−',
-                        color: scheme.surfaceContainerHigh,
-                        foregroundColor: scheme.onSurface,
-                        onPressed: () => c.setBpm(c.project.meta.bpm - 1),
-                      ),
-                      const SizedBox(width: 6),
-                      TonalChip(
-                        label: '+',
-                        color: scheme.surfaceContainerHigh,
-                        foregroundColor: scheme.onSurface,
-                        onPressed: () => c.setBpm(c.project.meta.bpm + 1),
-                      ),
+                      ],
                     ],
-                  ),
-                ],
+                  );
+                },
               ),
             ),
             ListenableBuilder(
