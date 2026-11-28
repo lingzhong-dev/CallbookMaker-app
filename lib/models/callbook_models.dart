@@ -5,6 +5,20 @@ enum CallCategory { downbeat, upbeat, build, compound }
 
 enum LyricLineKind { lyric, intro, interlude, outro }
 
+enum AudioPlayability {
+  full,
+  previewClip,
+  unplayable,
+  unknown;
+
+  static AudioPlayability fromJson(String? raw) => switch (raw) {
+    'full' => AudioPlayability.full,
+    'previewClip' => AudioPlayability.previewClip,
+    'unplayable' => AudioPlayability.unplayable,
+    _ => AudioPlayability.unknown,
+  };
+}
+
 extension LyricLineKindExt on LyricLineKind {
   bool get isSection => this != LyricLineKind.lyric;
 
@@ -531,6 +545,10 @@ class CallProjectMeta {
     required this.artist,
     this.platform = 'synthetic',
     this.trackId,
+    this.sourceProvider = '',
+    this.songmid,
+    this.songid,
+    this.mediaMid,
     this.audioUrl = '',
     this.bpm = 175,
     this.timeSignature = '4/4',
@@ -551,6 +569,10 @@ class CallProjectMeta {
   final String artist;
   final String platform;
   final String? trackId;
+  final String sourceProvider;
+  final String? songmid;
+  final int? songid;
+  final String? mediaMid;
   final String audioUrl;
   final int bpm;
   final String timeSignature;
@@ -573,6 +595,10 @@ class CallProjectMeta {
     String? artist,
     String? platform,
     String? trackId,
+    String? sourceProvider,
+    String? songmid,
+    int? songid,
+    String? mediaMid,
     String? audioUrl,
     int? bpm,
     String? timeSignature,
@@ -592,6 +618,10 @@ class CallProjectMeta {
     artist: artist ?? this.artist,
     platform: platform ?? this.platform,
     trackId: trackId ?? this.trackId,
+    sourceProvider: sourceProvider ?? this.sourceProvider,
+    songmid: songmid ?? this.songmid,
+    songid: songid ?? this.songid,
+    mediaMid: mediaMid ?? this.mediaMid,
     audioUrl: audioUrl ?? this.audioUrl,
     bpm: bpm ?? this.bpm,
     timeSignature: timeSignature ?? this.timeSignature,
@@ -613,6 +643,10 @@ class CallProjectMeta {
     'artist': artist,
     'platform': platform,
     if (trackId != null) 'trackId': trackId,
+    if (sourceProvider.isNotEmpty) 'sourceProvider': sourceProvider,
+    if (songmid != null && songmid!.isNotEmpty) 'songmid': songmid,
+    if (songid != null) 'songid': songid,
+    if (mediaMid != null && mediaMid!.isNotEmpty) 'mediaMid': mediaMid,
     'audioUrl': audioUrl,
     'bpm': bpm,
     'timeSignature': timeSignature,
@@ -634,6 +668,10 @@ class CallProjectMeta {
     artist: json['artist']?.toString() ?? '',
     platform: json['platform']?.toString() ?? 'synthetic',
     trackId: json['trackId']?.toString(),
+    sourceProvider: json['sourceProvider']?.toString() ?? '',
+    songmid: json['songmid']?.toString(),
+    songid: (json['songid'] as num?)?.toInt(),
+    mediaMid: json['mediaMid']?.toString(),
     audioUrl: json['audioUrl']?.toString() ?? '',
     bpm: ((json['bpm'] as num?)?.round() ?? 128).clamp(30, 300),
     timeSignature: json['timeSignature'] == '3/4' ? '3/4' : '4/4',
@@ -745,6 +783,10 @@ class TrackSummary {
     this.hasSyncedLyrics = false,
     this.hasAudioUrl = false,
     required this.provider,
+    this.songmid,
+    this.songid,
+    this.mediaMid,
+    this.audioPlayability = AudioPlayability.unknown,
   });
 
   final String id;
@@ -757,6 +799,27 @@ class TrackSummary {
   final bool hasSyncedLyrics;
   final bool hasAudioUrl;
   final String provider;
+  final String? songmid;
+  final int? songid;
+  final String? mediaMid;
+  final AudioPlayability audioPlayability;
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'platform': platform,
+    'title': title,
+    'artist': artist,
+    'album': album,
+    'durationMs': durationMs,
+    if (bpm != null) 'bpm': bpm,
+    'hasSyncedLyrics': hasSyncedLyrics,
+    'hasAudioUrl': hasAudioUrl,
+    'provider': provider,
+    if (songmid != null && songmid!.isNotEmpty) 'songmid': songmid,
+    if (songid != null) 'songid': songid,
+    if (mediaMid != null && mediaMid!.isNotEmpty) 'mediaMid': mediaMid,
+    'audioPlayability': audioPlayability.name,
+  };
 
   factory TrackSummary.fromJson(Map<String, dynamic> json) => TrackSummary(
     id: json['id']?.toString() ?? '',
@@ -769,6 +832,12 @@ class TrackSummary {
     hasSyncedLyrics: json['hasSyncedLyrics'] == true,
     hasAudioUrl: json['hasAudioUrl'] == true,
     provider: json['provider']?.toString() ?? '',
+    songmid: json['songmid']?.toString(),
+    songid: (json['songid'] as num?)?.toInt(),
+    mediaMid: json['mediaMid']?.toString(),
+    audioPlayability: AudioPlayability.fromJson(
+      json['audioPlayability']?.toString(),
+    ),
   );
 }
 
@@ -803,6 +872,7 @@ class TrackDetailResponse {
   const TrackDetailResponse({
     required this.track,
     this.audioUrl = '',
+    this.audioPlayability = AudioPlayability.unknown,
     this.rawLrc = '',
     this.translatedLrc = '',
     this.romaLrc = '',
@@ -811,6 +881,7 @@ class TrackDetailResponse {
 
   final TrackSummary track;
   final String audioUrl;
+  final AudioPlayability audioPlayability;
   final String rawLrc;
   final String translatedLrc;
   final String romaLrc;
@@ -818,11 +889,16 @@ class TrackDetailResponse {
 
   factory TrackDetailResponse.fromJson(Map<String, dynamic> json) {
     final rawLines = json['lines'] as List<dynamic>? ?? const [];
+    final url = json['audioUrl']?.toString() ?? '';
+    final explicitPlayability = json['audioPlayability']?.toString();
     return TrackDetailResponse(
       track: TrackSummary.fromJson(
         (json['track'] as Map<String, dynamic>?) ?? const {},
       ),
-      audioUrl: json['audioUrl']?.toString() ?? '',
+      audioUrl: url,
+      audioPlayability: explicitPlayability != null
+          ? AudioPlayability.fromJson(explicitPlayability)
+          : AudioPlayability.unknown,
       rawLrc: json['rawLrc']?.toString() ?? '',
       translatedLrc: json['translatedLrc']?.toString() ?? '',
       romaLrc: json['romaLrc']?.toString() ?? '',

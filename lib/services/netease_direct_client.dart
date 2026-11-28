@@ -453,6 +453,9 @@ class NeteaseDirectClient {
     return TrackDetailResponse(
       track: summary,
       audioUrl: audioUrl,
+      audioPlayability: audioUrl.isNotEmpty
+          ? AudioPlayability.full
+          : AudioPlayability.unplayable,
       rawLrc: rawLrc,
       translatedLrc: translatedLrc,
       romaLrc: romaLrc,

@@ -16,6 +16,7 @@ import '../services/japanese_ruby_annotator.dart';
 import '../services/lrclib_direct_client.dart';
 import '../services/netease_direct_client.dart';
 import '../services/project_storage.dart';
+import '../services/qqmusic_direct_client.dart';
 import '../utils/aligned_calls.dart';
 import '../utils/lrc_ruby_parser.dart';
 import '../utils/netease_cookie_utils.dart';
@@ -136,6 +137,7 @@ class CallbookController extends ChangeNotifier {
     ProjectStorage? storage,
     NeteaseDirectClient? neteaseDirectClient,
     LrclibDirectClient? lrclibDirectClient,
+    QqMusicDirectClient? qqMusicDirectClient,
     JapaneseRubyAnnotator? rubyAnnotator,
     BoundedAudioFetcher? audioFetcher,
     AudioPcmDecoder? audioPcmDecoder,
@@ -144,6 +146,7 @@ class CallbookController extends ChangeNotifier {
   }) : _storage = storage ?? ProjectStorage(),
        _neteaseDirect = neteaseDirectClient ?? NeteaseDirectClient(),
        _lrclibDirect = lrclibDirectClient ?? LrclibDirectClient(),
+       _qqmusicDirect = qqMusicDirectClient ?? QqMusicDirectClient(),
        _rubyAnnotator = rubyAnnotator ?? JapaneseRubyAnnotator.instance,
        _audioFetcher = audioFetcher ?? BoundedAudioFetcher(),
        _audioPcmDecoder = audioPcmDecoder ?? AudioPcmDecoder(),
@@ -190,6 +193,7 @@ class CallbookController extends ChangeNotifier {
   late final ProjectStorage _storage;
   late final NeteaseDirectClient _neteaseDirect;
   late final LrclibDirectClient _lrclibDirect;
+  late final QqMusicDirectClient _qqmusicDirect;
   late final JapaneseRubyAnnotator _rubyAnnotator;
   late final BoundedAudioFetcher _audioFetcher;
   late final AudioPcmDecoder _audioPcmDecoder;
@@ -266,6 +270,10 @@ class CallbookController extends ChangeNotifier {
   bool _isPlaying = false;
   bool _togglePlayInFlight = false;
   int _sourceSwitchSeq = 0;
+  int _searchSeq = 0;
+  int _trackLoadSeq = 0;
+  QqMusicErrorKind? _lastSearchErrorKind;
+  QqMusicErrorKind? _lastTrackLoadErrorKind;
   bool _isPracticeMode = false;
   bool _followPlayback = true;
   bool _followPausedByScrollTop = false;
@@ -427,6 +435,8 @@ class CallbookController extends ChangeNotifier {
   int get currentBar => _currentBar;
   int get currentBeatInBar => _currentBeatInBar;
   bool get isSearching => _isSearching;
+  QqMusicErrorKind? get lastSearchErrorKind => _lastSearchErrorKind;
+  QqMusicErrorKind? get lastTrackLoadErrorKind => _lastTrackLoadErrorKind;
   bool get isConfiguringGateway => _isConfiguringGateway;
   bool get offlineRubyEnabled => _offlineRubyEnabled;
   bool get preferNeteaseRomaLrc => _preferNeteaseRomaLrc;
@@ -723,6 +733,15 @@ class CallbookController extends ChangeNotifier {
         } catch (_) {}
         return;
       }
+    }
+
+    if (meta.platform == QqMusicDirectClient.platformId ||
+        meta.sourceProvider == QqMusicDirectClient.providerId) {
+      // First-version QQ Music integration never attaches unverified/preview audio.
+      try {
+        await _audio.setAudioSource(fallbackDurationMs: durationMs);
+      } catch (_) {}
+      return;
     }
 
     if (url.isNotEmpty && !url.startsWith('blob:')) {
@@ -3182,15 +3201,96 @@ class CallbookController extends ChangeNotifier {
     return true;
   }
 
+  /// Reconstructs remote track identity from persisted project metadata.
+  TrackSummary? restoreTrackSummaryFromMeta(CallProjectMeta meta) {
+    final platform = meta.platform.trim();
+    final provider = meta.sourceProvider.trim();
+    final mid = (meta.songmid ?? '').trim();
+    final fallbackId = (meta.trackId ?? '').trim();
+    final effectiveId = mid.isNotEmpty ? mid : fallbackId;
+    if (platform == QqMusicDirectClient.platformId ||
+        provider == QqMusicDirectClient.providerId) {
+      if (effectiveId.isEmpty && meta.songid == null) return null;
+      return TrackSummary(
+        id: effectiveId.isNotEmpty ? effectiveId : '${meta.songid}',
+        platform: QqMusicDirectClient.platformId,
+        title: meta.title,
+        artist: meta.artist,
+        durationMs: _knownAudioDurationMs > 0 ? _knownAudioDurationMs : 0,
+        bpm: meta.bpm,
+        hasSyncedLyrics: true,
+        hasAudioUrl: false,
+        provider: QqMusicDirectClient.providerId,
+        songmid: mid.isNotEmpty ? mid : (fallbackId.isNotEmpty ? fallbackId : null),
+        songid: meta.songid,
+        mediaMid: meta.mediaMid,
+        audioPlayability: AudioPlayability.unplayable,
+      );
+    }
+    if (effectiveId.isEmpty) return null;
+    if (platform == 'netease' || provider == 'netease_direct') {
+      return TrackSummary(
+        id: effectiveId,
+        platform: 'netease',
+        title: meta.title,
+        artist: meta.artist,
+        durationMs: _knownAudioDurationMs > 0 ? _knownAudioDurationMs : 0,
+        bpm: meta.bpm,
+        hasSyncedLyrics: true,
+        hasAudioUrl: meta.audioUrl.trim().isNotEmpty,
+        provider: 'netease_direct',
+      );
+    }
+    if (platform == 'lrclib' || provider == 'lrclib') {
+      return TrackSummary(
+        id: effectiveId,
+        platform: 'lrclib',
+        title: meta.title,
+        artist: meta.artist,
+        durationMs: _knownAudioDurationMs > 0 ? _knownAudioDurationMs : 0,
+        bpm: meta.bpm,
+        hasSyncedLyrics: true,
+        hasAudioUrl: false,
+        provider: 'lrclib',
+      );
+    }
+    return null;
+  }
+
   // Direct search, LRC import & local audio
   Future<void> searchTracks(String query, {String source = 'auto'}) async {
     final cleanQuery = query.trim();
     if (cleanQuery.isEmpty) return;
+    final searchSeq = ++_searchSeq;
+    _lastSearchErrorKind = null;
     _isSearching = true;
+    _gatewayNotifier.notifyListeners();
     notifyListeners();
     try {
+      if (source == 'qqmusic') {
+        try {
+          final results = await _qqmusicDirect.searchTracks(cleanQuery);
+          if (_disposed || searchSeq != _searchSeq) return;
+          _searchResults = results;
+          if (results.isEmpty) {
+            _lastSearchErrorKind = QqMusicErrorKind.noResults;
+            setStatus('QQ 音乐未检索到匹配曲目');
+          } else {
+            _lastSearchErrorKind = null;
+            setStatus('搜索完成 (QQ 音乐直连) · ${results.length} 首');
+          }
+        } on QqMusicApiException catch (err) {
+          if (_disposed || searchSeq != _searchSeq) return;
+          _searchResults = const [];
+          _lastSearchErrorKind = err.kind;
+          setStatus('QQ 音乐搜索失败：${err.message}');
+        }
+        return;
+      }
+
       if (source == 'lrclib') {
         final results = await _lrclibDirect.searchTracks(cleanQuery);
+        if (_disposed || searchSeq != _searchSeq) return;
         _searchResults = results;
         setStatus('搜索完成 (LRCLIB 直连) · ${results.length} 首');
         return;
@@ -3201,6 +3301,7 @@ class CallbookController extends ChangeNotifier {
           cleanQuery,
           cookie: _savedNeteaseCookie,
         );
+        if (_disposed || searchSeq != _searchSeq) return;
         _searchResults = directResults;
         setStatus('搜索完成 (网易云纯 Dart 直连) · ${directResults.length} 首');
         return;
@@ -3212,37 +3313,50 @@ class CallbookController extends ChangeNotifier {
           cleanQuery,
           cookie: _savedNeteaseCookie,
         );
+        if (_disposed || searchSeq != _searchSeq) return;
         if (neteaseResults.isNotEmpty) {
           _searchResults = neteaseResults;
           setStatus('搜索完成 (网易云纯 Dart 直连) · ${neteaseResults.length} 首');
           return;
         }
       } catch (_) {
+        if (_disposed || searchSeq != _searchSeq) return;
         // Fallback to LRCLIB
       }
 
       try {
         final lrclibResults = await _lrclibDirect.searchTracks(cleanQuery);
+        if (_disposed || searchSeq != _searchSeq) return;
         if (lrclibResults.isNotEmpty) {
           _searchResults = lrclibResults;
           setStatus('搜索完成 (LRCLIB 直连) · ${lrclibResults.length} 首');
           return;
         }
       } catch (_) {
+        if (_disposed || searchSeq != _searchSeq) return;
         // Fall through to empty result status
       }
 
       _searchResults = const [];
       setStatus('未检索到匹配曲目，可尝试切换音源或使用「默认曲库」/「本地音轨 + LRC」');
     } catch (err) {
+      if (_disposed || searchSeq != _searchSeq) return;
+      _lastSearchErrorKind = QqMusicErrorKind.networkOrServiceFailure;
       setStatus('搜索失败：$err');
     } finally {
-      _isSearching = false;
-      notifyListeners();
+      if (!_disposed && searchSeq == _searchSeq) {
+        _isSearching = false;
+        _gatewayNotifier.notifyListeners();
+        notifyListeners();
+      }
     }
   }
 
   Future<void> loadRemoteTrack(TrackSummary summary) async {
+    final loadSeq = ++_trackLoadSeq;
+    bool isStale() => _disposed || loadSeq != _trackLoadSeq;
+
+    _lastTrackLoadErrorKind = null;
     _isFetchingLyrics = true;
     _gatewayNotifier.notifyListeners();
     notifyListeners();
@@ -3259,9 +3373,20 @@ class CallbookController extends ChangeNotifier {
         );
       } else if (providerName == 'lrclib' || summary.platform == 'lrclib') {
         detail = await _lrclibDirect.fetchTrackDetail(summary.id);
+      } else if (providerName == QqMusicDirectClient.providerId ||
+          summary.platform == QqMusicDirectClient.platformId) {
+        detail = await _qqmusicDirect.fetchTrackDetail(
+          summary.id,
+          songmid: summary.songmid,
+          songid: summary.songid,
+          mediaMid: summary.mediaMid,
+          fallbackSummary: summary,
+        );
       } else {
         throw Exception('暂不支持直连该来源 ($providerName)');
       }
+
+      if (isStale()) return;
 
       var rawLines = detail.lines;
       var filteredCredits = const <LyricLine>[];
@@ -3303,7 +3428,14 @@ class CallbookController extends ChangeNotifier {
         }
       }
 
-      if (_disposed) return;
+      if (isStale()) return;
+
+      final canAttachRemoteAudio =
+          detail.audioUrl.trim().isNotEmpty &&
+          detail.audioPlayability == AudioPlayability.full;
+      final effectiveAudioUrl =
+          canAttachRemoteAudio ? detail.audioUrl.trim() : '';
+
       final resolvedDurationMs = detail.track.durationMs > 0
           ? detail.track.durationMs
           : summary.durationMs;
@@ -3314,14 +3446,32 @@ class CallbookController extends ChangeNotifier {
         totalDurationMs:
             _knownAudioDurationMs > 0 ? _knownAudioDurationMs : null,
       );
+      final resolvedProvider = detail.track.provider.isNotEmpty
+          ? detail.track.provider
+          : providerName;
+      final resolvedSongMid =
+          (detail.track.songmid ?? '').trim().isNotEmpty
+              ? detail.track.songmid!.trim()
+              : (detail.track.platform == QqMusicDirectClient.platformId
+                    ? detail.track.id
+                    : null);
+      final resolvedTrackId =
+          (resolvedSongMid != null && resolvedSongMid.isNotEmpty)
+              ? resolvedSongMid
+              : detail.track.id;
+
       final baseMeta = CallProjectMeta(
         title: detail.track.title,
         artist: detail.track.artist,
         vocalist: detail.track.artist,
         showTuner: false,
         platform: detail.track.platform,
-        trackId: detail.track.id,
-        audioUrl: detail.audioUrl,
+        trackId: resolvedTrackId,
+        sourceProvider: resolvedProvider,
+        songmid: resolvedSongMid,
+        songid: detail.track.songid ?? summary.songid,
+        mediaMid: detail.track.mediaMid ?? summary.mediaMid,
+        audioUrl: effectiveAudioUrl,
         bpm: detail.track.bpm ?? _project.meta.bpm,
         timeSignature: _project.meta.timeSignature,
         offsetMs: 0,
@@ -3358,35 +3508,57 @@ class CallbookController extends ChangeNotifier {
       _notifyProjectChanged();
 
       var audioFallbackNote = '';
-      try {
-        await _audio.setAudioSource(
-          url: detail.audioUrl,
-          fallbackDurationMs: _durationMs,
-        );
-      } catch (_) {
-        if (_disposed || switchSeq != _sourceSwitchSeq) return;
+      if (canAttachRemoteAudio) {
+        try {
+          await _audio.setAudioSource(
+            url: effectiveAudioUrl,
+            fallbackDurationMs: _durationMs,
+          );
+        } catch (_) {
+          if (isStale() || switchSeq != _sourceSwitchSeq) return;
+          try {
+            await _audio.setAudioSource(fallbackDurationMs: _durationMs);
+          } catch (_) {}
+          audioFallbackNote = '（音源加载失败，已切换为节拍器演练）';
+        }
+      } else {
         try {
           await _audio.setAudioSource(fallbackDurationMs: _durationMs);
         } catch (_) {}
-        audioFallbackNote = '（音源加载失败，已切换为节拍器演练）';
       }
-      if (_disposed || switchSeq != _sourceSwitchSeq) return;
+      if (isStale() || switchSeq != _sourceSwitchSeq) return;
+
+      final isQqMusic =
+          detail.track.platform == QqMusicDirectClient.platformId;
+      final hasTranslation = detail.translatedLrc.trim().isNotEmpty;
+      if (isQqMusic) {
+        if (!hasTranslation) {
+          _lastTrackLoadErrorKind = QqMusicErrorKind.noTranslation;
+        } else if (!canAttachRemoteAudio) {
+          _lastTrackLoadErrorKind = QqMusicErrorKind.noAudio;
+        }
+      }
+
       final totalDetected =
           detected.stats.intro +
           detected.stats.interlude +
           detected.stats.outro;
       final audioHint = audioFallbackNote.isNotEmpty
           ? audioFallbackNote
-          : (detail.audioUrl.isEmpty && detail.track.platform == 'netease'
-                ? '（该曲目暂无可用直链音源，可搭配本地音频或节拍器演练）'
-                : '');
+          : (isQqMusic && !canAttachRemoteAudio
+                ? '（当前曲目未确认完整音频，暂不装配试听音轨，可导入本地音频搭配使用）'
+                : (effectiveAudioUrl.isEmpty &&
+                          detail.track.platform == 'netease'
+                      ? '（该曲目暂无可用直链音源，可搭配本地音频或节拍器演练）'
+                      : ''));
+      final transHint = (isQqMusic && !hasTranslation) ? '（暂无中文译文）' : '';
       final filterHint = filteredCredits.isNotEmpty
           ? '（已过滤 ${filteredCredits.length} 行片头制作信息）'
           : '';
       _setStatusInternal(
         totalDetected > 0
-            ? '已导入曲目：${detail.track.title}（自动识别前/间/尾奏：前${detected.stats.intro}·间${detected.stats.interlude}·尾${detected.stats.outro}）$filterHint$audioHint'
-            : '已导入曲目：${detail.track.title}$filterHint$audioHint',
+            ? '已导入曲目：${detail.track.title}（自动识别前/间/尾奏：前${detected.stats.intro}·间${detected.stats.interlude}·尾${detected.stats.outro}）$transHint$filterHint$audioHint'
+            : '已导入曲目：${detail.track.title}$transHint$filterHint$audioHint',
       );
       if (filteredCredits.isNotEmpty) {
         notify(
@@ -3397,6 +3569,10 @@ class CallbookController extends ChangeNotifier {
         );
       }
     } catch (err) {
+      if (isStale()) return;
+      _lastTrackLoadErrorKind = err is QqMusicApiException
+          ? err.kind
+          : QqMusicErrorKind.networkOrServiceFailure;
       _setStatusInternal('导入曲目失败：$err');
       notify(
         '导入失败：$err',
@@ -3405,11 +3581,13 @@ class CallbookController extends ChangeNotifier {
         onAction: () => unawaited(loadRemoteTrack(summary)),
       );
     } finally {
-      _isFetchingLyrics = false;
-      _gatewayNotifier.notifyListeners();
+      if (!_disposed && loadSeq == _trackLoadSeq) {
+        _isFetchingLyrics = false;
+        _gatewayNotifier.notifyListeners();
+        _playbackNotifier.notifyListeners();
+        notifyListeners();
+      }
     }
-    _playbackNotifier.notifyListeners();
-    notifyListeners();
   }
 
   CallProjectMeta _mergeExtractedCreditsMeta(
@@ -4128,6 +4306,7 @@ class CallbookController extends ChangeNotifier {
     _audioFetcher.dispose();
     _neteaseDirect.dispose();
     _lrclibDirect.dispose();
+    _qqmusicDirect.dispose();
     _themeNotifier.dispose();
     _routeNotifier.dispose();
     _projectNotifier.dispose();

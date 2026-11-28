@@ -117,6 +117,7 @@ class _AudioSourcePanelState extends State<AudioSourcePanel> {
     ('auto', '自动聚合'),
     ('custom_proxy', '网易云直连'),
     ('lrclib', 'LRCLIB'),
+    ('qqmusic', 'QQ 音乐'),
   ];
 
   String _sourceTab = 'search';
@@ -290,6 +291,14 @@ class _AudioSourcePanelState extends State<AudioSourcePanel> {
           const SizedBox(height: 6),
           Text(
             '直接连接网易云已就绪（游客模式可直接检索公开曲目与歌词；如需 VIP/完整音源可在下方粘贴 Cookie）。',
+            style: AppTextStyle.caption1.of(context).copyWith(
+              color: scheme.onSurfaceVariant,
+            ),
+          ),
+        ] else if (_searchSource == 'qqmusic') ...[
+          const SizedBox(height: 6),
+          Text(
+            'QQ 音乐直连首版支持曲目搜索、普通 LRC 原词与中文翻译；未确认完整音频时不自动装配，可导入本地音频搭配使用。',
             style: AppTextStyle.caption1.of(context).copyWith(
               color: scheme.onSurfaceVariant,
             ),

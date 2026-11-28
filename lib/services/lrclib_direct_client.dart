@@ -101,6 +101,7 @@ class LrclibDirectClient {
     return TrackDetailResponse(
       track: summary,
       audioUrl: '',
+      audioPlayability: AudioPlayability.unplayable,
       rawLrc: rawLrc,
       translatedLrc: '',
       lines: lines,
