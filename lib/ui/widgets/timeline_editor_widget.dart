@@ -1600,11 +1600,17 @@ class _ReactiveTimelineLineCardState extends State<_ReactiveTimelineLineCard>
                     .of(context, emphasized: true)
                     .copyWith(color: scheme.primary),
               ),
-              Text(
-                '轻触胶囊添加 / 取消',
-                style: AppTextStyle.caption2
-                    .of(context)
-                    .copyWith(color: scheme.onSurfaceVariant),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  '轻触胶囊添加 / 取消',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.end,
+                  style: AppTextStyle.caption2
+                      .of(context)
+                      .copyWith(color: scheme.onSurfaceVariant),
+                ),
               ),
             ],
           ),

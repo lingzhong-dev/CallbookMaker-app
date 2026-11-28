@@ -548,7 +548,7 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
                   if (isMobile)
                     TweenAnimationBuilder<double>(
                       tween: Tween<double>(
-                        end: trayActive ? 168.0 : 24.0,
+                        end: trayActive ? 168.0 : 52.0,
                       ),
                       duration: AppMotion.d(
                         context,
@@ -663,52 +663,88 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
                                 horizontal: 16,
                                 vertical: 4,
                               ),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.end,
-                                children: [
-                                  _FloatingPillButton(
-                                    label: _mobileQuickTrayOpen
-                                        ? c.siteText('收起速标')
-                                        : c.siteText('速标栏'),
-                                    color: scheme.surfaceContainerHigh,
-                                    foreground: scheme.onSurface,
-                                    onTap: () {
-                                      setState(
-                                        () => _mobileQuickTrayOpen =
-                                            !_mobileQuickTrayOpen,
-                                      );
-                                      _syncQuickTrayAnimation();
-                                    },
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Tooltip(
-                                    message: c.activeLineId != null &&
-                                            c.getAlertForLine(c.activeLineId!) !=
-                                                null
-                                        ? '取消当前行 GT 警报（G）'
-                                        : '插入当前行 GT 警报（G）',
-                                    child: _FloatingPillButton(
-                                      label: c.activeLineId != null &&
-                                              c.getAlertForLine(c.activeLineId!) !=
-                                                  null
-                                          ? c.siteText('取消 GT')
-                                          : c.siteText('+ GT 警报'),
-                                      color: c.activeLineId != null &&
-                                              c.getAlertForLine(c.activeLineId!) !=
-                                                  null
-                                          ? scheme.warning
-                                          : scheme.warningContainer,
-                                      foreground: c.activeLineId != null &&
-                                              c.getAlertForLine(c.activeLineId!) !=
-                                                  null
-                                          ? CallBadgePill.contrastForegroundFor(
-                                              scheme.warning,
-                                            )
-                                          : scheme.onWarningContainer,
-                                      onTap: () => c.insertGtAlert(),
+                              child: Align(
+                                alignment: Alignment.centerRight,
+                                child: Wrap(
+                                  alignment: WrapAlignment.end,
+                                  spacing: 8,
+                                  runSpacing: 6,
+                                  children: [
+                                    Tooltip(
+                                      message: c.canUndo
+                                          ? '撤销 ${c.lastUndoLabel ?? ''}'.trim()
+                                          : '暂无可撤销的时间轴操作',
+                                      child: _FloatingPillButton(
+                                        key: const ValueKey(
+                                          'mobile-persistent-undo-button',
+                                        ),
+                                        label: c.siteText('撤销'),
+                                        semanticLabel: c.canUndo
+                                            ? '撤销 ${c.lastUndoLabel ?? ''}'
+                                                .trim()
+                                            : '撤销（不可用）',
+                                        color: c.canUndo
+                                            ? scheme.surfaceContainerHigh
+                                            : scheme.surfaceContainerLow,
+                                        foreground: c.canUndo
+                                            ? scheme.onSurface
+                                            : scheme.onSurfaceVariant,
+                                        onTap: c.canUndo
+                                            ? c.undoLastTimelineEdit
+                                            : null,
+                                      ),
                                     ),
-                                  ),
-                                ],
+                                    _FloatingPillButton(
+                                      label: _mobileQuickTrayOpen
+                                          ? c.siteText('收起速标')
+                                          : c.siteText('速标栏'),
+                                      color: scheme.surfaceContainerHigh,
+                                      foreground: scheme.onSurface,
+                                      onTap: () {
+                                        setState(
+                                          () => _mobileQuickTrayOpen =
+                                              !_mobileQuickTrayOpen,
+                                        );
+                                        _syncQuickTrayAnimation();
+                                      },
+                                    ),
+                                    Tooltip(
+                                      message: c.activeLineId != null &&
+                                              c.getAlertForLine(
+                                                    c.activeLineId!,
+                                                  ) !=
+                                                  null
+                                          ? '取消当前行 GT 警报（G）'
+                                          : '插入当前行 GT 警报（G）',
+                                      child: _FloatingPillButton(
+                                        label: c.activeLineId != null &&
+                                                c.getAlertForLine(
+                                                      c.activeLineId!,
+                                                    ) !=
+                                                    null
+                                            ? c.siteText('取消 GT')
+                                            : c.siteText('+ GT 警报'),
+                                        color: c.activeLineId != null &&
+                                                c.getAlertForLine(
+                                                      c.activeLineId!,
+                                                    ) !=
+                                                    null
+                                            ? scheme.warning
+                                            : scheme.warningContainer,
+                                        foreground: c.activeLineId != null &&
+                                                c.getAlertForLine(
+                                                      c.activeLineId!,
+                                                    ) !=
+                                                    null
+                                            ? CallBadgePill.contrastForegroundFor(
+                                                scheme.warning,
+                                              )
+                                            : scheme.onWarningContainer,
+                                        onTap: () => c.insertGtAlert(),
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
                           if (c.route == StudioRoute.dashboard)
@@ -1457,51 +1493,60 @@ class _AnchoredBottomNavBar extends StatelessWidget {
 
 class _FloatingPillButton extends StatelessWidget {
   const _FloatingPillButton({
+    super.key,
     required this.label,
+    this.semanticLabel,
     required this.color,
     required this.foreground,
     required this.onTap,
   });
 
   final String label;
+  final String? semanticLabel;
   final Color color;
   final Color foreground;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Semantics(
-      button: true,
-      label: label,
-      child: ElasticPress(
-        child: DecoratedBox(
-          decoration: const ShapeDecoration(
-            shape: AppShape.full,
-            shadows: [
-              BoxShadow(
-                color: Color(0x24000000),
-                blurRadius: 12,
-                offset: Offset(0, 4),
-              ),
-            ],
-          ),
-          child: PressSurface(
-            fill: color,
-            shape: AppShape.full,
-            foreground: foreground,
-            inkColor: foreground,
-            tapTarget: AppTokens.minTapTargetSize,
-            padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
-            onPressed: onTap,
-            child: Text(
-              label,
-              style: AppTextStyle.caption1
-                  .of(context, emphasized: true)
-                  .copyWith(color: foreground),
+    final enabled = onTap != null;
+    final surface = Opacity(
+      opacity: enabled ? 1.0 : 0.48,
+      child: DecoratedBox(
+        decoration: const ShapeDecoration(
+          shape: AppShape.full,
+          shadows: [
+            BoxShadow(
+              color: Color(0x24000000),
+              blurRadius: 12,
+              offset: Offset(0, 4),
             ),
+          ],
+        ),
+        child: PressSurface(
+          fill: color,
+          shape: AppShape.full,
+          foreground: foreground,
+          inkColor: foreground,
+          tapTarget: AppTokens.minTapTargetSize,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          onPressed: onTap,
+          child: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: AppTextStyle.caption1
+                .of(context, emphasized: true)
+                .copyWith(color: foreground),
           ),
         ),
       ),
+    );
+    return Semantics(
+      button: true,
+      enabled: enabled,
+      label: semanticLabel ?? label,
+      child: enabled ? ElasticPress(child: surface) : surface,
     );
   }
 }

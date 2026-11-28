@@ -237,6 +237,7 @@ class AudioMetronomeService {
   bool _disposed = false;
   bool _hasExternalAudio = false;
   bool _hasPreparedMusicSource = false;
+  bool _hasMeasuredExternalDuration = false;
   bool _hasCompleted = false;
   Source? _currentMusicSource;
   String? _currentMusicSourceKey;
@@ -274,6 +275,7 @@ class AudioMetronomeService {
   int get currentTimeMs => _currentTimeMs;
   int get durationMs => _durationMs;
   bool get hasExternalAudio => _hasExternalAudio;
+  bool get hasMeasuredExternalDuration => _hasMeasuredExternalDuration;
   bool get hasCompleted => _hasCompleted;
   bool get areCuesReady =>
       enablePlatformAudio &&
@@ -366,6 +368,7 @@ class AudioMetronomeService {
     _durSub = music.onDurationChanged.listen((dur) {
       if (_disposed || _musicPlayer != music) return;
       if (dur.inMilliseconds > 0) {
+        _hasMeasuredExternalDuration = true;
         _durationMs = dur.inMilliseconds;
         onDurationChanged?.call(_durationMs);
       }
@@ -546,6 +549,15 @@ class AudioMetronomeService {
   void setFallbackDurationMs(int durationMs) {
     if (_disposed || _hasExternalAudio || durationMs <= 1000) return;
     _durationMs = durationMs;
+    if (_currentTimeMs > _durationMs) {
+      _currentTimeMs = _durationMs;
+      _syntheticAnchorTrackMs = _currentTimeMs;
+      _syntheticAnchorWall = DateTime.now();
+      _lastTriggeredBeatIndex = -999999;
+      _beepedAlerts.clear();
+      onTimeUpdate(_currentTimeMs);
+      _evaluateClocks(_currentTimeMs, playAudio: false);
+    }
   }
 
   Future<void> setAudioSource({
@@ -594,6 +606,7 @@ class AudioMetronomeService {
     _lastTriggeredBeatIndex = -999999;
     _currentTimeMs = 0;
     _hasCompleted = false;
+    _hasMeasuredExternalDuration = false;
     _currentMusicSource = null;
     _currentMusicSourceKey = null;
 
